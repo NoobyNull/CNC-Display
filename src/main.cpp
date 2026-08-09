@@ -1,15 +1,22 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// Debug console pins — the microSD lines, unused by this firmware.
-#define DBG_TX_PIN 11   // module pin 19
-#define DBG_RX_PIN 13   // module pin 21
+// Debug console TX parks on GPIO 42, which is free and not broken out on this
+// board. Deliberate: 43/44 now carry the FluidNC link and 10-13 are the SD card,
+// so there is nowhere safe left. Printing 115200 log text onto the 1 Mbaud link
+// would inject garbage into the controller. Diagnostics live on-screen instead —
+// the Setup page shows link status and the expanded view shows wire traffic.
+#define DBG_TX_PIN 42
+#define DBG_RX_PIN -1
 #include "hw/display_hw.h"
 #include "hw/touch.h"
+#include "hw/sdcard.h"
+#include "model/file_upload.h"
 #include "transport/uart.h"
 #include "transport/transport.h"
 #include "model/settings.h"
 #include "transport/xmodem_rx.h"
+#include "transport/xmodem_tx.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
 #include "model/model_compat.h"
@@ -51,6 +58,7 @@ void setup() {
 
     settings_load();
     transport_init();
+    sd_begin();
 
     shell_build();
     lv_timer_create(ui_tick_cb, 50, nullptr);      // 20 Hz UI
@@ -100,7 +108,15 @@ static void prime_link_if_up() {
 }
 
 void loop() {
-    if (pathload_busy()) {
+    if (upload_busy()) {
+        // XModem owns the link while a file is going out; the Grbl parser must
+        // not see ACK/NAK bytes.
+        for (int i = 0; i < 512; i++) {
+            int c = fnc_getchar();
+            if (c < 0) break;
+            xmodem_tx_feed((uint8_t)c);
+        }
+    } else if (pathload_busy()) {
         // XModem owns the link during a transfer: the Grbl parser must never see
         // block headers, sequence bytes or CRCs.
         for (int i = 0; i < 512; i++) {
@@ -118,6 +134,7 @@ void loop() {
             if (!fnc_rx_waiting()) break;
         }
     }
+    upload_poll();
     prime_link_if_up();
     link_watchdog();
     service_action();

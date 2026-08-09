@@ -6,6 +6,8 @@
 #include "model/FluidNCModel.h"
 #include "model/gcode_path.h"
 #include "model/path_loader.h"
+#include "model/file_upload.h"
+#include "hw/sdcard.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <string.h>
@@ -23,31 +25,72 @@ static char s_selected[FL_NAME_MAX] = { 0 };
 static bool s_redraw_pending = false;
 static bool s_list_dirty = true;
 
+// Which card we are browsing. The controller's SD is normally the right source,
+// but when the controller lives in a sealed box you cannot reach its card, so
+// the panel's own slot becomes the source and files are pushed across with $XR.
+static bool s_local = false;
+static lv_obj_t* s_src_btn;
+static lv_obj_t* s_src_lbl;
+
+static size_t src_count()            { return s_local ? sd_count() : filelist_count(); }
+static const char* src_name(size_t i) {
+    if (s_local) { const sd_entry_t* e = sd_at(i); return e ? e->name : nullptr; }
+    const fl_entry_t* e = filelist_at(i); return e ? e->name : nullptr;
+}
+static bool src_is_dir(size_t i) {
+    if (s_local) { const sd_entry_t* e = sd_at(i); return e && e->is_dir; }
+    const fl_entry_t* e = filelist_at(i); return e && e->is_dir;
+}
+static uint32_t src_size(size_t i) {
+    if (s_local) { const sd_entry_t* e = sd_at(i); return e ? e->size : 0; }
+    const fl_entry_t* e = filelist_at(i); return e ? e->size : 0;
+}
+
+static void src_toggle_cb(lv_event_t*) {
+    s_local = !s_local;
+    if (s_local) sd_list("/");
+    else         filelist_request();
+    lv_label_set_text(s_src_lbl, s_local ? "PANEL SD" : "CONTROLLER");
+    s_scroll = 0; s_sel = -1; s_selected[0] = 0;
+    s_list_dirty = true;
+}
+
+// Copy the selected local file to the controller, then it runs like any other.
+static void upload_cb(lv_event_t*) {
+    if (!s_local || !s_selected[0]) return;
+    char local[160], remote[160];
+    snprintf(local,  sizeof(local),  "/%s", s_selected);
+    snprintf(remote, sizeof(remote), "/sd/%s", s_selected);
+    upload_start(local, remote);
+    s_list_dirty = true;
+}
+
 static void row_cb(lv_event_t* e) {
     int r = (int)(intptr_t)lv_event_get_user_data(e);
-    const fl_entry_t* en = filelist_at((size_t)(s_scroll + r));
-    if (!en) return;
-    if (en->is_dir) {
-        filelist_enter(en->name);
-        s_scroll = 0;
-        s_sel = -1;
-        s_list_dirty = true;
+    size_t idx = (size_t)(s_scroll + r);
+    const char* nm = src_name(idx);
+    if (!nm) return;
+
+    if (src_is_dir(idx)) {
+        if (!s_local) { filelist_enter(nm); s_scroll = 0; s_sel = -1; s_list_dirty = true; }
         return;
     }
     s_sel = s_scroll + r;
-    strncpy(s_selected, en->name, sizeof(s_selected) - 1);
+    strncpy(s_selected, nm, sizeof(s_selected) - 1);
     s_selected[sizeof(s_selected) - 1] = 0;
+    s_list_dirty = true;
 
-    char full[192];
-    snprintf(full, sizeof(full), "%s/%s", filelist_path(), s_selected);
-    s_list_dirty = true;                 // highlight the newly selected row
-    if (pathload_start(full)) s_redraw_pending = true;
+    if (!s_local) {
+        char full[192];
+        snprintf(full, sizeof(full), "%s/%s", filelist_path(), s_selected);
+        if (pathload_start(full)) s_redraw_pending = true;
+    }
 }
 
 static void scroll_cb(lv_event_t* e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
     int n = s_scroll + dir;
-    int max = (int)filelist_count() - ROWS;
+    int max = (int)src_count() - ROWS;
     if (max < 0) max = 0;
     if (n < 0) n = 0;
     if (n > max) n = max;
@@ -65,7 +108,10 @@ static void run_cb(lv_event_t*) {
 // Check mode runs the file through the parser with no motion, so syntax errors
 // and out-of-travel moves surface before the cutter is near the work.
 static void dry_cb(lv_event_t*)    { send_line("$C"); }
-static void reload_cb(lv_event_t*) { filelist_request(); }
+static void reload_cb(lv_event_t*) {
+    if (s_local) sd_list("/"); else filelist_request();
+    s_list_dirty = true;
+}
 static void expand_cb(lv_event_t*) { expanded_open(EXPANDED_TOOLPATH); }
 
 void page_run_build(lv_obj_t* p) {
@@ -84,7 +130,10 @@ void page_run_build(lv_obj_t* p) {
     lv_obj_set_size(cb, LV_PCT(100), U * 5);
     lv_obj_set_flex_flow(cb, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(cb, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    s_crumb = w_label(cb, "/sd", &lv_font_montserrat_12, C_DIM);
+    s_src_btn = w_button(cb, "CONTROLLER", nullptr, C_RAISE, C_ACCENT, src_toggle_cb, nullptr);
+    lv_obj_set_size(s_src_btn, U * 15, LV_PCT(100));
+    s_src_lbl = lv_obj_get_child(lv_obj_get_child(s_src_btn, 0), 0);
+    s_crumb = w_label(cb, "/sd", &lv_font_montserrat_10, C_DIM);
     lv_obj_set_flex_grow(s_crumb, 1);
     lv_obj_t* su = w_button(cb, LV_SYMBOL_UP, nullptr, C_RAISE, C_DIM, scroll_cb, (void*)(intptr_t)-1);
     lv_obj_set_size(su, U * 5, LV_PCT(100));
@@ -134,14 +183,22 @@ void page_run_build(lv_obj_t* p) {
     lv_obj_set_style_pad_row(acts, U, 0);
 
     lv_obj_t* run = w_button(acts, "RUN", "$SD/Run", C_OK, C_BG, run_cb, nullptr);
-    lv_obj_set_size(run, LV_PCT(100), U * 13);
+    lv_obj_set_size(run, LV_PCT(100), U * 10);
     lv_obj_t* dry = w_button(acts, "DRY", "$C", C_RAISE, C_TEXT, dry_cb, nullptr);
-    lv_obj_set_size(dry, LV_PCT(100), U * 7);
+    lv_obj_set_size(dry, LV_PCT(100), U * 6);
+    lv_obj_t* snd = w_button(acts, "SEND", "$XR", C_ACCENT, C_BG, upload_cb, nullptr);
+    lv_obj_set_size(snd, LV_PCT(100), U * 7);
     lv_obj_t* rel = w_button(acts, "RELOAD", nullptr, C_RAISE, C_TEXT, reload_cb, nullptr);
     lv_obj_set_size(rel, LV_PCT(100), U * 7);
 }
 
 void page_run_tick() {
+    if (upload_busy()) {
+        char b[64];
+        snprintf(b, sizeof(b), "SENDING\n%d%%\n%s", upload_percent(), upload_status());
+        lv_label_set_text(s_preview_lbl, b);
+        return;
+    }
     if (s_redraw_pending && !pathload_busy()) {
         s_redraw_pending = false;
         toolpath_redraw();
@@ -154,24 +211,26 @@ void page_run_tick() {
     if (!s_list_dirty) return;
     s_list_dirty = false;
 
-    lv_label_set_text(s_crumb, filelist_path());
+    lv_label_set_text(s_crumb, s_local ? "panel /" : filelist_path());
     for (int r = 0; r < ROWS; r++) {
-        const fl_entry_t* e = filelist_at((size_t)(s_scroll + r));
-        if (!e) {
+        size_t idx = (size_t)(s_scroll + r);
+        const char* nm = src_name(idx);
+        if (!nm) {
             lv_label_set_text(s_row_name[r], "");
             lv_label_set_text(s_row_size[r], "");
             lv_obj_set_style_bg_color(s_row[r], C_SURFACE, 0);
             lv_obj_set_style_border_color(s_row[r], C_LINE, 0);
             continue;
         }
-        lv_label_set_text(s_row_name[r], e->name);
+        lv_label_set_text(s_row_name[r], nm);
         char b[20];
-        if (e->is_dir)                    snprintf(b, sizeof(b), "DIR");
-        else if (e->size >= 1024 * 1024)  snprintf(b, sizeof(b), "%.1f MB", e->size / 1048576.0);
-        else                              snprintf(b, sizeof(b), "%u KB", (unsigned)(e->size / 1024));
+        uint32_t sz = src_size(idx);
+        if (src_is_dir(idx))         snprintf(b, sizeof(b), "DIR");
+        else if (sz >= 1024 * 1024)  snprintf(b, sizeof(b), "%.1f MB", sz / 1048576.0);
+        else                         snprintf(b, sizeof(b), "%u KB", (unsigned)(sz / 1024));
         lv_label_set_text(s_row_size[r], b);
 
-        bool sel = ((s_scroll + r) == s_sel) && !e->is_dir;
+        bool sel = ((s_scroll + r) == s_sel) && !src_is_dir(idx);
         lv_obj_set_style_bg_color(s_row[r], sel ? C_SEL_BG : C_RAISE, 0);
         lv_obj_set_style_border_color(s_row[r], sel ? C_ACCENT : C_LINE, 0);
     }
