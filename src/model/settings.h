@@ -21,5 +21,9 @@ const char* settings_fnc_host();
 uint16_t    settings_fnc_port();
 void        settings_set_fnc_host(const char* host, uint16_t port);
 
+// 0 = monitor, 1 = soft (feed hold), 2 = hard (feed hold + soft reset on impact)
+uint8_t settings_vib_mode();
+void    settings_set_vib_mode(uint8_t m);
+
 uint8_t settings_brightness();
 void    settings_set_brightness(uint8_t b);

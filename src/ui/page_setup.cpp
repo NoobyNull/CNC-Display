@@ -5,6 +5,8 @@
 #include "model/FluidNCModel.h"
 #include "model/settings.h"
 #include "transport/transport.h"
+#include "hw/imu.h"
+#include "model/vibration.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +18,8 @@ static lv_obj_t* s_status_lbl;
 static lv_obj_t* s_ssid_ta;
 static lv_obj_t* s_pass_ta;
 static lv_obj_t* s_kb;
+static lv_obj_t* s_vib_btn[3];
+static lv_obj_t* s_vib_lbl;
 
 static void bright_cb(lv_event_t* e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
@@ -57,6 +61,14 @@ static void kb_done_cb(lv_event_t* e) {
         lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
         lv_keyboard_set_textarea(s_kb, nullptr);
         transport_settings_changed();   // reconnect with the new credentials
+    }
+}
+
+static void vib_mode_cb(lv_event_t* e) {
+    uint8_t m = (uint8_t)(intptr_t)lv_event_get_user_data(e);
+    settings_set_vib_mode(m);
+    for (int i = 0; i < 3; i++) {
+        lv_obj_set_style_bg_color(s_vib_btn[i], i == m ? C_ACCENT : C_RAISE, 0);
     }
 }
 
@@ -161,7 +173,32 @@ void page_setup_build(lv_obj_t* p) {
 
     lv_obj_t* rst = w_button(right, "RESTART CONTROLLER", "$Bye", C_RAISE, C_WARN,
                              restart_ctrl_cb, nullptr);
-    lv_obj_set_size(rst, LV_PCT(100), U * 7);
+    lv_obj_set_size(rst, LV_PCT(100), U * 6);
+
+    // --- vibration guard ---
+    lv_obj_t* vrow = lv_obj_create(left);
+    w_flatten(vrow);
+    lv_obj_set_size(vrow, LV_PCT(100), U * 6);
+    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(vrow, U, 0);
+    static const char* VM[3]  = { "MONITOR", "SOFT", "HARD" };
+    static const char* VS[3]  = { "watch only", "feed hold", "hold + reset" };
+    uint8_t cur = settings_vib_mode();
+    for (int i = 0; i < 3; i++) {
+        s_vib_btn[i] = w_button(vrow, VM[i], VS[i],
+                                i == cur ? C_ACCENT : C_RAISE,
+                                i == cur ? C_BG : C_TEXT,
+                                vib_mode_cb, (void*)(intptr_t)i);
+        lv_obj_set_flex_grow(s_vib_btn[i], 1);
+        lv_obj_set_height(s_vib_btn[i], LV_PCT(100));
+    }
+
+    lv_obj_t* vst = w_panel(left, C_RAISE);
+    lv_obj_set_size(vst, LV_PCT(100), U * 6);
+    lv_obj_t* vk = w_label(vst, "VIBRATION", &lv_font_montserrat_10, C_DIM);
+    lv_obj_align(vk, LV_ALIGN_TOP_LEFT, U + 4, 4);
+    s_vib_lbl = w_label(vst, "no sensor", &lv_font_montserrat_12, C_DIM);
+    lv_obj_align(s_vib_lbl, LV_ALIGN_BOTTOM_LEFT, U + 4, -5);
 
     // Keyboard is a child of the screen, not this page, so it can cover the
     // whole panel while typing rather than being clipped to the content area.
@@ -172,4 +209,16 @@ void page_setup_build(lv_obj_t* p) {
 
 void page_setup_tick() {
     lv_label_set_text(s_status_lbl, transport_detail());
+
+    if (!imu_present()) {
+        lv_label_set_text(s_vib_lbl, "no sensor on I2C");
+        return;
+    }
+    const vib_result_t* v = vib_result();
+    char b[64];
+    snprintf(b, sizeof(b), "rms %.2f  peak %.2f  jerk %.0f",
+             (double)v->rms, (double)v->peak, (double)v->jerk);
+    lv_label_set_text(s_vib_lbl, b);
+    lv_obj_set_style_text_color(s_vib_lbl,
+        v->level == VIB_ESTOP ? C_CRIT : (v->level == VIB_HOLD ? C_WARN : C_DIM), 0);
 }

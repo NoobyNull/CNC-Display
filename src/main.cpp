@@ -11,6 +11,8 @@
 #include "hw/display_hw.h"
 #include "hw/touch.h"
 #include "hw/sdcard.h"
+#include "hw/imu.h"
+#include "model/vibration.h"
 #include "model/file_upload.h"
 #include "transport/uart.h"
 #include "transport/transport.h"
@@ -59,6 +61,7 @@ void setup() {
     settings_load();
     transport_init();
     sd_begin();
+    imu_begin();
 
     shell_build();
     lv_timer_create(ui_tick_cb, 50, nullptr);      // 20 Hz UI
@@ -84,6 +87,49 @@ void setup() {
 // actually alive. Doing it at boot would either block (see above) or be sent
 // into the void and never retried.
 static bool s_primed = false;
+
+// Act on the vibration analyser according to the Setup mode. Deliberately
+// conservative:
+//   monitor - never touches the machine
+//   soft    - feed hold on either condition
+//   hard    - feed hold on sustained vibration, soft reset on impact
+//
+// This is advisory, not a safety interlock. It rides the same link as
+// everything else, so a dead link means no protection. It does not replace a
+// hardware e-stop wired to the controller.
+static void vib_guard() {
+    static uint32_t rearm_ms = 0;
+    static bool     tripped  = false;
+
+    uint8_t mode = settings_vib_mode();
+    if (mode == 0 || !imu_present()) { tripped = false; return; }
+
+    vib_level_t lvl = vib_result()->level;
+
+    // Only act while the machine is actually moving. Holding an idle machine is
+    // noise, and jogging the panel around on the bench should not stop a job.
+    bool moving = (state == Cycle || state == Jog || state == Homing);
+    if (!moving || lvl == VIB_NONE) {
+        if (lvl == VIB_NONE) tripped = false;
+        return;
+    }
+
+    // One action per event: without the latch a 200Hz analyser would send a
+    // hold every 5ms for as long as the vibration lasts.
+    uint32_t now = millis();
+    if (tripped && (int32_t)(now - rearm_ms) < 0) return;
+    tripped  = true;
+    rearm_ms = now + 3000;
+
+    if (lvl == VIB_ESTOP && mode == 2) {
+        fnc_realtime(Reset);
+        clog_add("[MSG:VIBRATION: impact - soft reset sent]");
+    } else {
+        fnc_realtime(FeedHold);
+        clog_add(lvl == VIB_ESTOP ? "[MSG:VIBRATION: impact - feed hold sent]"
+                                  : "[MSG:VIBRATION: sustained - feed hold sent]");
+    }
+}
 
 // Link hunting now lives in transport.cpp, which cycles UART baud rates and
 // falls back to WiFi/Telnet according to the Setup toggles.
@@ -134,6 +180,8 @@ void loop() {
             if (!fnc_rx_waiting()) break;
         }
     }
+    imu_poll();
+    vib_guard();
     upload_poll();
     prime_link_if_up();
     link_watchdog();

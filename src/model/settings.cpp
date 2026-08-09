@@ -11,6 +11,7 @@ static char     s_pass[65] = { 0 };
 static char     s_host[64] = { 0 };
 static uint16_t s_port     = 23;
 static uint8_t  s_bright   = 200;
+static uint8_t  s_vibmode  = 0;   // monitor until deliberately armed
 
 void settings_load() {
     prefs.begin("cncdisp", /*readOnly=*/true);
@@ -20,7 +21,8 @@ void settings_load() {
     prefs.getString("pass", s_pass, sizeof(s_pass));
     prefs.getString("host", s_host, sizeof(s_host));
     s_port   = prefs.getUShort("port", 23);
-    s_bright = prefs.getUChar("bright", 200);
+    s_bright  = prefs.getUChar("bright", 200);
+    s_vibmode = prefs.getUChar("vibmode", 0);
     prefs.end();
 }
 
@@ -62,6 +64,13 @@ void settings_set_fnc_host(const char* host, uint16_t port) {
     prefs.putString("host", s_host);
     prefs.putUShort("port", s_port);
     prefs.end();
+}
+
+uint8_t settings_vib_mode() { return s_vibmode; }
+void settings_set_vib_mode(uint8_t m) {
+    if (m > 2 || m == s_vibmode) return;
+    s_vibmode = m;
+    prefs.begin("cncdisp", false); prefs.putUChar("vibmode", m); prefs.end();
 }
 
 uint8_t settings_brightness() { return s_bright; }
