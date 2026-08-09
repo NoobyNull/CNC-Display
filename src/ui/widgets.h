@@ -13,5 +13,9 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
 
 lv_obj_t* w_label(lv_obj_t* parent, const char* text, const lv_font_t* font, lv_color_t col);
 
+// One on-screen keyboard shared by every page that needs text entry. Created on
+// the screen rather than inside a page so it can cover the whole panel.
+lv_obj_t* w_keyboard();
+
 // Strip padding, border and scrollbars so a container is pure layout.
 void w_flatten(lv_obj_t* o);

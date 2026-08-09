@@ -165,10 +165,7 @@ void page_setup_build(lv_obj_t* p) {
 
     // Keyboard is a child of the screen, not this page, so it can cover the
     // whole panel while typing rather than being clipped to the content area.
-    s_kb = lv_keyboard_create(lv_scr_act());
-    lv_obj_set_size(s_kb, SCREEN_W, SCREEN_H / 2);
-    lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    s_kb = w_keyboard();
     lv_obj_add_event_cb(s_kb, kb_done_cb, LV_EVENT_READY, nullptr);
     lv_obj_add_event_cb(s_kb, kb_done_cb, LV_EVENT_CANCEL, nullptr);
 }

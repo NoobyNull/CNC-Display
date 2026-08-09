@@ -2,6 +2,7 @@
 #include "model/console_log.h"
 #include "model/offsets.h"
 #include "model/filelist.h"
+#include "model/fnc_settings.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -46,6 +47,7 @@ const char* model_take_error() {
 extern "C" void handle_other_line(char* line) {
     if (!line) return;
     offsets_feed_line(line);
+    fncset_feed_line(line);
     filelist_feed_line(line);
     clog_add(line);
 }

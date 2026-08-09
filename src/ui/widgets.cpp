@@ -57,3 +57,14 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
     }
     return b;
 }
+
+lv_obj_t* w_keyboard() {
+    static lv_obj_t* kb = nullptr;
+    if (!kb) {
+        kb = lv_keyboard_create(lv_scr_act());
+        lv_obj_set_size(kb, SCREEN_W, SCREEN_H / 2);
+        lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    }
+    return kb;
+}

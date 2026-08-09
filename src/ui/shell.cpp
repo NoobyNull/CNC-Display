@@ -387,6 +387,7 @@ void shell_tick() {
         case PAGE_OFFSETS: page_offsets_tick(); break;
         case PAGE_RUN:     page_run_tick();     break;
         case PAGE_SETUP:   page_setup_tick();   break;
+        case PAGE_DIAG:    page_diag_tick();    break;
         default: break;
     }
     expanded_tick();

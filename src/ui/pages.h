@@ -25,3 +25,4 @@ void page_jog_tick();
 void page_offsets_tick();
 void page_run_tick();
 void page_setup_tick();
+void page_diag_tick();
