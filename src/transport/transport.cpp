@@ -2,6 +2,7 @@
 #include "transport/uart.h"
 #include "transport/wifi_link.h"
 #include "model/settings.h"
+#include "transport/uart.h"
 #include "model/FluidNCModel.h"
 #include "GrblParserC.h"
 #include <Arduino.h>
@@ -19,7 +20,9 @@ static uint32_t    s_next_hunt = 0;
 static char        s_detail[64] = "no link";
 
 void transport_init() {
-    init_fnc_uart();
+    // In UPDATE mode the console owns these pins; bringing UART2 up on them
+    // would drive GPIO43 and silence the log we need for flashing.
+    if (settings_link_mode() == LINK_MODE_PENDANT) init_fnc_uart();
     if (settings_wifi_enabled()) wifilink_begin();
 }
 
@@ -65,7 +68,7 @@ void transport_poll() {
         return;
     }
 
-    if (settings_uart_enabled()) {
+    if (settings_uart_enabled() && settings_link_mode() == LINK_MODE_PENDANT) {
         s_active = TRANSPORT_UART;
         s_baud_idx = (s_baud_idx + 1) % N_UART_BAUDS;
         fnc_set_baud(UART_BAUDS[s_baud_idx]);
@@ -76,8 +79,12 @@ void transport_poll() {
     }
 
     s_active = TRANSPORT_NONE;
-    snprintf(s_detail, sizeof(s_detail), "%s",
-             settings_wifi_enabled() ? wifilink_status() : "all transports off");
+    if (settings_link_mode() == LINK_MODE_UPDATE) {
+        snprintf(s_detail, sizeof(s_detail), "UPDATE mode - wired link off");
+    } else {
+        snprintf(s_detail, sizeof(s_detail), "%s",
+                 settings_wifi_enabled() ? wifilink_status() : "all transports off");
+    }
 }
 
 // ---- the interface GrblParserC sees -----------------------------------------

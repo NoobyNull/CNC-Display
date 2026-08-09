@@ -41,8 +41,16 @@ void setup() {
     // the unused microSD pins instead — module pin 19 (GPIO11, TX) and pin 21
     // (GPIO13, RX) — so diagnostics stay available without touching the link.
     // Nothing needs to be connected there for the firmware to run.
-    Serial.begin(115200, SERIAL_8N1, /*rx=*/DBG_RX_PIN, /*tx=*/DBG_TX_PIN);
+    // Settings first: they decide which pins the console gets. UPDATE mode puts
+    // it on 43/44 so the board can always be flashed and watched; PENDANT mode
+    // hands those to the FluidNC link and parks the console on GPIO 42.
+    settings_load();
+    bool update_mode = settings_link_mode() == LINK_MODE_UPDATE;
+    if (update_mode) Serial.begin(115200);                                   // 43/44
+    else             Serial.begin(115200, SERIAL_8N1, DBG_RX_PIN, DBG_TX_PIN);
     Serial.println("\n=== CNC Console ===");
+    Serial.printf("[mode] %s\n", update_mode ? "UPDATE (console on 43/44)"
+                                              : "PENDANT (FluidNC on 43/44)");
 
     // The GT911 and the PCA9557 share one bus. Nothing below may touch Wire
     // before this line — display_init() drives the PCA9557 immediately.
@@ -58,7 +66,6 @@ void setup() {
     offsets_reset();
     filelist_reset();
 
-    settings_load();
     transport_init();
     sd_begin();
     imu_begin();
