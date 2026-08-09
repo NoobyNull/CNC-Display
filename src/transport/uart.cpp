@@ -8,6 +8,12 @@
 
 static uart_port_t fnc_uart_port = (uart_port_t)FNC_UART_NUM;
 
+static unsigned long s_rx_count = 0;
+static unsigned long s_tx_count = 0;
+
+unsigned long fnc_rx_count() { return s_rx_count; }
+unsigned long fnc_tx_count() { return s_tx_count; }
+
 void init_fnc_uart() {
     fnc_uart_port = (uart_port_t)FNC_UART_NUM;
     uart_driver_delete(fnc_uart_port);
@@ -33,12 +39,15 @@ void reinit_fnc_uart() {
 
 extern "C" void fnc_putchar(uint8_t c) {
     uart_write_bytes(fnc_uart_port, (const char*)&c, 1);
+    s_tx_count++;
 }
 
 extern "C" int fnc_getchar() {
     uint8_t c;
     int n = uart_read_bytes(fnc_uart_port, &c, 1, 0);
-    return n == 1 ? c : -1;
+    if (n != 1) return -1;
+    s_rx_count++;
+    return c;
 }
 
 extern "C" bool fnc_rx_waiting() {
