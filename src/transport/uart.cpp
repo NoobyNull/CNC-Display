@@ -55,3 +55,8 @@ extern "C" bool fnc_rx_waiting() {
 void resetFlowControl() {
     fnc_putchar(0x11);
 }
+
+// GrblParserC expects the host to supply a millisecond clock.
+extern "C" int milliseconds() {
+    return (int)millis();
+}

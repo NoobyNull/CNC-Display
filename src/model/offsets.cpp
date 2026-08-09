@@ -1,6 +1,7 @@
 #include "model/offsets.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 // FluidNC answers $# with lines like:
 //   [G54:-100.000,-200.000,-50.000]
@@ -13,6 +14,7 @@ static const char* ROW_NAMES[WCS_ROW_COUNT] = {
 
 static wcs_t s_rows[WCS_ROW_COUNT];
 static bool  s_dirty = false;
+static char  s_active[8] = "G54";
 
 void offsets_reset() {
     for (int i = 0; i < WCS_ROW_COUNT; i++) {
@@ -32,8 +34,28 @@ static wcs_t* find(const char* name, size_t len) {
     return nullptr;
 }
 
+const char* offsets_active() { return s_active; }
+
 void offsets_feed_line(const char* line) {
     if (!line || line[0] != '[') return;
+
+    // [GC:G0 G54 G17 G21 G90 ...] carries the active work coordinate system.
+    if (strncmp(line, "[GC:", 4) == 0) {
+        for (int g = 54; g <= 59; g++) {
+            char pat[6];
+            snprintf(pat, sizeof(pat), "G%d", g);
+            const char* hit = strstr(line, pat);
+            // Must be a whole word: "G5" inside "G54" would match otherwise.
+            if (hit && (hit[3] == ' ' || hit[3] == ']')) {
+                if (strcmp(s_active, pat) != 0) {
+                    strncpy(s_active, pat, sizeof(s_active) - 1);
+                    s_dirty = true;
+                }
+                break;
+            }
+        }
+        return;
+    }
     const char* colon = strchr(line, ':');
     if (!colon || colon == line + 1) return;
 

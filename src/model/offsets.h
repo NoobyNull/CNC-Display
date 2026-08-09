@@ -17,3 +17,8 @@ void         offsets_feed_line(const char* line);
 const wcs_t* offsets_get(const char* name);
 const wcs_t* offsets_row(int i);      // i in [0, WCS_ROW_COUNT)
 bool         offsets_dirty_take();    // true once after any change
+
+// Active work coordinate system ("G54".."G59"), tracked from the [GC:...] modal
+// report. Shown on the DRO bar of every page so you cannot zero the wrong
+// system by forgetting which one is live.
+const char*  offsets_active();
