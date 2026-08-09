@@ -1,0 +1,24 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+platformio.local.ini
+
+# Editors / IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Python venvs used by build scripts
+.venv/
+__pycache__/
+*.pyc
+
+# Build output
+*.bin
+*.elf
+*.map
+
+# OS
+.DS_Store
+Thumbs.db

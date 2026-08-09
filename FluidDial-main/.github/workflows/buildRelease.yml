@@ -1,0 +1,90 @@
+name: Build FluidDial Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release version'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio/build
+          key: ${{ runner.os }}-${{ hashFiles('**/lockfiles') }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade platformio
+      - name: Set release version
+        run: |
+          git config user.email "wmb@firmworks.com"
+          git config user.name "Mitch Bradley"
+          git tag "${{ github.event.inputs.tag }}" -a -m "Release test"
+      - name: Create release directory
+        run: |
+          mkdir -p release
+          rm -f release/*
+      - name: Build
+        run: |
+          for env in m5dial cyddial; do
+          pio run -e $env
+          pio run -e $env -t build_merged
+          done
+          python manifest.py
+          ls release/*
+      #- name: Upload binaries
+      #  uses: actions/upload-artifact@v4
+      #  with:
+      #    name: FluidDial_firmware
+      #    path: release/*
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          files: release/*
+          draft: True
+      - name: Deploy to fluiddial-releases
+        run: |
+          git clone \
+            https://x-access-token:${{ secrets.FLUIDDIAL_RELEASE_COPY_TOKEN }}@github.com/bdring/fluiddial-releases.git \
+            target
+
+          mkdir -p target/releases/${{ github.event.inputs.tag }}
+          cp -a release/. target/releases/${{ github.event.inputs.tag }}/
+
+          cd target
+
+          git config user.email "bdring@buildlog.net"
+          git config user.name "Bart Dring"
+
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Release ${{ github.event.inputs.tag }}"
+          git push origin main

@@ -1,0 +1,448 @@
+// Copyright (c) 2023 Mitch Bradley
+// Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
+
+#include "System.h"
+#include "Drawing.h"
+#include "alarm.h"
+#include <map>
+#ifdef USE_WIFI
+#    include "WiFiConnection.h"
+#    include "PeerLink.h"
+#endif
+
+void drawBackground(int color) {
+    canvas.fillSprite(color);
+}
+
+void drawFilledCircle(int x, int y, int radius, int fillcolor) {
+    canvas.fillCircle(x, y, radius, fillcolor);
+}
+void drawFilledCircle(Point xy, int radius, int fillcolor) {
+    Point dispxy = xy.to_display();
+    drawFilledCircle(dispxy.x, dispxy.y, radius, fillcolor);
+}
+
+void drawCircle(int x, int y, int radius, int thickness, int outlinecolor) {
+    for (int i = 0; i < thickness; i++) {
+        canvas.drawCircle(x, y, radius - i, outlinecolor);
+    }
+}
+void drawCircle(Point xy, int radius, int thickness, int outlinecolor) {
+    Point dispxy = xy.to_display();
+    drawCircle(dispxy.x, dispxy.y, radius, thickness, outlinecolor);
+}
+
+void drawOutlinedCircle(int x, int y, int radius, int fillcolor, int outlinecolor) {
+    canvas.fillCircle(x, y, radius, fillcolor);
+    canvas.drawCircle(x, y, radius, outlinecolor);
+}
+void drawOutlinedCircle(Point xy, int radius, int fillcolor, int outlinecolor) {
+    Point dispxy = xy.to_display();
+    drawOutlinedCircle(dispxy.x, dispxy.y, radius, fillcolor, outlinecolor);
+}
+
+void drawRect(int x, int y, int width, int height, int radius, int bgcolor) {
+    canvas.fillRoundRect(x, y, width, height, radius, bgcolor);
+}
+void drawRect(Point xy, int width, int height, int radius, int bgcolor) {
+    Point offsetxy = { width / 2, -height / 2 };    // { 30, -30}
+    Point dispxy   = (xy - offsetxy).to_display();  // {i
+    drawRect(dispxy.x, dispxy.y, width, height, radius, bgcolor);
+}
+void drawRect(Point xy, Point wh, int radius, int bgcolor) {
+    drawRect(xy, wh.x, wh.y, radius, bgcolor);
+}
+
+void drawOutlinedRect(int x, int y, int width, int height, int bgcolor, int outlinecolor) {
+    canvas.fillRoundRect(x, y, width, height, 5, bgcolor);
+    canvas.drawRoundRect(x, y, width, height, 5, outlinecolor);
+}
+void drawOutlinedRect(Point xy, int width, int height, int bgcolor, int outlinecolor) {
+    Point dispxy = xy.to_display();
+    drawOutlinedRect(dispxy.x, dispxy.y, width, height, bgcolor, outlinecolor);
+}
+void drawPngFile(const char* filename, Point xy) {
+    //    drawPngFile(filename, xo(xy.x), yo(xy.y));
+    //    drawPngFile(filename, xy.x - 40, xy.y);
+    drawPngFile(filename, xy.x, xy.y);
+}
+void drawPngBackground(const char* filename) {
+    drawPngFile(filename, 0, 0);
+}
+void drawBackground(LGFX_Sprite* sprite) {
+    sprite->pushSprite(0, 0);
+}
+LGFX_Sprite* createPngBackground(const char* filename) {
+    LGFX_Sprite* sprite = new LGFX_Sprite(&canvas);
+    sprite->setColorDepth(canvas.getColorDepth());
+    sprite->createSprite(canvas.width(), canvas.height());
+    drawPngFile(sprite, filename, 0, 0);
+    return sprite;
+}
+
+// We use 1 to mean no background
+// 1 is visually indistinguishable from black so losing that value is unimportant
+#define NO_BG 1
+// clang-format off
+std::map<state_t, int> stateBGColors = {
+    { Idle,        NO_BG },
+    { Alarm,       RED },
+    { CheckMode,   WHITE },
+    { Homing,      NO_BG },
+    { Cycle,       NO_BG },
+    { Hold,        YELLOW },
+    { Jog,         NO_BG },
+    { DoorOpen,  RED },
+    { DoorClosed,  YELLOW },
+    { GrblSleep,   WHITE },
+    { ConfigAlarm, WHITE },
+    { Critical,    WHITE },
+    { Disconnected, RED },
+};
+std::map<state_t, int> stateFGColors = {
+    { Idle,        LIGHTGREY },
+    { Alarm,       BLACK },
+    { CheckMode,   BLACK },
+    { Homing,      CYAN },
+    { Cycle,       GREEN },
+    { Hold,        BLACK },
+    { Jog,         CYAN },
+    { DoorOpen,  BLACK },
+    { DoorClosed,  BLACK },
+    { GrblSleep,   BLACK },
+    { ConfigAlarm, BLACK },
+    { Critical,    BLACK },
+    { Disconnected, BLACK },
+};
+// clang-format on
+
+void drawStatus() {
+    static constexpr int x      = 100;
+    static constexpr int y      = 24;
+    static constexpr int width  = 140;
+    static constexpr int height = 36;
+
+#ifdef USE_WIFI
+    if (state == Disconnected && !wifi_use_uart_mode()) {
+        // Not shown in UART mode — fall through to the standard N/C display.
+        int         bgColor;
+        const char* line1;
+        const char* line2;
+        if (wifi_use_espnow_mode()) {
+            bgColor = 0x1a001a;
+            line1   = "ESP-NOW";
+            if (espnow_is_reconnecting()) {
+                static const char* rc[] = { "Searching", "Searching.", "Searching..", "Searching..." };
+                line2 = rc[(millis() / 400) % 4];
+            } else {
+                line2 = espnow_is_paired() ? "Lost Signal" : "Not Paired";
+            }
+        } else if (wifi_in_ap_mode()) {
+            bgColor = 0x8400;       // dark orange
+            line1   = "AP Setup";
+            line2   = "192.168.4.1";
+        } else if (wifi_is_connected()) {
+            bgColor = YELLOW;       // WiFi up, Telnet still connecting
+            line1   = "FluidNC";
+            static const char* nc_frames[] = { "Connecting", "Connecting.", "Connecting..", "Connecting..." };
+            line2   = nc_frames[(millis() / 400) % 4];
+        } else {
+            bgColor = RED;
+            line1   = "WiFi";
+            static const char* wifi_frames[] = { "Scanning", "Scanning.", "Scanning..", "Scanning..." };
+            line2   = wifi_frames[(millis() / 400) % 4];
+        }
+        canvas.fillRoundRect((display_short_side() - width) / 2, y, width, height, 5, bgColor);
+        centered_text(line1, y + height / 2 - 4, BLACK, SMALL);
+        centered_text(line2, y + height / 2 + 12, BLACK, TINY);
+        return;
+    }
+#endif
+
+    int bgColor = stateBGColors[state];
+    if (bgColor != 1) {
+        canvas.fillRoundRect((display_short_side() - width) / 2, y, width, height, 5, bgColor);
+    }
+    int fgColor = stateFGColors[state];
+    if (state == Alarm) {
+        centered_text(my_state_string, y + height / 2 - 4, fgColor, SMALL);
+        centered_text(alarm_name_short[lastAlarm], y + height / 2 + 12, fgColor);
+    } else {
+        centered_text(my_state_string, y + height / 2 + 3, fgColor, MEDIUM);
+    }
+}
+
+void drawStatusTiny(int y) {
+    static constexpr int width  = 90;
+    static constexpr int height = 20;
+
+    int bgColor = stateBGColors[state];
+    if (bgColor != 1) {
+        canvas.fillRoundRect((display_short_side() - width) / 2, y, width, height, 5, bgColor);
+    }
+    centered_text(my_state_string, y + height / 2 + 3, stateFGColors[state], TINY);
+}
+
+void drawStatusSmall(int y) {
+    static constexpr int width  = 90;
+    static constexpr int height = 25;
+
+#ifdef USE_WIFI
+    if (state == Disconnected && !wifi_use_uart_mode()) {
+        // Not shown in UART mode — fall through to the standard N/C display.
+        int         bgColor;
+        const char* label;
+        if (wifi_use_espnow_mode()) {
+            bgColor = 0x1a001a;
+            if (espnow_is_reconnecting()) {
+                static const char* rc[] = { "Searching", "Search.", "Search..", "Search..." };
+                label = rc[(millis() / 400) % 4];
+            } else {
+                label = espnow_is_paired() ? "ESP-NOW" : "Unpaired";
+            }
+        } else if (wifi_in_ap_mode()) {
+            bgColor = 0x8400;    // dark orange
+            label   = "AP Mode";
+        } else if (wifi_is_connected()) {
+            bgColor = YELLOW;   // WiFi up, Telnet still connecting
+            static const char* nc_frames[] = { "FluidNC", "FluidNC.", "FluidNC..", "FluidNC..." };
+            label   = nc_frames[(millis() / 400) % 4];
+        } else {
+            bgColor = RED;
+            static const char* wifi_frames[] = { "WiFi", "WiFi.", "WiFi..", "WiFi..." };
+            label   = wifi_frames[(millis() / 400) % 4];
+        }
+        canvas.fillRoundRect((display_short_side() - width) / 2, y, width, height, 5, bgColor);
+        centered_text(label, y + height / 2 + 3, BLACK, TINY);
+        return;
+    }
+#endif
+
+    int bgColor = stateBGColors[state];
+    if (bgColor != 1) {
+        canvas.fillRoundRect((display_short_side() - width) / 2, y, width, height, 5, bgColor);
+    }
+    centered_text(my_state_string, y + height / 2 + 3, stateFGColors[state], SMALL);
+}
+
+Stripe::Stripe(int x, int y, int width, int height, fontnum_t font, int gap)
+    : _x(x), _width(width), _height(height), _gap(gap), _y(y), _font(font) {}
+
+void Stripe::draw(char left, const char* right, bool highlighted, int left_color) {
+    char t[2] = { left, '\0' };
+    draw(t, right, highlighted, left_color);
+}
+void Stripe::draw(const char* left, const char* right, bool highlighted, int left_color) {
+    drawOutlinedRect(_x, _y, _width, _height, highlighted ? BLUE : NAVY, WHITE);
+    if (*left) {
+        text(left, text_left_x(), text_middle_y(), left_color, _font, middle_left);
+    }
+    if (*right) {
+        text(right, text_right_x(), text_middle_y(), WHITE, _font, middle_right);
+    }
+    advance();
+}
+void Stripe::draw(const char* center, bool highlighted) {
+    drawOutlinedRect(_x, _y, _width, _height, highlighted ? BLUE : NAVY, WHITE);
+    text(center, text_center_x(), text_middle_y(), WHITE, _font, middle_center);
+    advance();
+}
+
+#define PUSH_BUTTON_LINE 212
+#define DIAL_BUTTON_LINE 228
+
+static int side_button_line() {
+    return round_display ? PUSH_BUTTON_LINE : DIAL_BUTTON_LINE;
+}
+
+// This shows on the display what the button currently do.
+void drawButtonLegends(const char* red, const char* green, const char* orange) {
+    text(red, round_display ? 50 : 10, side_button_line(), RED, TINY, middle_left);
+    text(green, display_short_side() - (round_display ? 50 : 10), side_button_line(), GREEN, TINY, middle_right);
+    centered_text(orange, DIAL_BUTTON_LINE, ORANGE);
+}
+
+void putDigit(int& n, int x, int y, int color, fontnum_t font = MEDIUM) {
+    char txt[2] = { '\0', '\0' };
+    txt[0]      = "0123456789"[n % 10];
+    n /= 10;
+    text(txt, x, y, color, font, middle_right);
+}
+void fancyNumber(pos_t n, int n_decimals, int hl_digit, int x, int y, int text_color, int hl_text_color, fontnum_t font = SMALL) {
+    int       n_digits = n_decimals + 1;
+    int       i;
+    bool      isneg = n < 0;
+    if (isneg) {
+        n = -n;
+    }
+#ifdef E4_POS_T
+    for (i = 4; i > n_decimals; --i) {
+        if (i == (n_decimals + 1)) {  // Round
+            n += 5;
+        }
+        n /= 10;
+    }
+#else
+    for (i = 0; i < n_decimals; i++) {
+        n *= 10;
+    }
+#endif
+    const int char_width = (font == TINY ? 10 : (font == SMALL ? 14 : 20));
+
+    int ni = (int)n;
+    for (i = 0; i < n_decimals; i++) {
+        putDigit(ni, x, y, i == hl_digit ? hl_text_color : text_color, font);
+        x -= char_width;
+    }
+    if (n_decimals) {
+        text(".", x - char_width / 2, y, text_color, font, middle_center);
+        x -= char_width;
+    }
+    do {
+        putDigit(ni, x, y, i++ == hl_digit ? hl_text_color : text_color, font);
+        x -= char_width;
+    } while (ni || i <= hl_digit);
+    if (isneg) {
+        text("-", x, y, text_color, font, middle_right);
+    }
+}
+
+void DRO::drawHoming(int axis, bool highlight, bool homed) {
+    text(axisNumToCStr(axis), text_left_x(), text_middle_y(), myLimitSwitches[axis] ? GREEN : YELLOW, _font, middle_left);
+    fancyNumber(myAxes[axis], num_digits(), -1, text_right_x(), text_middle_y(), highlight ? (homed ? GREEN : RED) : DARKGREY, RED, _font);
+    advance();
+}
+
+void DRO::draw(int axis, int hl_digit, bool highlight) {
+    text(axisNumToCStr(axis), text_left_x(), text_middle_y(), highlight ? GREEN : DARKGREY, _font, middle_left);
+    fancyNumber(
+        myAxes[axis], num_digits(), hl_digit, text_right_x(), text_middle_y(), highlight ? WHITE : DARKGREY, highlight ? RED : DARKGREY, _font);
+    advance();
+}
+
+void DRO::draw(int axis, bool highlight) {
+    Stripe::draw(axisNumToChar(axis), pos_to_cstr(myAxes[axis], num_digits()), highlight, myLimitSwitches[axis] ? GREEN : WHITE);
+}
+
+void LED::draw(bool highlighted) {
+    drawOutlinedCircle(_x, _y, _radius, (highlighted) ? GREEN : DARKGREY, WHITE);
+    _y += _gap;
+}
+
+void drawMenuTitle(const char* name) {
+    centered_text(name, 12);
+}
+
+#ifdef USE_WIFI
+void drawWiFiSignalBars(int x0, int y_bot) {
+    int bars;
+    int bar_color;
+
+    if (wifi_use_espnow_mode()) {
+        bars      = espnow_signal_bars();
+        bar_color = 0xcc66ff;
+        if (bars == 0) return;
+    } else {
+        if (!wifi_is_connected()) return;
+        bars      = wifi_signal_bars();
+        bar_color = GREEN;
+    }
+
+    static constexpr int W   = 3;
+    static constexpr int GAP = 2;
+    static const     int H[] = { 4, 7, 10, 13 };   // heights: weak → strong
+
+    for (int i = 0; i < 4; i++) {
+        int color = (i < bars) ? bar_color : DARKGREY;
+        canvas.fillRect(x0 + i * (W + GAP), y_bot - H[i], W, H[i], color);
+    }
+}
+#endif
+
+#if defined(USE_M5) || defined(USE_LOVYANGFX)
+void drawBatteryLevel(int x0, int y_bot) {
+    int level = battery_level();
+    if (level < 0) return;
+
+    constexpr int W  = 20;
+    constexpr int H  = 13;
+    constexpr int NW = 4;
+    constexpr int NH = 7;
+
+    bool charging = battery_charging();
+
+    int fill_w, fill_color;
+    if (level >= 75) {
+        fill_w = W - 2;
+        fill_color = GREEN;
+    } else if (level >= 50) {
+        fill_w = (W - 2) / 2;
+        fill_color = GREEN;
+    } else if (level >= 25) {
+        fill_w = (W - 2) / 4;
+        fill_color = YELLOW;
+    } else {
+        fill_w = 2;
+        fill_color = RED;
+    }
+    if (charging) fill_color = BLACK;
+
+    // Body outline and nub
+    canvas.drawRect(x0, y_bot - H, W, H, WHITE);
+    canvas.fillRect(x0 + W, y_bot - (H + NH) / 2, NW, NH, WHITE);
+
+    // Level fill
+    if (fill_w > 0) {
+        canvas.fillRect(x0 + 1, y_bot - H + 1, fill_w, H - 2, fill_color);
+    }
+
+    // Lightning bolt overlay when charging
+    if (charging) {
+        int bx = x0 + W / 2;
+        int by = y_bot - (H + 1) / 2;  // vertical center
+        canvas.fillTriangle(bx + 3, by - 4, bx - 1, by, bx + 3, by, GREEN);
+        canvas.fillTriangle(bx - 3, by, bx + 1, by, bx - 3, by + 4, GREEN);
+    }
+}
+#endif
+
+#if defined(USE_M5) || defined(USE_LOVYANGFX)
+static void drawBatteryLevelOverlay() {
+    if (round_display) return;   // M5 Dial: battery indicator only shown in menu scene
+    int level = battery_level();
+    if (level < 0) return;
+    drawBatteryLevel(display_short_side() - 29, 20);
+}
+#endif
+
+#ifdef USE_WIFI
+static void drawWiFiSignalOverlay() {
+    if (round_display) return;   // M5 Dial: WiFi indicator only shown in menu scene
+    drawWiFiSignalBars(5, 20);
+}
+#endif
+
+void refreshDisplay() {
+#ifdef USE_WIFI
+    drawWiFiSignalOverlay();
+#endif
+#if defined(USE_M5) || defined(USE_LOVYANGFX)
+    drawBatteryLevelOverlay();
+#endif
+    display.startWrite();
+    canvas.pushSprite(sprite_offset.x, sprite_offset.y);
+    display.endWrite();
+}
+
+void drawError() {
+    if (lastError) {
+        if ((milliseconds() - errorExpire) < 0) {
+            canvas.fillCircle(120, 120, 95, RED);
+            drawCircle(120, 120, 95, 5, WHITE);
+            centered_text("Error", 95, WHITE, MEDIUM);
+            centered_text(decode_error_number(lastError), 140, WHITE, TINY);
+        } else {
+            lastError = 0;
+        }
+    }
+}

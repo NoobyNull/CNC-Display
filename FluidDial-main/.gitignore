@@ -1,0 +1,9 @@
+prefs
+.pio
+.vscode
+src/version.*
+*~
+junk
+release
+.DS_Store
+platformio.local.ini

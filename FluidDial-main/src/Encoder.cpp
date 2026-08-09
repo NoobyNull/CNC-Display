@@ -1,0 +1,127 @@
+#include "Encoder.h"
+
+#ifdef ARDUINO
+#    include <Arduino.h>
+#endif
+
+#ifndef USE_LOVYANGFX
+#    include "sdkconfig.h"
+#    include "driver/pcnt.h"
+#endif
+#include "driver/gpio.h"
+
+namespace {
+#ifdef USE_LOVYANGFX
+static const DRAM_ATTR int8_t quadrature_lut[16] = {
+    0, -1, 1, 0,
+    1, 0, 0, -1,
+    -1, 0, 0, 1,
+    0, 1, -1, 0,
+};
+
+static int               encoder_a_pin         = -1;
+static int               encoder_b_pin         = -1;
+static volatile int32_t  encoder_count         = 0;
+static volatile uint8_t  encoder_state         = 0;
+static volatile uint32_t encoder_last_event_us = 0;
+
+static uint8_t IRAM_ATTR read_encoder_state_isr() {
+    return (digitalRead(encoder_a_pin) << 1) | digitalRead(encoder_b_pin);
+}
+
+static void IRAM_ATTR encoder_isr() {
+    uint8_t next_state = read_encoder_state_isr();
+    int8_t  step       = quadrature_lut[(encoder_state << 2) | next_state];
+    if (step) {
+        encoder_count += step;
+        encoder_last_event_us = micros();
+    }
+    encoder_state = next_state;
+}
+#else
+bool pcnt_ready = false;
+#endif
+}
+
+#ifndef USE_LOVYANGFX
+/* clang-format: off */
+void init_encoder(int a_pin, int b_pin) {
+    pcnt_config_t enc_config = {
+        .pulse_gpio_num = a_pin,  //Rotary Encoder Chan A
+        .ctrl_gpio_num  = b_pin,  //Rotary Encoder Chan B
+
+        .lctrl_mode = PCNT_MODE_KEEP,     // Rising A on HIGH B = CW Step
+        .hctrl_mode = PCNT_MODE_REVERSE,  // Rising A on LOW B = CCW Step
+        .pos_mode   = PCNT_COUNT_INC,     // Count Only On Rising-Edges
+        .neg_mode   = PCNT_COUNT_DEC,     // Discard Falling-Edge
+
+        .counter_h_lim = INT16_MAX,
+        .counter_l_lim = INT16_MIN,
+
+        .unit    = PCNT_UNIT_0,
+        .channel = PCNT_CHANNEL_0,
+    };
+    if (pcnt_unit_config(&enc_config) != ESP_OK) {
+        printf("PCNT init failed on encoder A pin %d\n", a_pin);
+        return;
+    }
+
+    enc_config.pulse_gpio_num = b_pin;
+    enc_config.ctrl_gpio_num  = a_pin;
+    enc_config.channel        = PCNT_CHANNEL_1;
+    enc_config.pos_mode       = PCNT_COUNT_DEC;  //Count Only On Falling-Edges
+    enc_config.neg_mode       = PCNT_COUNT_INC;  // Discard Rising-Edge
+    if (pcnt_unit_config(&enc_config) != ESP_OK) {
+        printf("PCNT init failed on encoder B pin %d\n", b_pin);
+        return;
+    }
+
+    pcnt_set_filter_value(PCNT_UNIT_0, 250);  // Filter Runt Pulses
+
+    pcnt_filter_enable(PCNT_UNIT_0);
+
+    gpio_pullup_en((gpio_num_t)a_pin);
+    gpio_pullup_en((gpio_num_t)b_pin);
+
+    pcnt_counter_pause(PCNT_UNIT_0);  // Initial PCNT init
+    pcnt_counter_clear(PCNT_UNIT_0);
+    pcnt_counter_resume(PCNT_UNIT_0);
+    pcnt_ready = true;
+}
+
+int16_t get_encoder() {
+    if (!pcnt_ready) {
+        return 0;
+    }
+    int16_t count;
+    pcnt_get_counter_value(PCNT_UNIT_0, &count);
+    return count;
+}
+
+uint32_t encoder_event_us() {
+    // PCNT has no per-pulse ISR; fall back to call time.
+    return micros();
+}
+#else
+void init_encoder(int a_pin, int b_pin) {
+    encoder_a_pin = a_pin;
+    encoder_b_pin = b_pin;
+
+    pinMode(encoder_a_pin, INPUT_PULLUP);
+    pinMode(encoder_b_pin, INPUT_PULLUP);
+
+    encoder_count = 0;
+    encoder_state = read_encoder_state_isr();
+
+    attachInterrupt(digitalPinToInterrupt(encoder_a_pin), encoder_isr, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(encoder_b_pin), encoder_isr, CHANGE);
+}
+
+int16_t get_encoder() {
+    return (int16_t)encoder_count;
+}
+
+uint32_t encoder_event_us() {
+    return encoder_last_event_us;
+}
+#endif
