@@ -8,8 +8,17 @@
 
 static uart_port_t fnc_uart_port = (uart_port_t)FNC_UART_NUM;
 
+static uint32_t      s_baud = FNC_BAUD;
 static unsigned long s_rx_count = 0;
 static unsigned long s_tx_count = 0;
+
+void fnc_set_baud(uint32_t baud) {
+    s_baud = baud;
+    uart_set_baudrate(fnc_uart_port, baud);
+    uart_flush_input(fnc_uart_port);   // whatever arrived at the old rate is noise
+}
+
+uint32_t fnc_get_baud() { return s_baud; }
 
 unsigned long fnc_rx_count() { return s_rx_count; }
 unsigned long fnc_tx_count() { return s_tx_count; }
@@ -19,7 +28,7 @@ void init_fnc_uart() {
     uart_driver_delete(fnc_uart_port);
 
     uart_config_t conf = {};
-    conf.baud_rate           = FNC_BAUD;
+    conf.baud_rate           = s_baud;
     conf.data_bits           = UART_DATA_8_BITS;
     conf.parity              = UART_PARITY_DISABLE;
     conf.stop_bits           = UART_STOP_BITS_1;
@@ -37,12 +46,12 @@ void reinit_fnc_uart() {
     init_fnc_uart();
 }
 
-extern "C" void fnc_putchar(uint8_t c) {
+void uart_putc(uint8_t c) {
     uart_write_bytes(fnc_uart_port, (const char*)&c, 1);
     s_tx_count++;
 }
 
-extern "C" int fnc_getchar() {
+int uart_getc() {
     uint8_t c;
     int n = uart_read_bytes(fnc_uart_port, &c, 1, 0);
     if (n != 1) return -1;
@@ -50,7 +59,7 @@ extern "C" int fnc_getchar() {
     return c;
 }
 
-extern "C" bool fnc_rx_waiting() {
+bool uart_rx_waiting() {
     size_t avail = 0;
     uart_get_buffered_data_len(fnc_uart_port, &avail);
     return avail > 0;
@@ -62,7 +71,7 @@ extern "C" bool fnc_rx_waiting() {
 // never turn SW flow control on, so the local transmitter cannot be held off.
 // Sending XON to FluidNC is the half that does the work.
 void resetFlowControl() {
-    fnc_putchar(0x11);
+    uart_putc(0x11);
 }
 
 // GrblParserC expects the host to supply a millisecond clock.

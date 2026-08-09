@@ -1,8 +1,14 @@
 #include <Arduino.h>
 #include <Wire.h>
+
+// Debug console pins — the microSD lines, unused by this firmware.
+#define DBG_TX_PIN 11   // module pin 19
+#define DBG_RX_PIN 13   // module pin 21
 #include "hw/display_hw.h"
 #include "hw/touch.h"
 #include "transport/uart.h"
+#include "transport/transport.h"
+#include "model/settings.h"
 #include "transport/xmodem_rx.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
@@ -20,41 +26,14 @@ static void ui_tick_cb(lv_timer_t*) { shell_tick(); }
 // the UART drain rate.
 static void touch_tick_cb(lv_timer_t*) { touch_poll(); }
 
-// Temporary bring-up aid: sample the candidate pins for edges before anything
-// else claims them. A FluidNC TX line idles high and dips low on every byte, so
-// whichever pin shows transitions is the one the Airdale is actually wired to.
-// Remove once the link is up.
-static void scan_for_uart_activity() {
-    const int PINS[] = { 10, 11, 12, 13, 17, 18, 42 };
-    const int N = sizeof(PINS) / sizeof(PINS[0]);
-    int  edges[N] = { 0 };
-    int  last[N];
-
-    for (int i = 0; i < N; i++) {
-        pinMode(PINS[i], INPUT_PULLUP);
-        last[i] = digitalRead(PINS[i]);
-    }
-
-    Serial.println("[scan] sampling candidate pins for 4s - make sure FluidNC is powered");
-    uint32_t t0 = millis();
-    while (millis() - t0 < 4000) {
-        for (int i = 0; i < N; i++) {
-            int v = digitalRead(PINS[i]);
-            if (v != last[i]) { edges[i]++; last[i] = v; }
-        }
-    }
-
-    for (int i = 0; i < N; i++) {
-        Serial.printf("[scan] GPIO %-2d edges=%-7d %s\n", PINS[i], edges[i],
-                      edges[i] > 20 ? "<<< SIGNAL HERE" : (edges[i] ? "(noise)" : "idle"));
-    }
-}
-
 void setup() {
-    Serial.begin(115200);
+    // The debug console cannot live on its default pins any more: GPIO 43/44
+    // now carry the 1 Mbaud FluidNC link to the pendant connector. Park it on
+    // the unused microSD pins instead — module pin 19 (GPIO11, TX) and pin 21
+    // (GPIO13, RX) — so diagnostics stay available without touching the link.
+    // Nothing needs to be connected there for the firmware to run.
+    Serial.begin(115200, SERIAL_8N1, /*rx=*/DBG_RX_PIN, /*tx=*/DBG_TX_PIN);
     Serial.println("\n=== CNC Console ===");
-
-    scan_for_uart_activity();   // before display_init() claims any pins
 
     // The GT911 and the PCA9557 share one bus. Nothing below may touch Wire
     // before this line — display_init() drives the PCA9557 immediately.
@@ -64,13 +43,14 @@ void setup() {
     display_init();        // PCA9557 reset + RGB panel
     gt911_discover();      // must follow display_init(): it resets the GT911
     lvgl_init();
-    set_backlight(200);
+    set_backlight(settings_brightness());
 
     clog_reset();
     offsets_reset();
     filelist_reset();
 
-    init_fnc_uart();
+    settings_load();
+    transport_init();
 
     shell_build();
     lv_timer_create(ui_tick_cb, 50, nullptr);      // 20 Hz UI
@@ -97,21 +77,17 @@ void setup() {
 // into the void and never retried.
 static bool s_primed = false;
 
-// Once a second: re-poke a dead link, and report what the wire is doing.
-// Without this the boot-time status request was the only one ever sent, so a
-// link that was not ready at boot stayed dead forever.
+// Link hunting now lives in transport.cpp, which cycles UART baud rates and
+// falls back to WiFi/Telnet according to the Setup toggles.
 static void link_watchdog() {
-    static uint32_t next_ms = 0;
+    static uint32_t next_log = 0;
     uint32_t now = millis();
-    if ((int32_t)(now - next_ms) < 0) return;
-    next_ms = now + 1000;
-
-    Serial.printf("[link] state=%d rx=%lu tx=%lu\n",
+    transport_poll();
+    if ((int32_t)(now - next_log) < 0) return;
+    next_log = now + 2000;
+    Serial.printf("[link] %-10s %-32s state=%d rx=%lu tx=%lu\n",
+                  transport_label(), transport_detail(),
                   (int)state, fnc_rx_count(), fnc_tx_count());
-
-    if (state == Disconnected) {
-        fnc_realtime(StatusReport);   // single byte, never blocks
-    }
 }
 
 static void prime_link_if_up() {

@@ -6,6 +6,7 @@
 #include "model/model_events.h"
 #include "model/model_compat.h"
 #include "model/offsets.h"
+#include "transport/transport.h"
 #include "GrblParserC.h"
 #include "e4math.h"
 #include <stdio.h>
@@ -36,6 +37,7 @@ static lv_obj_t* s_pages[PAGE_COUNT];
 static lv_obj_t* s_state_chip;
 static lv_obj_t* s_state_lbl;
 static lv_obj_t* s_wcs_lbl;
+static lv_obj_t* s_link_lbl;
 static lv_obj_t* s_axis_work[3];
 static lv_obj_t* s_axis_mach[3];
 static lv_obj_t* s_flip_btn;
@@ -212,7 +214,7 @@ static void build_dro(lv_obj_t* parent) {
     lv_obj_center(s_state_lbl);
 
     s_wcs_lbl = w_label(sc, "G54", &lv_font_montserrat_12, C_ACCENT);
-    w_label(sc, "UART 1M", &lv_font_montserrat_10, C_DIM);
+    s_link_lbl = w_label(sc, "NO LINK", &lv_font_montserrat_10, C_DIM);
 
     lv_obj_t* axes = lv_obj_create(s_dro);
     w_flatten(axes);
@@ -364,6 +366,8 @@ void shell_tick() {
             lv_label_set_text(s_axis_mach[a], m);
         }
     }
+    lv_label_set_text(s_link_lbl, transport_label());
+
     if (offsets_dirty_take()) {
         lv_label_set_text(s_wcs_lbl, offsets_active());
     }
@@ -382,6 +386,7 @@ void shell_tick() {
         case PAGE_JOG:     page_jog_tick();     break;
         case PAGE_OFFSETS: page_offsets_tick(); break;
         case PAGE_RUN:     page_run_tick();     break;
+        case PAGE_SETUP:   page_setup_tick();   break;
         default: break;
     }
     expanded_tick();
