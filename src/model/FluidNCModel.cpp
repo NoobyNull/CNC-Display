@@ -20,12 +20,14 @@ const char*        my_state_string    = "N/C";
 state_t            state              = Disconnected;  // correct: we are disconnected until FluidNC responds
 int                n_axes             = 3;
 pos_t              myAxes[6]          = { 0 };
+pos_t              myWco[6]           = { 0 };
 bool               myLimitSwitches[6] = { false };
 bool               myProbeSwitch      = false;
 const char*        myFile             = "";  // running SD filename
 const char*        myCtrlPins         = "";
 file_percent_t     myPercent          = 0.0;  // percent conplete of SD file
 override_percent_t myFro              = 100;  // Feed rate override
+override_percent_t myRro              = 100;  // Rapid override
 override_percent_t mySro              = 100;  // Spindle Override
 uint32_t           myFeed             = 0;
 uint32_t           mySpeed            = 0;
@@ -121,6 +123,7 @@ extern "C" void show_file(const char* filename, file_percent_t percent) {
 
 extern "C" void show_overrides(override_percent_t feed_ovr, override_percent_t rapid_ovr, override_percent_t spindle_ovr) {
     myFro = feed_ovr;
+    myRro = rapid_ovr;
     mySro = spindle_ovr;
 }
 
@@ -148,6 +151,10 @@ extern "C" void show_dro(const pos_t* axes, const pos_t* wco, bool isMpos, bool*
             axis_val -= wco[axis];
         }
         myAxes[axis] = inInches ? e4_mm_to_inch(axis_val) : axis_val;
+        // Keep the work coordinate offset too. myAxes is the WORK position with
+        // wco already removed, so machine position = myAxes + myWco. Without
+        // this the DRO can only ever show one of the two.
+        myWco[axis] = inInches ? e4_mm_to_inch(wco[axis]) : wco[axis];
     }
 }
 #else

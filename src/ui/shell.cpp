@@ -41,6 +41,7 @@ static lv_obj_t* s_axis_mach[3];
 static lv_obj_t* s_flip_btn;
 static lv_obj_t* s_close_btn;
 static lv_obj_t* s_ovr_box;
+static lv_obj_t* s_ovr_val[3];
 
 static int       s_nav_start = 0;
 static page_id_t s_page = PAGE_JOG;
@@ -163,6 +164,17 @@ static void build_safety(lv_obj_t* parent) {
     lv_obj_set_height(s_ovr_box, LV_PCT(100));
     lv_obj_set_flex_flow(s_ovr_box, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(s_ovr_box, U, 0);
+
+    static const char* OVR_K[3] = { "FEED", "RAPID", "SPINDLE" };
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t* cell = w_panel(s_ovr_box, C_RAISE);
+        lv_obj_set_flex_grow(cell, 1);
+        lv_obj_set_height(cell, LV_PCT(100));
+        lv_obj_t* k = w_label(cell, OVR_K[i], &lv_font_montserrat_10, C_DIM);
+        lv_obj_align(k, LV_ALIGN_CENTER, 0, -11);
+        s_ovr_val[i] = w_label(cell, "100%", &lv_font_montserrat_16, C_TEXT);
+        lv_obj_align(s_ovr_val[i], LV_ALIGN_CENTER, 0, 9);
+    }
 
     s_flip_btn = w_button(s_safety, "FLIP", "view", C_ACCENT, C_BG, flip_cb, nullptr);
     lv_obj_set_size(s_flip_btn, U * 11, LV_PCT(100));
@@ -347,13 +359,23 @@ void shell_tick() {
         for (int a = 0; a < n; a++) {
             fmt_pos(b, sizeof(b), myAxes[a]);
             lv_label_set_text(s_axis_work[a], b);
-            char m[40];
-            snprintf(m, sizeof(m), "M %s", e4_to_cstr(myAxes[a], 3));
+            char m[44];
+            snprintf(m, sizeof(m), "M %s", e4_to_cstr(myAxes[a] + myWco[a], 3));
             lv_label_set_text(s_axis_mach[a], m);
         }
     }
     if (offsets_dirty_take()) {
         lv_label_set_text(s_wcs_lbl, offsets_active());
+    }
+
+    // An override that is not 100% is tinted: a job cutting at 115% feed should
+    // never look the same as one at 100%.
+    const int ovr[3] = { (int)myFro, (int)myRro, (int)mySro };
+    for (int i = 0; i < 3; i++) {
+        char b[12];
+        snprintf(b, sizeof(b), "%d%%", ovr[i]);
+        lv_label_set_text(s_ovr_val[i], b);
+        lv_obj_set_style_text_color(s_ovr_val[i], ovr[i] == 100 ? C_TEXT : C_WARN, 0);
     }
 
     switch (s_page) {

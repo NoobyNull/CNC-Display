@@ -34,13 +34,15 @@ extern state_t     previous_state;
 extern const char* my_state_string;
 
 extern int                n_axes;
-extern pos_t              myAxes[6];
+extern pos_t              myAxes[6];   // WORK position (wco already subtracted)
+extern pos_t              myWco[6];    // work coordinate offset; machine = myAxes + myWco
 extern bool               myLimitSwitches[6];
 extern bool               myProbeSwitch;
 extern const char*        myCtrlPins;
 extern const char*        myFile;
 extern file_percent_t     myPercent;
 extern override_percent_t myFro;
+extern override_percent_t myRro;   // rapid override; FluidDial discarded this
 extern override_percent_t mySro;
 extern uint32_t           myFeed;
 extern uint32_t           mySpeed;

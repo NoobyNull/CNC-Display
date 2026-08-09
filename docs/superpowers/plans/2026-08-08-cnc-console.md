@@ -3709,3 +3709,51 @@ Not in this plan, recorded so they are not silently dropped:
 - **Alarm and error text from `$A`/`$E`.** Currently `$E` output lands in the console
   unparsed; caching it into a lookup is a small follow-up.
 - **Macro names read from the controller.** Currently six fixed `macroN` slots.
+
+
+---
+
+## Execution notes (2026-08-08)
+
+The plan was executed end to end in one session. Everything that could be verified
+without hardware was verified: the firmware builds clean and all 32 host tests pass.
+Six things differed from the plan as written.
+
+1. **touch.cpp could not be copied verbatim.** It carried the hotkey project's gesture
+   layer, which held LVGL's press report back 120 ms to tell taps from swipes and
+   suppressed input after 30 px of movement. Both are wrong for a jog pad. The GT911
+   read path was kept; the gesture layer was removed.
+
+2. **FluidNCModel.cpp had one `current_scene->` call, not eight.** The other seven live
+   in FileParser.cpp, which this project replaced with `filelist.cpp` rather than porting.
+
+3. **The model needed ten more symbols** than the plan anticipated — `bootlog_printf`,
+   `resetFlowControl`, `schedule_action`, `act_on_state_change`, `request_redisplay`,
+   `json_in_progress`, `json_reset_depth`, `parse_dollar`,
+   `file_request_failed_advance`, `detect_homing_info`. `src/model/model_compat.h`
+   supplies all ten: five are real reimplementations, five are no-ops with the reason
+   stated at each declaration.
+
+4. **`handle_other_line()` had to go above the early returns** in `handle_other()`.
+   The file-list reply is the `'{'` case that returns into `handle_json()`, so a
+   fan-out placed after it would never have seen a directory listing.
+
+5. **Two bugs found by self-review after the build was green:**
+   - `myAxes` is the *work* position with WCO already subtracted, so the DRO was
+     showing the same number twice and labelling one of them "M". The model now
+     captures `myWco[]` and machine position is `myAxes + myWco`.
+   - The Run page's scroll buttons changed `s_scroll` but the tick early-returned on
+     the file-list dirty flag, so the rows never repainted. Split into a separate
+     view-dirty flag.
+
+6. **`myRro` added.** `show_overrides()` received the rapid override and discarded it;
+   the safety bar shows all three.
+
+Also needed, neither in the plan: `LV_USE_CANVAS` and `LV_FONT_MONTSERRAT_10` enabled
+in the copied `lv_conf.h`, `test_build_src = yes` for the native env (PlatformIO does
+not build `src/` into test binaries otherwise), and a `milliseconds()` implementation
+that GrblParserC expects the host to supply.
+
+**Not verified — needs the hardware.** Every `[HW]` step remains open: flashing, and
+all twelve items on the acceptance checklist. Nothing in this codebase has run on the
+panel or talked to a controller.

@@ -21,6 +21,7 @@ static int  s_sel = -1;
 static int  s_scroll = 0;
 static char s_selected[FL_NAME_MAX] = { 0 };
 static bool s_redraw_pending = false;
+static bool s_list_dirty = true;
 
 static void row_cb(lv_event_t* e) {
     int r = (int)(intptr_t)lv_event_get_user_data(e);
@@ -30,6 +31,7 @@ static void row_cb(lv_event_t* e) {
         filelist_enter(en->name);
         s_scroll = 0;
         s_sel = -1;
+        s_list_dirty = true;
         return;
     }
     s_sel = s_scroll + r;
@@ -38,6 +40,7 @@ static void row_cb(lv_event_t* e) {
 
     char full[192];
     snprintf(full, sizeof(full), "%s/%s", filelist_path(), s_selected);
+    s_list_dirty = true;                 // highlight the newly selected row
     if (pathload_start(full)) s_redraw_pending = true;
 }
 
@@ -48,7 +51,10 @@ static void scroll_cb(lv_event_t* e) {
     if (max < 0) max = 0;
     if (n < 0) n = 0;
     if (n > max) n = max;
-    s_scroll = n;
+    if (n != s_scroll) {
+        s_scroll = n;
+        s_list_dirty = true;   // the model has not changed, but the view has
+    }
 }
 
 static void run_cb(lv_event_t*) {
@@ -144,7 +150,9 @@ void page_run_tick() {
         lv_label_set_text(s_preview_lbl, b);
     }
 
-    if (!filelist_dirty_take()) return;
+    if (filelist_dirty_take()) s_list_dirty = true;
+    if (!s_list_dirty) return;
+    s_list_dirty = false;
 
     lv_label_set_text(s_crumb, filelist_path());
     for (int r = 0; r < ROWS; r++) {
