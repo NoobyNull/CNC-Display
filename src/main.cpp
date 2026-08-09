@@ -42,10 +42,31 @@ void setup() {
     Serial.printf("PSRAM free: %u\n", (unsigned)ESP.getFreePsram());
     Serial.printf("Heap free:  %u\n", (unsigned)ESP.getFreeHeap());
 
+    // Nothing here may wait on the controller. fnc_send_line() spins in
+    // `while (_ackwait)` until the previous line is acked or its timeout
+    // (2000ms) expires, so chaining sends at boot with no controller attached
+    // freezes the panel for seconds before the first frame is even painted.
+    // Only these two are safe: both are a single putchar with no ack expected.
     fnc_putchar(0x11);          // XON, clear any stale XOFF on the far end
     fnc_realtime(StatusReport);
-    send_line("$#");            // prime the work offset table
+
+    // Paint frame one now so the UI is up and interactive regardless of whether
+    // anything is on the other end of the wire.
+    lv_timer_handler();
+}
+
+// The work offsets and file list are primed once, the first time the link is
+// actually alive. Doing it at boot would either block (see above) or be sent
+// into the void and never retried.
+static bool s_primed = false;
+
+static void prime_link_if_up() {
+    if (s_primed) return;
+    if (state == Disconnected) return;
+    s_primed = true;
+    send_line("$#");
     filelist_request();
+    Serial.println("link up: primed offsets and file list");
 }
 
 void loop() {
@@ -67,6 +88,7 @@ void loop() {
             if (!fnc_rx_waiting()) break;
         }
     }
+    prime_link_if_up();
     service_action();
     lv_timer_handler();
 }
