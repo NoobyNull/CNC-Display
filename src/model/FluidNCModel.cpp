@@ -4,6 +4,7 @@
 #include "FluidNCModel.h"
 #include "model/filelist.h"
 #include <map>
+#include <string>   // arduino-esp32 3.x no longer pulls this in transitively
 #include "model/sys_compat.h"
 #include "model/model_events.h"
 #include "model/model_compat.h"

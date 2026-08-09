@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include "hw/display_hw.h"
 #include "hw/touch.h"
 #include "transport/uart.h"
@@ -23,7 +24,11 @@ void setup() {
     Serial.begin(115200);
     Serial.println("\n=== CNC Console ===");
 
-    touch_init();          // create the I2C mutex before anything touches the bus
+    // The GT911 and the PCA9557 share one bus. Nothing below may touch Wire
+    // before this line — display_init() drives the PCA9557 immediately.
+    Wire.begin(19, 20);    // SDA=19, SCL=20
+
+    touch_init();          // create the I2C mutex before anything uses the bus
     display_init();        // PCA9557 reset + RGB panel
     gt911_discover();      // must follow display_init(): it resets the GT911
     lvgl_init();
