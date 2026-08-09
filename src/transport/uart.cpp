@@ -46,3 +46,12 @@ extern "C" bool fnc_rx_waiting() {
     uart_get_buffered_data_len(fnc_uart_port, &avail);
     return avail > 0;
 }
+
+// Clear a stale XOFF on the far end. FluidDial also calls uart_ll_force_xon()
+// to unwedge the local transmitter, but that only matters when software flow
+// control is enabled on this side — we configure UART_HW_FLOWCTRL_DISABLE and
+// never turn SW flow control on, so the local transmitter cannot be held off.
+// Sending XON to FluidNC is the half that does the work.
+void resetFlowControl() {
+    fnc_putchar(0x11);
+}
