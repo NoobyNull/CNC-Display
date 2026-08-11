@@ -29,8 +29,8 @@ report clashes.
 ## Print
 
 Rear face down on the bed. Every wall is then vertical and the columns and
-bosses stand up off the floor — **no supports**. The only overhangs are the
-tops of the three Ø8 cable holes, which bridge fine.
+bosses stand up off the floor — **no supports**. The only overhang is the top of
+the cable slot, which bridges fine.
 
 ## What is open, and why
 
@@ -50,18 +50,17 @@ tops of the three Ø8 cable holes, which bridge fine.
 
 # Table mount — `arm_mount.py`
 
-Ball-and-socket arm, VESA 75 at the panel end, clamps a table edge without
-drilling. Four printed parts, one printed twice.
+Ball-and-socket arm, VESA 75 at the panel end, bolted flat to the bench. Three
+printed parts, one printed twice.
 
 | Part | Qty | Notes |
 |---|---|---|
 | `BasePlate` | 1 | 110 × 80 × 10 with a Ø20 ball on a 25 mm neck |
-| `ClampBar` | 1 | goes under the table top, two captive M8 nuts |
 | `ArmHalf` | **2** | identical; together they make a double socket arm |
 | `VesaPlate` | 1 | VESA 75, counterbored for M4 caps, Ø20 ball |
 
-Hardware: 2 × M8 (table thickness + 35 mm) + 2 M8 nuts · 4 × M5×30 + 4 M5 nyloc
-· 4 × M4×12 into the back cover.
+Hardware: 4 × bench screws · 4 × M5×30 + 4 M5 nyloc · 4 × M4×12 into the back
+cover.
 
 ## Range
 
@@ -100,26 +99,30 @@ PH2.0 plug is 8 × 4.5 mm and will not pass it. You would be threading bare wire
 and crimping after assembly, and every adjustment would work the cable inside
 the joint. Say the word if you want it anyway.
 
-## Clamp
+## Fixing to the bench
 
-The bolts drop **past** the table edge, not through the table: the plate lands
-72 mm of bearing on the top, the bar reaches 38 mm back underneath, and
-tightening pinches the edge between them. The bar's nuts are recessed into its
-underside so its top face stays flat against the table.
+Four holes on an 84 × 56 mm rectangle, Ø7 through with a Ø14 × 4 mm flat
+counterbore, so a 1/4in lag or M6 head sinks flush on a washer. `SCREW_CLR` and
+`SCREW_HEAD_D` size them for anything else; for flat-head screws swap the
+counterbore for a 90° countersink.
+
+The load is small. The panel hangs 167 mm forward of the base, which is 0.74 N·m
+of tipping about the front screws; with the rows 56 mm apart that is 13 N shared
+between the rear pair — under 7 N of pull-out each. Any screw that bites will
+hold it.
 
 ## Print
 
 - `ArmHalf` — **socket face up**. The cavities then open upward and print as
   bowls with no overhang at all.
 - `BasePlate`, `VesaPlate` — plate down, ball up. No supports.
-- `ClampBar` — either way.
 
 ---
 
 # Assembly — `assembly.py`
 
-Poses the whole stack — panel, back cover, VESA plate, arm, base, clamp bar and
-a slab of table — so the geometry can be checked before anything is printed.
+Poses the whole stack — panel, back cover, VESA plate, arm, base and a slab of
+bench — so the geometry can be checked before anything is printed.
 
 ```python
 exec(open("cad/assembly.py").read())
@@ -164,9 +167,8 @@ screen ends up at twice it above horizontal — 40° gives a near-vertical scree
   Panel plus cover is ~450 g on a ~150 mm lever, about 5 MPa of bending in the
   neck — fine in PETG, fine in PLA, and the first thing to reprint in something
   tougher if it ever lets go.
-- **The panel hangs 167 mm forward of the base**, so the clamp carries a
-  tipping moment rather than just weight — about 0.7 N·m with the panel at 30°.
-  The M8 pair and 72 mm of plate bearing handle that, but do not go looking for
-  more reach without thinking about it.
+- **The panel hangs 167 mm forward of the base**, so the fixing carries a
+  tipping moment rather than just weight. It is small (see above), but it grows
+  with reach — do not stretch the arm without redoing that sum.
 - **Nothing has been printed or test-fitted.** Everything above is measured off
   the model.

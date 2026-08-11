@@ -3,14 +3,13 @@ Adjustable table mount for the CNC console: ball-and-socket arm, VESA 75 head.
 
 Run inside FreeCAD:  exec(open("cad/arm_mount.py").read())
 
-Four printed parts, one of them twice:
+Three printed parts, one of them twice:
 
-    base_plate   clamps to a table edge, carries a ball
-    clamp_bar    goes under the table, two M8 nut traps
+    base_plate   screws flat to the bench, carries a ball
     arm_half     x2, identical -- two halves of a double socket arm
     vesa_plate   VESA 75 onto the panel's back cover, carries a ball
 
-Hardware: 2x M8 (length = table thickness + 35) + 2 M8 nuts,
+Hardware: 4x bench screws (1/4in lag or M6, heads sink flush),
           4x M5x30 + 4 M5 nyloc, 4x M4x12 into the back cover.
 
 Why every angle here is what it is
@@ -69,13 +68,15 @@ BRIDGE_T    = 2.0
 # ------------------------------------------------------------------- table end
 BASE_L, BASE_W, BASE_T = 110.0, 80.0, 10.0
 BASE_BALL_H = 25.0         # neck length above the plate
-CLAMP_X     = 35.0         # the two clamp bolts, either side of centre
-CLAMP_Y     = -32.0        # 8mm in from the front edge: the bolts have to drop
-                           # past the table edge, not through the table
-M8_CLR      = 8.6
-M8_HEX_AF   = 13.4
-BAR_L, BAR_W, BAR_T = 110.0, 50.0, 10.0
-BAR_BOLT_Y  = -13.0        # so 37mm of bar reaches back under the table top
+
+# Four screws straight down into the bench. Sized for a 1/4in lag or an M6 --
+# change SCREW_CLR/SCREW_HEAD_D for anything else. The counterbore is flat
+# bottomed, so a hex head on a washer or a socket cap both bear properly; for
+# flat-head screws cut a 90 deg countersink here instead.
+SCREW_X, SCREW_Y = 42.0, 28.0
+SCREW_CLR    = 7.0
+SCREW_HEAD_D = 14.0
+SCREW_HEAD_H = 4.0
 
 # -------------------------------------------------------------------- vesa end
 VESA_PITCH  = 75.0
@@ -166,23 +167,12 @@ def make_base_plate():
     body = body.fuse(Part.makeCone(NECK_R + 7.0, NECK_R, 7.0,
                                    App.Vector(0, 0, BASE_T - 0.01)))
     for sx in (-1, 1):
-        body = body.cut(Part.makeCylinder(M8_CLR / 2.0, BASE_T + 2,
-                                          App.Vector(sx * CLAMP_X, CLAMP_Y, -1)))
-    return body.removeSplitter()
-
-
-def make_clamp_bar():
-    body = Part.makeBox(BAR_L, BAR_W, BAR_T,
-                        App.Vector(-BAR_L / 2.0, -BAR_W / 2.0, 0))
-    body = body.makeFillet(6.0, [e for e in body.Edges
-                                 if abs(e.tangentAt(e.FirstParameter).z) > 0.99])
-    for sx in (-1, 1):
-        body = body.cut(Part.makeCylinder(M8_CLR / 2.0, BAR_T + 2,
-                                          App.Vector(sx * CLAMP_X, BAR_BOLT_Y, -1)))
-        # Nut recessed into the UNDERSIDE. The top face has to stay flat -- it is
-        # what bears on the table, and a proud nut would dig into it.
-        body = body.cut(hex_prism(M8_HEX_AF, 5.5,
-                                  App.Vector(sx * CLAMP_X, BAR_BOLT_Y, -0.5)))
+        for sy in (-1, 1):
+            p = App.Vector(sx * SCREW_X, sy * SCREW_Y, -1)
+            body = body.cut(Part.makeCylinder(SCREW_CLR / 2.0, BASE_T + 2, p))
+            body = body.cut(Part.makeCylinder(
+                SCREW_HEAD_D / 2.0, SCREW_HEAD_H + 1,
+                App.Vector(p.x, p.y, BASE_T - SCREW_HEAD_H)))
     return body.removeSplitter()
 
 
@@ -206,7 +196,6 @@ def make_vesa_plate():
 
 PARTS = [
     ("BasePlate",  make_base_plate,  App.Vector(0, 0, 0)),
-    ("ClampBar",   make_clamp_bar,   App.Vector(0, -110, 0)),
     ("ArmHalf",    make_arm_half,    App.Vector(0, 130, 0)),
     ("VesaPlate",  make_vesa_plate,  App.Vector(190, 0, 0)),
 ]

@@ -79,9 +79,9 @@ rot_arm = basis(u, App.Vector(0, -s, c), App.Vector(1, 0, 0))
 # Another JOINT_DEG, so the base neck stands JOINT_DEG off the arm.
 neck_dir = App.Vector(0, -s, -c)                         # ball -> base plate
 base_z = neck_dir * -1
-# Turned 180 deg about its own axis so the clamped edge is the one you stand at
-# and the table runs away behind the screen. The other way round works
-# mechanically and puts the display facing across the bench, away from you.
+# Turned 180 deg about its own axis so the bench runs away behind the screen
+# rather than out in front of it. The plate itself is symmetric, so this only
+# decides which way the bench slab is drawn.
 rot_base = basis(App.Vector(-1, 0, 0), App.Vector(0, -c, s), base_z)
 
 TABLE_NORMAL = base_z                                    # world up, in panel coords
@@ -119,12 +119,10 @@ add("ArmHalfB", half.copy(), arm_pl.multiply(half_b), GREY)
 base_pl = App.Placement(ball_base - rot_base.multVec(App.Vector(0, 0, BASE_UP)), rot_base)
 add("BasePlate", load(mount, "BasePlate"), base_pl, GREY)
 
-bar_pl = base_pl.multiply(App.Placement(App.Vector(0, -19, -TABLE_THK - g["BAR_T"]),
-                                        App.Rotation()))
-add("ClampBar", load(mount, "ClampBar"), bar_pl, GREY)
-
-# A slab of table, so the pose reads. Its top face is the base plate's underside.
-table = Part.makeBox(600, 400, TABLE_THK, App.Vector(-300, -25, -TABLE_THK))
+# A slab of bench, so the pose reads. Its top face is the base plate's underside,
+# and it runs back under the whole plate -- the four screws go straight down
+# into it.
+table = Part.makeBox(600, 500, TABLE_THK, App.Vector(-300, -70, -TABLE_THK))
 add("Table", table, base_pl, WOOD)
 
 if PANEL_STEP and os.path.exists(PANEL_STEP):
