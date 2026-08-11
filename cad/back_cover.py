@@ -83,10 +83,16 @@ VESA_BOSS_H = 9.0
 VESA_HOLE_D = 3.3
 VESA_HOLE_DEPTH = 11.0
 
-# Cable exits, in the right wall next to the terminal bank.
-CABLE_D = 8.0
-CABLE_Y = -22.0                 # level with where the wires leave a mated plug
-CABLE_Z = (-14.0, 0.0, 14.0)    # power / UART / I2C, spread over the bank
+# Cable exit. One slot through the REAR wall rather than holes in the side, so
+# the loom leaves pointing back and down -- straight at the arm and the table,
+# which is where it is going anyway. Out of the side it stuck into free space
+# beside the panel with nothing to follow, which is what snags.
+#
+# The slot lives in the corridor right of the VESA plate (which covers X -50..50)
+# and between the two M3 columns (X 64.6, Z +/-32.8), so it needs no thin walls.
+CABLE_X = 66.0
+CABLE_W = 11.0
+CABLE_Z = (-22.0, 8.0)          # slot runs between these two centres
 
 
 def box(x0, x1, y0, y1, z0, z1):
@@ -142,11 +148,12 @@ def build():
             shell = shell.cut(tube_y(x, z, VESA_HOLE_D,
                                      BACK_Y - 1, BACK_Y + VESA_HOLE_DEPTH))
 
-    # Cable exits for power / UART / I2C.
+    # Cable exit: a stadium slot, so there is no corner for a wire to sit on.
+    y0, y1 = BACK_Y - 1, CAVITY_BACK_Y + 1
     for z in CABLE_Z:
-        shell = shell.cut(Part.makeCylinder(
-            CABLE_D / 2.0, WALL + 2, App.Vector(ix1 - 1, CABLE_Y, z),
-            App.Vector(1, 0, 0)))
+        shell = shell.cut(tube_y(CABLE_X, z, CABLE_W, y0, y1))
+    shell = shell.cut(box(CABLE_X - CABLE_W / 2.0, CABLE_X + CABLE_W / 2.0,
+                          y0, y1, min(CABLE_Z), max(CABLE_Z)))
 
     # USB-C. One slot covering both ports: a plug has to reach 23mm inboard to
     # find the socket, so the opening is sized for the overmould, not the shell.

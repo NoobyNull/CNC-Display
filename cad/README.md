@@ -34,9 +34,12 @@ tops of the three Ø8 cable holes, which bridge fine.
 
 ## What is open, and why
 
-- **Right wall, 3 × Ø8** — power, UART and I2C, spread across the PH2.0 terminal
-  bank so the cable run from any of the six connectors is short. Sized for an
-  8 mm grommet if you want strain relief.
+- **Rear wall, one 11 × 30 slot** — power, UART and I2C leave through the back,
+  pointing down at the arm, which is where the loom is going anyway. It sits in
+  the corridor right of the VESA plate and between the two M3 columns, so
+  nothing around it is thin. From there the loom drops into the arm's tray.
+  (These used to be three holes in the *side* wall, which put the cables into
+  free space beside the panel with nothing to follow — that is what snags.)
 - **Left wall, slot** — both USB-C ports. One of them is the flashing port, so
   it is never allowed to be sealed in. A plug has to reach 23 mm inboard to find
   the socket, which is why the opening is sized for the overmould.
@@ -76,6 +79,26 @@ A printed sphere on a vertical neck has a horrible underside, so the neck blends
 into the ball on a 45° cone — the steepest overhang anywhere on these parts, and
 it needs no support. That cone consumes the ball surface nearest the neck, which
 is why the socket mouth is opened to 75°. Usable tilt is the difference.
+
+## Cable tray
+
+A Ø12 channel runs the length of the arm's outer face, with **two moulded
+bridges** spanning it — thread the loom under them and it is captive without a
+zip tie, and there is nothing sticking out to catch.
+
+It sits on the arm's neutral axis for the bending that matters. The panel hangs
+in the plane containing the arm and gravity, so the arm bends about the bolt
+axis and the stress varies across the width, not down the middle where the
+channel is. The tray stops at ±42 mm, well short of the sockets at ±55.
+
+Both halves get a tray, so the assembled arm has one on each side — use
+whichever faces away from the work.
+
+**Not done: routing through the balls.** It is possible — a Ø6 bore costs the
+neck only ~8% of its bending strength, because a tube is efficient — but a
+PH2.0 plug is 8 × 4.5 mm and will not pass it. You would be threading bare wire
+and crimping after assembly, and every adjustment would work the cable inside
+the joint. Say the word if you want it anyway.
 
 ## Clamp
 

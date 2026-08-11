@@ -52,6 +52,20 @@ M5_HEX_AF   = 8.4          # M5 nut across flats, +0.4 print clearance
 M5_HEX_D    = 4.5
 BOLT_Y      = 16.0
 
+# Cable tray down the outer face. It stops well short of the socket cavities,
+# and it sits on the arm's neutral axis for the bending that actually matters
+# (the panel hangs in the plane containing the arm and gravity, which bends the
+# arm about the bolt axis -- stress varies across the width, not the middle),
+# so it costs almost nothing structurally.
+#
+# Two bridges are left spanning it so the loom is captive without a zip tie:
+# thread it under them and it cannot flick out and catch on anything.
+TRAY_R      = 6.0
+TRAY_X      = 42.0
+BRIDGE_X    = 25.0
+BRIDGE_W    = 6.0
+BRIDGE_T    = 2.0
+
 # ------------------------------------------------------------------- table end
 BASE_L, BASE_W, BASE_T = 110.0, 80.0, 10.0
 BASE_BALL_H = 25.0         # neck length above the plate
@@ -130,6 +144,15 @@ def make_arm_half():
             # symmetric, so the same pocket serves either end of the screw.
             body = body.cut(hex_prism(M5_HEX_AF, M5_HEX_D + 1,
                                       App.Vector(cx, by, ARM_HALF_T - M5_HEX_D)))
+
+    body = body.cut(Part.makeCylinder(TRAY_R, 2 * TRAY_X,
+                                      App.Vector(-TRAY_X, 0, ARM_HALF_T),
+                                      App.Vector(1, 0, 0)))
+    for sx in (-1, 1):
+        body = body.fuse(Part.makeBox(
+            BRIDGE_W, 2 * TRAY_R, BRIDGE_T,
+            App.Vector(sx * BRIDGE_X - BRIDGE_W / 2.0, -TRAY_R,
+                       ARM_HALF_T - BRIDGE_T)))
     return body.removeSplitter()
 
 
