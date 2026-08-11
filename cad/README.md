@@ -91,6 +91,37 @@ underside so its top face stays flat against the table.
 - `BasePlate`, `VesaPlate` — plate down, ball up. No supports.
 - `ClampBar` — either way.
 
+---
+
+# Assembly — `assembly.py`
+
+Poses the whole stack — panel, back cover, VESA plate, arm, base, clamp bar and
+a slab of table — so the geometry can be checked before anything is printed.
+
+```python
+exec(open("cad/assembly.py").read())
+```
+
+Everything is posed in **panel coordinates**, the frame the vendor STEP already
+uses, because the panel is the one thing already correctly placed. The table
+comes out tilted in that frame; that is expected, and world "up" is
+`TABLE_NORMAL` in the script. Set `PANEL_STEP` to the vendor model to see the
+board inside; without it you get the printed parts alone.
+
+The pose is not decorative. Both balls are set to 30°, inside the measured ±40°,
+and the sitting angle falls out of that rather than being chosen:
+
+| | |
+|---|---|
+| Screen angle | 30° above horizontal |
+| Panel height | 100–200 mm above the table top |
+| Reach | 167 mm forward of the base plate's front edge |
+| Interference | zero, among all printed parts, the panel and the table |
+
+Change `JOINT_DEG` to see other poses. It is the angle at *each* ball, so the
+screen ends up at twice it above horizontal — 40° gives a near-vertical screen,
+20° gives a drafting-board angle.
+
 ## Caveats
 
 - **The SD card sits 22 mm down its opening.** The socket is at the PCB's top
@@ -110,5 +141,9 @@ underside so its top face stays flat against the table.
   Panel plus cover is ~450 g on a ~150 mm lever, about 5 MPa of bending in the
   neck — fine in PETG, fine in PLA, and the first thing to reprint in something
   tougher if it ever lets go.
+- **The panel hangs 167 mm forward of the base**, so the clamp carries a
+  tipping moment rather than just weight — about 0.7 N·m with the panel at 30°.
+  The M8 pair and 72 mm of plate bearing handle that, but do not go looking for
+  more reach without thinking about it.
 - **Nothing has been printed or test-fitted.** Everything above is measured off
   the model.
