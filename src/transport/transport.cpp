@@ -8,9 +8,9 @@
 #include <Arduino.h>
 #include <stdio.h>
 
-// The wired pins carry either the Airdale pendant at 1 Mbaud or an FTDI at
-// 115200 depending on which cable is plugged in, so the UART candidate is really
-// two candidates. Cycle rate every 5s while hunting.
+// The UART terminal carries either the Airdale pendant at 1 Mbaud or a bench
+// adapter at 115200 depending on which cable is plugged in, so the UART
+// candidate is really two candidates. Cycle rate every 5s while hunting.
 static const uint32_t UART_BAUDS[] = { 1000000, 115200 };
 static const int      N_UART_BAUDS = sizeof(UART_BAUDS) / sizeof(UART_BAUDS[0]);
 
@@ -20,9 +20,7 @@ static uint32_t    s_next_hunt = 0;
 static char        s_detail[64] = "no link";
 
 void transport_init() {
-    // In UPDATE mode the console owns these pins; bringing UART2 up on them
-    // would drive GPIO43 and silence the log we need for flashing.
-    if (settings_link_mode() == LINK_MODE_PENDANT) init_fnc_uart();
+    init_fnc_uart();
     if (settings_wifi_enabled()) wifilink_begin();
 }
 
@@ -68,7 +66,7 @@ void transport_poll() {
         return;
     }
 
-    if (settings_uart_enabled() && settings_link_mode() == LINK_MODE_PENDANT) {
+    if (settings_uart_enabled()) {
         s_active = TRANSPORT_UART;
         s_baud_idx = (s_baud_idx + 1) % N_UART_BAUDS;
         fnc_set_baud(UART_BAUDS[s_baud_idx]);
@@ -79,12 +77,8 @@ void transport_poll() {
     }
 
     s_active = TRANSPORT_NONE;
-    if (settings_link_mode() == LINK_MODE_UPDATE) {
-        snprintf(s_detail, sizeof(s_detail), "UPDATE mode - wired link off");
-    } else {
-        snprintf(s_detail, sizeof(s_detail), "%s",
-                 settings_wifi_enabled() ? wifilink_status() : "all transports off");
-    }
+    snprintf(s_detail, sizeof(s_detail), "%s",
+             settings_wifi_enabled() ? wifilink_status() : "all transports off");
 }
 
 // ---- the interface GrblParserC sees -----------------------------------------

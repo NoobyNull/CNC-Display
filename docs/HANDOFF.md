@@ -1,161 +1,119 @@
-# Handoff — CNC Console, 2026-08-08
+# Handoff — CNC Console, 2026-08-10
 
-State at the end of the first build session. Everything below is committed and
-pushed to `https://git.yax.family/matthew/CNC-Disply` (branch `main`).
+The firmware moved from the Elecrow CrowPanel Advance 7.0" to the **Waveshare
+ESP32-S3-Touch-LCD-7B**. The old board was abandoned because it could not be put
+into download mode: its CH340's TX line was dead and EN was shorted to IO0. None
+of that survives here — the 7B flashes over native USB.
 
----
-
-## One-line summary
-
-The firmware is written, builds clean and passes all its tests. **It has not been
-flashed since 20:00** because the board cannot be put into download mode — a
-wiring fault, not a software problem. Fix one solder joint and it flashes in
-15 seconds.
+Everything above the driver layer is unchanged. The port touched the panel, the
+touch reset path, the SD card, the console, and the layout constants.
 
 ---
 
-## Hardware, as established by measurement
+## Status
 
-Elecrow CrowPanel Advance 7.0", ESP32-S3-WROOM-1, 8 MB PSRAM, 800×480 RGB, GT911 touch.
+Builds clean (`23.8%` flash of a 6 MB app partition, `28.6%` RAM), 51/51 host
+tests pass. **Nothing has run on the new hardware** — it arrives 2026-08-11.
+Work through the acceptance checklist at the end of the plan document once it
+does; the one that matters most is still: press a jog key, slide your finger off
+without lifting, confirm the axis stops (`LV_EVENT_PRESS_LOST`).
+
+---
+
+## Hardware
+
+ESP32-S3-WROOM-1-**N16R8** (16 MB flash, 8 MB octal PSRAM), 1024×600 RGB565
+panel behind an ST7262, GT911 touch, CH32V003 I2C io-extender, CH343P USB-UART,
+native USB, RS485 (SP3485) and CAN (TJA1051).
 
 ### GPIO map
 
 | Pins | Use |
 |---|---|
-| 0,1,2,3,4,5,6,7,8,9,14,15,16,21,39,40,41,45,46,47,48 | RGB panel + backlight |
-| 19 (SDA), 20 (SCL) | I2C: GT911 `0x5D`, PCA9557 `0x18`, **ICM-20948 `0x68/0x69`** |
-| 10, 11, 12, 13 | microSD (CS/MOSI/CLK/MISO) — panel's own card |
-| 38 | power rail / spare |
-| **43, 44** | UART0 pads — **console OR FluidNC link**, see link mode |
+| 0,1,2,3,5,7,10,14,17,18,21,38,39,40,41,42,45,46,47,48 | RGB panel |
+| 4 | GT911 TP_IRQ — also the address strap, see below |
+| 8 (SDA), 9 (SCL) | I2C: GT911 `0x5D`, io-extender `0x24` |
+| 11 (CMD), 12 (CLK), 13 (D0) | TF card, **SDMMC 1-bit** |
+| 15 (TX), 16 (RX) | RS485 terminal, unused so far |
+| 19, 20 | native USB **or** CAN — the io-extender picks |
+| **43, 44** | UART0 pads → FluidNC link (UART2 peripheral) |
 | 26–37 | octal PSRAM + flash, unusable |
-| 17, 18, 42 | free, but **not broken out on this board** |
+| 6 | genuinely free and unconnected. The only one. |
 
-Only **19, 20, 38** and **43/44** are physically accessible on connectors. That
-constraint drove most of the design decisions.
+### io-extender (0x24)
 
-### Current wiring
+Not a plain expander — a CH32V003 with a register map. `src/hw/io_expander.cpp`
+reimplements Waveshare's driver because theirs seeds the output shadow with
+`0xFF`, and bit 5 is `CAN_SEL`.
 
-FTDI FT232R (`usb-FTDI_FT232R_USB_UART_BG012EQJ`) soldered to the module:
-
-| FTDI | Module pin | Status |
-|---|---|---|
-| RX | 37 (TXD0 / GPIO43) | ✅ working |
-| TX | 36 (RXD0 / GPIO44) | ✅ working (intermittent earlier — watch it) |
-| GND | 1 or 40 | ✅ |
-| RTS | 3 (EN) | ✅ resets the board |
-| DTR | 27 (IO0) | ❌ **THE BLOCKER — see below** |
-
----
-
-## THE BLOCKER
-
-`pio run -t upload` fails at "Failed to connect … No serial data received".
-
-Reset works (RTS pulses EN, board reboots), but the chip **never enters download
-mode** — it reports `boot:0x8 (SPI_FAST_FLASH_BOOT)` every time instead of
-`boot:0x0 (DOWNLOAD)`.
-
-**Suspected cause: EN and IO0 are shorted together.** The user reported "en is
-connected to io0". If those two nets are common, download mode is physically
-impossible: the ROM samples IO0 at the moment EN rises, and if they are tied,
-IO0 rises with EN and always reads high.
-
-**To fix:** with the FTDI unplugged, check continuity between module pin 3 (EN)
-and pin 27 (IO0). It must read **open**. They need separate wires:
-
-```
-FTDI RTS ──→ pin 3   (EN)      reset only
-FTDI DTR ──→ pin 27  (IO0)     boot select only, no link to EN
-```
-
-Also confirm pin 27 really is IO0 — it is the bottom-right corner pin, the one
-the numbering wraps to after the bottom row ends at 26. One position up is IO35
-(pin 28), which does nothing.
-
-**Verify the fix** — this should print `DOWNLOAD`:
-
-```bash
-python3 - <<'PY'
-import serial, time
-P='/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG012EQJ-if00-port0'
-s = serial.Serial(P, 115200, timeout=0.5)
-s.setDTR(False); s.setRTS(False); time.sleep(0.2)
-s.setDTR(True)                      # IO0 low
-s.setRTS(True); time.sleep(0.12)    # EN low
-s.setRTS(False); time.sleep(0.25)   # release EN, boots with IO0 low
-s.setDTR(False)
-time.sleep(1.0)
-d = s.read(4000)
-print("DOWNLOAD" if b'DOWNLOAD' in d else "still normal boot")
-s.close()
-PY
-```
-
-**Then flash:**
-
-```bash
-pio run -e crowpanel -t upload \
-  --upload-port /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG012EQJ-if00-port0
-```
-
-### The CH340 (onboard USB-C) — do not use for data
-
-Its **TX line is dead**. Proven twice by putting the chip in ROM download mode
-and sending a hand-built SLIP sync packet: CH340 got 0 bytes back, the FTDI on
-the same pin got 1344. Its DTR/RTS still work, so it can reset.
-
-**Do not connect it and the FTDI at the same time.** Both TX lines drive GPIO44;
-two push-pull outputs on one wire is a bus fight, and the CH340's dead TX may be
-stuck driving. Flashing was unreliable all evening until the CH340 was unplugged.
-
-`tools/flash.sh` automates the two-adapter workaround (CH340 reset + FTDI data)
-and can be deleted once DTR→IO0 works.
+| Line | Function |
+|---|---|
+| EXIO1 | GT911 reset |
+| EXIO2 | backlight enable (DISP) |
+| EXIO3 | panel reset |
+| EXIO4 | TF card DAT3 — **must idle high** for SDMMC mode |
+| EXIO5 | `0` = USB-C is native USB, `1` = it becomes the CAN PHY |
+| EXIO6 | panel VCOM rail |
+| PWM reg `0x05` | backlight brightness, **inverted**: 0 is brightest |
 
 ---
 
-## What is on the board right now
+## Flashing
 
-The **20:00 build**, which is older than HEAD. It has:
+Plug into the Type-C marked **USB** (not the one marked UART). That is the
+native USB-Serial-JTAG peripheral on GPIO 19/20, and it is both the flashing
+port and the debug console.
 
-- FluidNC UART on GPIO 11/13 (since moved to 43/44)
-- Console on 43/44 at 115200 — prints `[link] state=…` every second and a
-  `[scan]` block at boot
-- No transports UI, no SD, no settings editor, no IMU
+```bash
+pio run -e ws7b -t upload
+```
 
-If you see `[scan] GPIO 10 edges=0` in the log, that is the old firmware.
+If the port does not enumerate, hold BOOT while plugging in, then release.
 
-## What is committed but NOT flashed
+The board switch labelled UART routes GPIO 43/44 to *either* the CH343 or the
+UART terminal. **Set it to the terminal and leave it.** The FluidNC link lives
+there permanently and never has to be given up to update the board — which is
+what the old UPDATE/PENDANT link mode existed to work around. That mode, its
+NVS key and its Setup-page buttons are gone.
 
-Six features, 51/51 host tests passing, 47.4% flash, 28.6% RAM:
+---
 
-1. **Pendant on GPIO 43/44** + **UPDATE / PENDANT link mode** (Setup page).
-   UPDATE is the default: console owns 43/44, wired transport off, board always
-   flashable. PENDANT hands those pins to FluidNC and parks the console on
-   GPIO 42 (unconnected).
-2. **Runtime transport selection** — Wired UART and WiFi toggles in Setup, both
-   NVS-backed. WiFi is Telnet discovered by mDNS (`_telnet._tcp`), so no IP is
-   needed. Hunts 1 M ↔ 115200 on the wire, falls back to WiFi.
-3. **Panel SD as G-code source** — browse the panel's card, push files to the
-   controller with `$XR`, run with `$SD/Run=`. Chosen over line-by-line
-   streaming so the pendant can be unplugged mid-cut without stopping the job.
-4. **FluidNC settings editor** on the Diag page — `$S` / `$SC`, edit a value,
-   writes `$name=value`.
-5. **ICM-20948 vibration guard** — monitor / soft / hard modes, defaults to
-   monitor.
-6. **Baud hunting** in the link watchdog.
+## What changed in the port
+
+- **`platformio.ini`** — 16 MB flash, `partitions_16mb.csv`, `ARDUINO_USB_MODE=1`
+  + `ARDUINO_USB_CDC_ON_BOOT=1`. Still the pioarduino platform: `espressif32@6.9.0`
+  cannot add octal PSRAM to the heap, and the N16R8 has the same OPI PSRAM the
+  CrowPanel did.
+- **`src/hw/io_expander.{h,cpp}`** — new, replaces `lib/PCA9557` (deleted).
+- **`src/hw/display_hw.cpp`** — new pin map, 1024×600, Waveshare's timings.
+  Backlight is no longer a LovyanGFX `Light_PWM`; it is a register write.
+- **`src/hw/touch.cpp`** — `gt911_reset()` added. The GT911 latches its I2C
+  address from INT at the moment RST is released, and RST is on the extender
+  while INT is a GPIO, so both have to be driven by hand and in order.
+- **`src/hw/sdcard.cpp`** — `SD` over SPI became `SD_MMC` 1-bit. There is no CS
+  on a GPIO to give the SPI library, and the slot is wired for SDMMC anyway.
+- **`src/ui/theme.h`** — `SCREEN_W/H` now come from `display_hw.h` instead of
+  being a second copy. `CONTENT_H` grew from 256 px to 376.
+- **`src/ui/view_expanded.cpp`** — canvas and log-line count derive from the
+  screen size rather than being 800×400 and 13.
 
 ---
 
 ## Things a future session should not have to rediscover
 
-- **Toolchain**: must be the pioarduino platform, not `espressif32@6.9.0`.
-  The older one cannot add this board's OPI PSRAM to the heap — you get
-  "External RAM could not be added to heap!" and an abort loop at `cpu_start`,
-  with only 434 KB of PSRAM visible. FluidDial pins 6.9.0 but targets boards
-  without OPI PSRAM.
-- **`Wire.begin(19, 20)` must run before `display_init()`** — it drives the
-  PCA9557 immediately, and without the bus up every I2C call fails with
-  "NULL TX buffer pointer".
+- **The first `ioexp_write()` publishes all eight bits.** Seeding the shadow
+  byte with `0xFF` sends `CAN_SEL` high, which hands the USB-C to the CAN
+  transceiver and disconnects the port you flash and debug through.
+- **Panel timings are Waveshare's, not a generic ST7262 table.** A 162-clock
+  hsync pulse looks wrong and is correct for this panel.
+- **PCLK is the tuning knob.** 30 MHz × 2 bytes is 60 MB/s out of PSRAM while
+  LVGL writes to it. Tearing, shearing or a rolling band → drop
+  `LCD_PCLK_HZ` in `display_hw.cpp` to 21 MHz first.
+- **`Wire.begin(8, 9)` must run before `ioexp_init()`**, which must run before
+  `display_init()` — the extender gates the VCOM rail and the backlight.
+- **No IMU on this board.** The CrowPanel had an ICM-20948; the 7B does not.
+  `imu_begin()` reports absent and the vibration guard stays inert until one is
+  plugged into the I2C terminal. Intended, not a bug.
 - **`touch.cpp` is adapted, not copied.** The hotkey project's version delayed
   LVGL's press report by 120 ms to tell taps from swipes and suppressed input
   after 30 px of movement. A jog key must register on contact.
@@ -190,23 +148,26 @@ least half the peak threshold — an impact is fast **and** large.
 | Spec | `docs/superpowers/specs/2026-08-08-cnc-console-design.md` |
 | Plan + execution notes | `docs/superpowers/plans/2026-08-08-cnc-console.md` |
 | Layout study | https://claude.ai/code/artifact/29f1b135-2fd7-40dc-b26b-bc20692e0f22 |
-| Build | `pio run -e crowpanel` |
+| Board wiki | https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-7B |
+| Vendor demos | https://github.com/waveshareteam/ESP32-S3-Touch-LCD-7B |
+| Build | `pio run -e ws7b` |
 | Tests | `pio test -e native` (51 cases) |
 | Repo | `https://git.yax.family/matthew/CNC-Disply` |
 
 ### Topology
 
 ```
-CrowPanel display ──UART 1M──► Airdale (passthrough) ──► Corgi (FluidNC)
+Waveshare 7B ──UART 1M──► Airdale (passthrough) ──► Corgi (FluidNC)
 ```
 
 The Airdale is a passthrough, not the controller. FluidNC runs on the Corgi, and
 its SD card is unreachable inside a sealed box — which is why the panel's own
 card is the G-code source.
 
-### Not yet verified on hardware
+### Still open
 
-Nothing past the 20:00 build has run on the panel. Once flashed, work through
-the acceptance checklist at the end of the plan document. The one that matters
-most: **press a jog key, slide your finger off without lifting, confirm the axis
-stops.** That is the `LV_EVENT_PRESS_LOST` path.
+- **Layout has 47% more content height** (376 px vs 256) and 224 px more width.
+  Nothing was redesigned to use it; the grid just reflowed. Worth a look once
+  you can see it.
+- **RS485 on GPIO 15/16 is unused.** It is the better long-cable link to the
+  machine if the Corgi end ever gets a transceiver.

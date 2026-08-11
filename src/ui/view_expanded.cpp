@@ -10,13 +10,13 @@
 #include <stdio.h>
 #include <string.h>
 
-// The canvas is 800x400: full width, everything above the safety bar. 90% of the
-// panel height would be 432px, which would leave 48px for hold/resume/reset —
-// the controls you hit in a hurry and possibly without looking. They keep their
-// full 80px and the canvas takes the rest.
-#define CANVAS_W  800
-#define CANVAS_H  400
-#define LOG_LINES 13
+// Full width, everything above the safety bar. Hold/resume/reset are the
+// controls you hit in a hurry and possibly without looking, so they keep their
+// full height and the canvas takes whatever is left rather than a percentage.
+static const lv_coord_t CANVAS_W  = SCREEN_W;
+static const lv_coord_t CANVAS_H  = SCREEN_H - SAFETY_H;
+static const lv_coord_t LOG_ROW_H = 24;
+static const int        LOG_LINES = (CANVAS_H - U * 4) / LOG_ROW_H;
 
 static lv_obj_t* s_root;
 static lv_obj_t* s_tp_page;
@@ -116,7 +116,7 @@ void expanded_build() {
     w_flatten(s_tp_page);
     lv_obj_set_size(s_tp_page, CANVAS_W, CANVAS_H);
 
-    // 800*400*2 bytes is 640KB — far past internal RAM, so PSRAM it is.
+    // 1024*520*2 bytes is just over 1MB — far past internal RAM, so PSRAM it is.
     s_cbuf = (lv_color_t*)ps_malloc(LV_CANVAS_BUF_SIZE_TRUE_COLOR(CANVAS_W, CANVAS_H));
     s_canvas = lv_canvas_create(s_tp_page);
     if (s_cbuf) {
@@ -169,12 +169,12 @@ void expanded_build() {
 
     lv_obj_t* logbox = lv_obj_create(s_con_page);
     w_flatten(logbox);
-    lv_obj_set_size(logbox, CANVAS_W, LOG_LINES * 24);
+    lv_obj_set_size(logbox, CANVAS_W, LOG_LINES * LOG_ROW_H);
     lv_obj_set_style_pad_left(logbox, U + 4, 0);
     lv_obj_set_flex_flow(logbox, LV_FLEX_FLOW_COLUMN);
     for (int i = 0; i < LOG_LINES; i++) {
         s_log_lbl[i] = w_label(logbox, "", &lv_font_montserrat_12, C_DIM);
-        lv_obj_set_height(s_log_lbl[i], 24);
+        lv_obj_set_height(s_log_lbl[i], LOG_ROW_H);
     }
 }
 

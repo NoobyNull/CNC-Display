@@ -2,8 +2,12 @@
 #include <cstdint>
 #include <lvgl.h>
 
+// TP_IRQ. The only touch signal on a real GPIO; RST is on the io-extender.
+#define GT911_INT_PIN 4
+
 void touch_init();       // Create I2C mutex
-void gt911_discover();   // Discover GT911 address -- call after display_init()
+void gt911_reset();      // Pulse RST with INT held low -- call before discover
+void gt911_discover();   // Discover GT911 address -- call after gt911_reset()
 void touch_poll();       // Poll GT911 with mutex protection -- call from loop() at 20Hz
 void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);  // LVGL callback
 

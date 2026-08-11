@@ -1,4 +1,5 @@
 #include "touch.h"
+#include "io_expander.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -14,7 +15,7 @@
 
 // ============================================================
 // I2C mutex — protects all Wire operations (GT911 shares the bus
-// with the PCA9557 on SDA=19 / SCL=20)
+// with the io-extender on SDA=8 / SCL=9)
 // ============================================================
 static SemaphoreHandle_t i2c_mutex = NULL;
 
@@ -44,8 +45,23 @@ void touch_init() {
     Serial.println("I2C mutex created");
 }
 
-// Probe 0x5D and 0x14. Call AFTER display_init(), which resets the GT911
-// through the PCA9557.
+// The GT911 latches its I2C address from the INT pin at the moment reset is
+// released: INT low picks 0x5D, INT high picks 0x14. RST hangs off the
+// io-extender, INT is a real GPIO, so both have to be driven by hand. Must run
+// before gt911_discover() and before anything else on the bus expects an
+// answer from the touch controller.
+void gt911_reset() {
+    pinMode(GT911_INT_PIN, OUTPUT);
+    digitalWrite(GT911_INT_PIN, LOW);
+    ioexp_write(EXIO_TP_RST, false);
+    delay(100);
+    digitalWrite(GT911_INT_PIN, LOW);       // hold it through the release edge
+    ioexp_write(EXIO_TP_RST, true);
+    delay(200);                             // datasheet wants >50ms before I2C
+    pinMode(GT911_INT_PIN, INPUT);          // let the controller drive it again
+}
+
+// Probe 0x5D and 0x14. Call AFTER gt911_reset().
 void gt911_discover() {
     uint8_t addrs[] = { 0x5D, 0x14 };
     for (int attempt = 0; attempt < 10; attempt++) {

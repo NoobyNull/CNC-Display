@@ -1,18 +1,21 @@
 #pragma once
 #include <stdint.h>
 
-// FluidNC link: the pendant cable from the Airdale plugs into the module's
-// TXD0/RXD0 pads — pin 37 (GPIO43) and pin 36 (GPIO44). Same pins the FTDI uses
-// for programming; the two are never connected at once.
+// FluidNC link: the pendant cable from the Airdale plugs into the board's UART
+// terminal, the PH2.0 header next to the USB-UART Type-C.
 //
-//   module pin 37 = GPIO 43 = TX -> Airdale pendant RX
-//   module pin 36 = GPIO 44 = RX <- Airdale pendant TX
+//   GPIO 43 = TX -> Airdale pendant RX
+//   GPIO 44 = RX <- Airdale pendant TX
 //
-// These are UART0's default pins, which is why the debug console is moved off
-// them in main.cpp — 115200-baud log text on a 1 Mbaud link would be garbage in
-// both directions. We drive them from the UART2 peripheral instead; the GPIO
-// matrix does not care which peripheral owns which pin, and taking UART0 out of
-// the picture entirely avoids a baud-rate fight over the same hardware.
+// An onboard analog mux gives those two pins to *either* the CH343 USB-UART or
+// the terminal, never both — the board switch labelled UART picks one. Set it
+// to the terminal and leave it there: flashing and the console go over the
+// native USB Type-C, which does not touch these pins.
+//
+// These are UART0's default pins. We drive them from the UART2 peripheral
+// instead; the GPIO matrix does not care which peripheral owns which pin, and
+// taking UART0 out of the picture avoids a baud-rate fight over the same
+// hardware if anything ever re-enables a console there.
 #define FNC_UART_NUM 2
 #define FNC_TX_PIN   43
 #define FNC_RX_PIN   44

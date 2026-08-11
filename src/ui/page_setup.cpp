@@ -20,7 +20,6 @@ static lv_obj_t* s_pass_ta;
 static lv_obj_t* s_kb;
 static lv_obj_t* s_vib_btn[3];
 static lv_obj_t* s_vib_lbl;
-static lv_obj_t* s_mode_btn[2];
 
 static void bright_cb(lv_event_t* e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
@@ -63,17 +62,6 @@ static void kb_done_cb(lv_event_t* e) {
         lv_keyboard_set_textarea(s_kb, nullptr);
         transport_settings_changed();   // reconnect with the new credentials
     }
-}
-
-// Switching this repoints GPIO 43/44 between the console and the FluidNC link,
-// which cannot be done safely on a live UART — so it takes effect on restart.
-static void link_mode_cb(lv_event_t* e) {
-    uint8_t m = (uint8_t)(intptr_t)lv_event_get_user_data(e);
-    settings_set_link_mode(m);
-    for (int i = 0; i < 2; i++) {
-        lv_obj_set_style_bg_color(s_mode_btn[i], i == m ? C_ACCENT : C_RAISE, 0);
-    }
-    lv_label_set_text(s_status_lbl, "restart to apply");
 }
 
 static void vib_mode_cb(lv_event_t* e) {
@@ -125,26 +113,7 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(left, U, 0);
 
-    // Which job GPIO 43/44 are doing. Above the transport toggles because it
-    // decides whether the wired transport is even possible.
-    lv_obj_t* mrow = lv_obj_create(left);
-    w_flatten(mrow);
-    lv_obj_set_size(mrow, LV_PCT(100), U * 6);
-    lv_obj_set_flex_flow(mrow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(mrow, U, 0);
-    static const char* LM[2] = { "UPDATE", "PENDANT" };
-    static const char* LS[2] = { "console on 43/44", "FluidNC on 43/44" };
-    uint8_t lcur = settings_link_mode();
-    for (int i = 0; i < 2; i++) {
-        s_mode_btn[i] = w_button(mrow, LM[i], LS[i],
-                                 i == lcur ? C_ACCENT : C_RAISE,
-                                 i == lcur ? C_BG : C_TEXT,
-                                 link_mode_cb, (void*)(intptr_t)i);
-        lv_obj_set_flex_grow(s_mode_btn[i], 1);
-        lv_obj_set_height(s_mode_btn[i], LV_PCT(100));
-    }
-
-    toggle_row(left, "Wired UART", "GPIO 43/44, auto 1M or 115K",
+    toggle_row(left, "Wired UART", "UART terminal, auto 1M or 115K",
                settings_uart_enabled(), uart_sw_cb, &s_uart_sw);
     toggle_row(left, "WiFi", "Telnet, found via mDNS",
                settings_wifi_enabled(), wifi_sw_cb, &s_wifi_sw);

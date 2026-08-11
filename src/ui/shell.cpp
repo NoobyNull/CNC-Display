@@ -327,8 +327,8 @@ void shell_set_expanded(bool on) {
         lv_obj_add_flag(s_content, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_flip_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_close_btn, LV_OBJ_FLAG_HIDDEN);
-        // The safety bar is never covered: 90% of 480 would leave 48px for the
-        // controls you hit in a hurry. They keep their full 80px.
+        // The safety bar is never covered: the controls you hit in a hurry keep
+        // their full height and the expanded view takes what is left.
         lv_obj_set_parent(s_safety, s_scr);
         lv_obj_set_pos(s_safety, 0, SCREEN_H - SAFETY_H);
         lv_obj_set_size(s_safety, SCREEN_W, SAFETY_H);

@@ -21,15 +21,6 @@ const char* settings_fnc_host();
 uint16_t    settings_fnc_port();
 void        settings_set_fnc_host(const char* host, uint16_t port);
 
-// GPIO 43/44 can be the programming/debug console OR the FluidNC link, never
-// both — one is 115200 log text, the other a 1 Mbaud machine link.
-//   0 = UPDATE  : console owns 43/44, UART transport disabled. Always flashable.
-//   1 = PENDANT : FluidNC owns 43/44, console parks on the unconnected GPIO 42.
-#define LINK_MODE_UPDATE  0
-#define LINK_MODE_PENDANT 1
-uint8_t settings_link_mode();
-void    settings_set_link_mode(uint8_t m);
-
 // 0 = monitor, 1 = soft (feed hold), 2 = hard (feed hold + soft reset on impact)
 uint8_t settings_vib_mode();
 void    settings_set_vib_mode(uint8_t m);

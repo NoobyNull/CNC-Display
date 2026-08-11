@@ -1,5 +1,6 @@
 #pragma once
 #include <lvgl.h>
+#include "hw/display_hw.h"
 
 // Two constants are hand-set because physics sets them: the grid quantum, and
 // the size of a fingertip. Everything else derives from them or uses
@@ -8,14 +9,15 @@ static const lv_coord_t U          = 8;        // grid quantum
 static const lv_coord_t TOUCH_HOLD = U * 10;   // 80px: keys you hold contact on
 static const lv_coord_t TOUCH_TAP  = U * 7;    // 56px floor: discrete taps
 
-static const lv_coord_t SCREEN_W      = 800;
-static const lv_coord_t SCREEN_H      = 480;
+// The panel is the one input the layout cannot derive: it comes from the driver.
+static const lv_coord_t SCREEN_W      = SCREEN_WIDTH;
+static const lv_coord_t SCREEN_H      = SCREEN_HEIGHT;
 static const lv_coord_t RAIL_W        = U * 12;   // 96
 static const lv_coord_t RAIL_SCROLL_H = U * 5;    // 40
 static const lv_coord_t DRO_H         = U * 18;   // 144
 static const lv_coord_t SAFETY_H      = U * 10;   // 80
-static const lv_coord_t CONTENT_W     = SCREEN_W - RAIL_W;              // 704
-static const lv_coord_t CONTENT_H     = SCREEN_H - DRO_H - SAFETY_H;    // 256
+static const lv_coord_t CONTENT_W     = SCREEN_W - RAIL_W;              // 928
+static const lv_coord_t CONTENT_H     = SCREEN_H - DRO_H - SAFETY_H;    // 376
 
 // The panel is deliberately single-theme: an emissive display in a workshop is
 // dark because glare and grime make it so, not because a viewer chose it.

@@ -1,14 +1,13 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// Debug console TX parks on GPIO 42, which is free and not broken out on this
-// board. Deliberate: 43/44 now carry the FluidNC link and 10-13 are the SD card,
-// so there is nowhere safe left. Printing 115200 log text onto the 1 Mbaud link
-// would inject garbage into the controller. Diagnostics live on-screen instead —
-// the Setup page shows link status and the expanded view shows wire traffic.
-#define DBG_TX_PIN 42
-#define DBG_RX_PIN -1
+// The console is USB CDC on the native USB-Serial-JTAG peripheral (GPIO 19/20,
+// the Type-C marked USB), set up by ARDUINO_USB_CDC_ON_BOOT in platformio.ini.
+// It costs no pins the panel or the link wants, and it is also the flashing
+// port, so the FluidNC link on 43/44 never has to be given up to update the
+// board. That is what the old UPDATE/PENDANT mode existed to work around.
 #include "hw/display_hw.h"
+#include "hw/io_expander.h"
 #include "hw/touch.h"
 #include "hw/sdcard.h"
 #include "hw/imu.h"
@@ -36,29 +35,24 @@ static void ui_tick_cb(lv_timer_t*) { shell_tick(); }
 static void touch_tick_cb(lv_timer_t*) { touch_poll(); }
 
 void setup() {
-    // The debug console cannot live on its default pins any more: GPIO 43/44
-    // now carry the 1 Mbaud FluidNC link to the pendant connector. Park it on
-    // the unused microSD pins instead — module pin 19 (GPIO11, TX) and pin 21
-    // (GPIO13, RX) — so diagnostics stay available without touching the link.
-    // Nothing needs to be connected there for the firmware to run.
-    // Settings first: they decide which pins the console gets. UPDATE mode puts
-    // it on 43/44 so the board can always be flashed and watched; PENDANT mode
-    // hands those to the FluidNC link and parks the console on GPIO 42.
     settings_load();
-    bool update_mode = settings_link_mode() == LINK_MODE_UPDATE;
-    if (update_mode) Serial.begin(115200);                                   // 43/44
-    else             Serial.begin(115200, SERIAL_8N1, DBG_RX_PIN, DBG_TX_PIN);
+    Serial.begin(115200);
+    // A host that stops draining the CDC must not stall the UI. Without this,
+    // every Serial.printf blocks up to 100ms waiting for the ring buffer.
+    Serial.setTxTimeoutMs(0);
     Serial.println("\n=== CNC Console ===");
-    Serial.printf("[mode] %s\n", update_mode ? "UPDATE (console on 43/44)"
-                                              : "PENDANT (FluidNC on 43/44)");
 
-    // The GT911 and the PCA9557 share one bus. Nothing below may touch Wire
-    // before this line — display_init() drives the PCA9557 immediately.
-    Wire.begin(19, 20);    // SDA=19, SCL=20
+    // The GT911 and the io-extender share one bus, and the extender gates the
+    // panel rails and the touch reset. Nothing below may touch Wire before
+    // this line.
+    Wire.begin(8, 9);          // SDA=8, SCL=9
+    Wire.setClock(400000);
 
     touch_init();          // create the I2C mutex before anything uses the bus
-    display_init();        // PCA9557 reset + RGB panel
-    gt911_discover();      // must follow display_init(): it resets the GT911
+    ioexp_init();          // panel rails, touch reset line, SD DAT3, USB/CAN mux
+    gt911_reset();         // address strap is latched here, before any probing
+    display_init();        // LCD rails + RGB panel
+    gt911_discover();
     lvgl_init();
     set_backlight(settings_brightness());
 
