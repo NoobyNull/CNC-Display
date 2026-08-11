@@ -29,3 +29,4 @@ cad/*.FCStd
 cad/*.FCStd1
 cad/*.stl
 cad/*.FCBak
+cad/print/

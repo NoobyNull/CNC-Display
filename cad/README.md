@@ -119,6 +119,45 @@ hold it.
 
 ---
 
+# Print files — `export_print.py`
+
+```python
+exec(open("cad/export_print.py").read())
+```
+
+Writes `cad/print/` — four STLs plus `cnc_console_all.3mf` holding the lot.
+Every part comes out **already in its print orientation and seated on Z=0**, so
+they drop onto the Bambu plate with no rotating.
+
+| File | Qty | Footprint | Height |
+|---|---|---|---|
+| `back_cover_x1.stl` | 1 | 165.4 × 102.2 | 23.3 |
+| `arm_half_x2.stl` | **2** | 122.7 × 44.0 | 13.5 |
+| `base_plate_x1.stl` | 1 | 110.0 × 80.0 | 45.0 |
+| `vesa_plate_x1.stl` | 1 | 100.0 × 100.0 | 40.0 |
+
+All four verified solid, manifold and free of self-intersections after meshing.
+
+Meshed at 0.04 mm linear / 0.2° angular. That tolerance is not cosmetic: the
+ball and socket are a running fit on 0.25 mm of clearance, and a coarse
+tessellation would eat most of it.
+
+**Seating is done on the mesh, never on the shape.** `Shape.BoundBox` is the
+loose NURBS-pole box on anything curved — on the arm half it reads ~9 mm below
+the real underside, and trusting it floats the part that far off the bed.
+
+## Suggested settings
+
+- **No supports on anything.** Every part is oriented so it does not need them.
+- PETG for `ArmHalf`, `BasePlate` and `VesaPlate` — they carry the load, and the
+  neck prints across the layers. PLA is fine for the cover.
+- 4 walls / 30% infill on the load path; 3 walls / 15% is plenty for the cover.
+- The arm half is the one to print first. It carries every assumption that
+  cannot be checked without hardware: the 0.25 mm ball clearance, the 2 mm
+  squeeze gap, and whether the bowl prints clean.
+
+---
+
 # Assembly — `assembly.py`
 
 Poses the whole stack — panel, back cover, VESA plate, arm, base and a slab of
