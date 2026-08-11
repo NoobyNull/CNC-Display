@@ -43,6 +43,54 @@ tops of the three Ø8 cable holes, which bridge fine.
 - **Top wall** — microSD. See the caveat below.
 - **Bottom wall, slot** — BOOT, RESET and the UART-select switch.
 
+---
+
+# Table mount — `arm_mount.py`
+
+Ball-and-socket arm, VESA 75 at the panel end, clamps a table edge without
+drilling. Four printed parts, one printed twice.
+
+| Part | Qty | Notes |
+|---|---|---|
+| `BasePlate` | 1 | 110 × 80 × 10 with a Ø20 ball on a 25 mm neck |
+| `ClampBar` | 1 | goes under the table top, two captive M8 nuts |
+| `ArmHalf` | **2** | identical; together they make a double socket arm |
+| `VesaPlate` | 1 | VESA 75, counterbored for M4 caps, Ø20 ball |
+
+Hardware: 2 × M8 (table thickness + 35 mm) + 2 M8 nuts · 4 × M5×30 + 4 M5 nyloc
+· 4 × M4×12 into the back cover.
+
+## Range
+
+**±40° at each ball**, measured by sweeping the neck against the assembled
+socket in 5° steps until it interferes — not calculated and hoped for. Plus
+unlimited roll about each ball axis, so the panel swings freely around the base
+and can be rolled to portrait.
+
+The socket mouth is 19.80 mm across against a 20.00 mm ball, so the ball is
+captive before the bolts are even touched.
+
+## Why the angles are what they are
+
+A printed sphere on a vertical neck has a horrible underside, so the neck blends
+into the ball on a 45° cone — the steepest overhang anywhere on these parts, and
+it needs no support. That cone consumes the ball surface nearest the neck, which
+is why the socket mouth is opened to 75°. Usable tilt is the difference.
+
+## Clamp
+
+The bolts drop **past** the table edge, not through the table: the plate lands
+72 mm of bearing on the top, the bar reaches 38 mm back underneath, and
+tightening pinches the edge between them. The bar's nuts are recessed into its
+underside so its top face stays flat against the table.
+
+## Print
+
+- `ArmHalf` — **socket face up**. The cavities then open upward and print as
+  bowls with no overhang at all.
+- `BasePlate`, `VesaPlate` — plate down, ball up. No supports.
+- `ClampBar` — either way.
+
 ## Caveats
 
 - **The SD card sits 22 mm down its opening.** The socket is at the PCB's top
@@ -57,3 +105,10 @@ tops of the three Ø8 cable holes, which bridge fine.
   in the bottom and top walls are the cheap fix.
 - **The 9DOF sensor is assumed to be off-board**, on the machine, wired back
   through one of the cable holes. There is no pocket for it in here.
+- **The neck is the weak point of the arm**, and it prints across the layers,
+  which is the direction printed plastic is worst in. It is Ø11 for that reason.
+  Panel plus cover is ~450 g on a ~150 mm lever, about 5 MPa of bending in the
+  neck — fine in PETG, fine in PLA, and the first thing to reprint in something
+  tougher if it ever lets go.
+- **Nothing has been printed or test-fitted.** Everything above is measured off
+  the model.
