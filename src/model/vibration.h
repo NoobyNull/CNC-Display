@@ -17,10 +17,11 @@ enum vib_mode_t {
 };
 
 struct vib_result_t {
-    float rms;          // g, RMS deviation from baseline over the window
-    float peak;         // g, max absolute deviation, decayed
-    float jerk;         // g/s, rate of change of acceleration magnitude
-    float smoothed;     // EMA of rms
+    float rms;            // g, RMS deviation from baseline over the window
+    float peak;           // g, max absolute deviation, decayed
+    float jerk;           // g/s, rate of change of acceleration magnitude
+    float smoothed_rms;   // EMA of rms   (CNC-TW EMA_ALPHA_RMS  = 0.15)
+    float smoothed_peak;  // EMA of peak  (CNC-TW EMA_ALPHA_PEAK = 0.10)
     vib_level_t level;
 };
 
@@ -31,6 +32,20 @@ void vib_feed(float accel_magnitude_g, uint32_t t_us);
 
 const vib_result_t* vib_result();
 size_t vib_samples();          // samples seen since reset, for warm-up display
+
+// --- jerk histogram -----------------------------------------------------------
+// Every sample fed in is binned by jerk, so the display can show the shape of
+// what the machine is actually doing rather than one flickering instantaneous
+// number. Bins are sized off the e-stop jerk threshold rather than a fixed g/s
+// span, so the chart stays meaningful when the threshold is retuned and the
+// threshold always lands on the boundary of bin VIB_HIST_THRESH_BIN.
+#define VIB_HIST_BINS        12
+#define VIB_HIST_THRESH_BIN  4     // bin index where jerk == the e-stop threshold
+
+const uint32_t* vib_hist();        // VIB_HIST_BINS counts, [0] is the quietest
+uint32_t        vib_hist_max();    // tallest bin, for scaling the chart
+float           vib_hist_bin_width();   // g/s covered by each bin
+void            vib_hist_reset();  // counts only; leaves detection state alone
 
 void  vib_set_thresholds(float hold_rms_g, float estop_peak_g, float estop_jerk_gps);
 float vib_thresh_hold();

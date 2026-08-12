@@ -45,7 +45,7 @@ void setup() {
     // The GT911 and the io-extender share one bus, and the extender gates the
     // panel rails and the touch reset. Nothing below may touch Wire before
     // this line.
-    Wire.begin(8, 9);          // SDA=8, SCL=9
+    Wire.begin(GT911_SDA_PIN, GT911_SCL_PIN);
     Wire.setClock(400000);
 
     touch_init();          // create the I2C mutex before anything uses the bus
@@ -62,6 +62,11 @@ void setup() {
 
     transport_init();
     sd_begin();
+
+    // Apply the saved sensitivity before the IMU starts feeding samples, or the
+    // first seconds of a session run on the compiled defaults instead of the
+    // tuning this machine was actually given.
+    vib_set_thresholds(settings_vib_hold(), settings_vib_peak(), settings_vib_jerk());
     imu_begin();
 
     shell_build();
@@ -132,8 +137,8 @@ static void vib_guard() {
     }
 }
 
-// Link hunting now lives in transport.cpp, which cycles UART baud rates and
-// falls back to WiFi/Telnet according to the Setup toggles.
+// Link hunting lives in transport.cpp, which cycles the two candidate UART baud
+// rates until FluidNC answers.
 static void link_watchdog() {
     static uint32_t next_log = 0;
     uint32_t now = millis();

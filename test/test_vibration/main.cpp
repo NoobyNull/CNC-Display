@@ -106,6 +106,79 @@ void test_sustained_vibration_does_not_escalate_to_estop() {
     TEST_ASSERT_EQUAL_INT(VIB_HOLD, vib_result()->level);        // still only HOLD
 }
 
+// --- smoothing ---
+
+void test_smoothed_peak_lags_the_raw_peak_on_an_impact() {
+    uint32_t t = 1000;
+    feed_steady(0.01f, 100, &t);
+    vib_feed(1.0f + 3.0f, t); t += 1000;
+    // One sample in, the raw peak is already at the impact while the EMA is only
+    // 10% of the way there. That lag is the whole point of the smoothed figure.
+    TEST_ASSERT_GREATER_THAN_FLOAT(vib_result()->smoothed_peak, vib_result()->peak);
+    TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, vib_result()->smoothed_peak);
+}
+
+void test_smoothed_peak_is_slower_than_smoothed_rms() {
+    uint32_t t = 1000;
+    vib_reset(1.0f);
+    // Same step fed to both: with alpha 0.10 vs 0.15 the peak EMA must rise to a
+    // smaller fraction of its input than the rms EMA does to its own.
+    for (int i = 0; i < 20; i++) { vib_feed(1.0f + 1.0f, t); t += 1000; }
+    const vib_result_t* v = vib_result();
+    TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, v->smoothed_peak);
+    TEST_ASSERT_TRUE(v->smoothed_peak / v->peak < v->smoothed_rms / v->rms);
+}
+
+void test_smoothing_state_clears_on_reset() {
+    uint32_t t = 1000;
+    feed_steady(1.0f, 200, &t);
+    TEST_ASSERT_GREATER_THAN_FLOAT(0.0f, vib_result()->smoothed_peak);
+    vib_reset(1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, vib_result()->smoothed_peak);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, vib_result()->smoothed_rms);
+}
+
+// --- jerk histogram ---
+
+void test_histogram_bins_scale_with_the_threshold() {
+    // The threshold must land on the boundary of VIB_HIST_THRESH_BIN, otherwise
+    // "past the line" cannot be read off the chart by eye.
+    vib_set_thresholds(0.5f, 4.0f, 50.0f);
+    TEST_ASSERT_EQUAL_FLOAT(50.0f / VIB_HIST_THRESH_BIN, vib_hist_bin_width());
+    vib_set_thresholds(0.5f, 4.0f, 200.0f);
+    TEST_ASSERT_EQUAL_FLOAT(200.0f / VIB_HIST_THRESH_BIN, vib_hist_bin_width());
+}
+
+void test_histogram_counts_quiet_samples_in_the_low_bins() {
+    uint32_t t = 1000;
+    feed_steady(0.01f, 200, &t);
+    const uint32_t* h = vib_hist();
+    TEST_ASSERT_GREATER_THAN_UINT32(0, h[0]);
+    // Nothing that gentle may reach the e-stop boundary.
+    for (int i = VIB_HIST_THRESH_BIN; i < VIB_HIST_BINS; i++) {
+        TEST_ASSERT_EQUAL_UINT32(0, h[i]);
+    }
+}
+
+void test_histogram_saturates_instead_of_dropping_an_off_scale_impact() {
+    uint32_t t = 1000;
+    feed_steady(0.01f, 50, &t);
+    vib_hist_reset();
+    // One enormous step: jerk far past the top bin's range.
+    vib_feed(500.0f, t);
+    TEST_ASSERT_EQUAL_UINT32(1, vib_hist()[VIB_HIST_BINS - 1]);
+}
+
+void test_histogram_reset_clears_counts_but_not_detection() {
+    uint32_t t = 1000;
+    feed_steady(1.2f, 600, &t);
+    TEST_ASSERT_GREATER_THAN_UINT32(0, vib_hist_max());
+    vib_level_t before = vib_result()->level;
+    vib_hist_reset();
+    TEST_ASSERT_EQUAL_UINT32(0, vib_hist_max());
+    TEST_ASSERT_EQUAL_INT(before, vib_result()->level);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_quiet_machine_reports_nothing);
@@ -119,5 +192,12 @@ int main() {
     RUN_TEST(test_baseline_offset_is_removed);
     RUN_TEST(test_recovers_to_none_when_vibration_stops);
     RUN_TEST(test_sustained_vibration_does_not_escalate_to_estop);
+    RUN_TEST(test_smoothed_peak_lags_the_raw_peak_on_an_impact);
+    RUN_TEST(test_smoothed_peak_is_slower_than_smoothed_rms);
+    RUN_TEST(test_smoothing_state_clears_on_reset);
+    RUN_TEST(test_histogram_bins_scale_with_the_threshold);
+    RUN_TEST(test_histogram_counts_quiet_samples_in_the_low_bins);
+    RUN_TEST(test_histogram_saturates_instead_of_dropping_an_off_scale_impact);
+    RUN_TEST(test_histogram_reset_clears_counts_but_not_detection);
     return UNITY_END();
 }

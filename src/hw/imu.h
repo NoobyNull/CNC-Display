@@ -8,7 +8,11 @@
 // This board has no onboard IMU — unlike the CrowPanel it replaced — so unless
 // one is plugged into the I2C terminal, imu_begin() reports absent and the
 // vibration guard stays inert. That is the intended failure mode, not a bug.
+// Probed once at boot and then left alone — there is no background retry, since
+// most machines never fit a sensor and rediscovering that costs bus time the
+// GT911 wants. imu_retry() is the manual search, wired to the Setup page.
 bool  imu_begin();
+bool  imu_retry();           // re-probe on demand; restarts calibration if found
 bool  imu_present();
 void  imu_poll();            // samples at a fixed rate and feeds the analyser
 float imu_last_magnitude();  // g

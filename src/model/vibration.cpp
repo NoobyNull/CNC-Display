@@ -8,8 +8,19 @@ static float s_thresh_hold = 0.5f;    // g, sustained RMS -> feed hold
 static float s_thresh_peak = 4.0f;    // g, impact spike -> e-stop
 static float s_thresh_jerk = 50.0f;   // g/s, sudden change -> e-stop
 
-static const float EMA_ALPHA  = 0.15f;
-static const float PEAK_DECAY = 0.98f;
+// Two smoothing rates, as in CNC-TW. The peak is smoothed more slowly than the
+// RMS deliberately: RMS already averages over a 128-sample window, while peak is
+// a single decaying extreme that jumps the instant anything is struck. A slower
+// EMA is what makes it usable as a trend rather than a twitching number.
+static const float EMA_ALPHA      = 0.15f;   // CNC-TW EMA_ALPHA_RMS
+static const float EMA_ALPHA_PEAK = 0.10f;   // CNC-TW EMA_ALPHA_PEAK
+
+// CNC-TW's PEAK_DECAY_FACTOR. This was ported as 0.98 and that is far too fast:
+// per-sample decay compounds, so at the 200Hz sample rate 0.98^200 = 0.017 wipes
+// an impact to under 2% within a second, where 0.995^200 = 0.37 keeps 37% of it
+// visible. The peak exists precisely so a spike survives long enough to be seen
+// and acted on, and the fast value defeated that.
+static const float PEAK_DECAY = 0.995f;
 
 static float        s_window[VIB_WINDOW];
 static size_t       s_wpos = 0;
@@ -19,7 +30,32 @@ static float        s_baseline = 1.0f;
 static float        s_prev_mag = 1.0f;
 static uint32_t     s_prev_us = 0;
 static float        s_ema = 0.0f;
+static float        s_ema_peak = 0.0f;
 static vib_result_t s_res;
+static uint32_t     s_hist[VIB_HIST_BINS];
+
+float vib_hist_bin_width() { return s_thresh_jerk / (float)VIB_HIST_THRESH_BIN; }
+const uint32_t* vib_hist() { return s_hist; }
+
+uint32_t vib_hist_max() {
+    uint32_t m = 0;
+    for (int i = 0; i < VIB_HIST_BINS; i++) if (s_hist[i] > m) m = s_hist[i];
+    return m;
+}
+
+void vib_hist_reset() { memset(s_hist, 0, sizeof(s_hist)); }
+
+// Counts the current jerk figure. Saturates into the top bin rather than
+// discarding: an off-scale impact is the single most interesting sample there
+// is, and dropping it would make the chart quietest exactly when it matters.
+static void hist_add(float jerk_gps) {
+    float w = vib_hist_bin_width();
+    if (w <= 0.0f) return;
+    int bin = (int)(jerk_gps / w);
+    if (bin < 0) bin = 0;
+    if (bin >= VIB_HIST_BINS) bin = VIB_HIST_BINS - 1;
+    if (s_hist[bin] != UINT32_MAX) s_hist[bin]++;
+}
 
 void vib_set_thresholds(float hold_rms_g, float estop_peak_g, float estop_jerk_gps) {
     if (hold_rms_g   > 0) s_thresh_hold = hold_rms_g;
@@ -37,8 +73,10 @@ void vib_reset(float baseline_g) {
     s_prev_mag = baseline_g;
     s_prev_us  = 0;
     s_ema      = 0.0f;
+    s_ema_peak = 0.0f;
     memset(&s_res, 0, sizeof(s_res));
     s_res.level = VIB_NONE;
+    vib_hist_reset();
 }
 
 size_t vib_samples() { return s_total; }
@@ -60,7 +98,13 @@ void vib_feed(float mag_g, uint32_t t_us) {
 
     if (s_prev_us > 0 && t_us > s_prev_us) {
         float dt = (t_us - s_prev_us) / 1000000.0f;
-        if (dt > 0.0f) s_res.jerk = fabsf(mag_g - s_prev_mag) / dt;
+        if (dt > 0.0f) {
+            s_res.jerk = fabsf(mag_g - s_prev_mag) / dt;
+            // Only bin once a real interval exists — the first sample after a
+            // reset has no previous timestamp and would otherwise pile a
+            // meaningless zero into bin 0 on every restart.
+            hist_add(s_res.jerk);
+        }
     }
     s_prev_mag = mag_g;
     s_prev_us  = t_us;
@@ -69,8 +113,10 @@ void vib_feed(float mag_g, uint32_t t_us) {
     for (size_t i = 0; i < s_count; i++) sum_sq += (double)s_window[i] * s_window[i];
     s_res.rms = s_count ? sqrtf((float)(sum_sq / s_count)) : 0.0f;
 
-    s_ema = EMA_ALPHA * s_res.rms + (1.0f - EMA_ALPHA) * s_ema;
-    s_res.smoothed = s_ema;
+    s_ema      = EMA_ALPHA      * s_res.rms  + (1.0f - EMA_ALPHA)      * s_ema;
+    s_ema_peak = EMA_ALPHA_PEAK * s_res.peak + (1.0f - EMA_ALPHA_PEAK) * s_ema_peak;
+    s_res.smoothed_rms  = s_ema;
+    s_res.smoothed_peak = s_ema_peak;
 
     // Impact beats sustained vibration: a spike is the more urgent condition,
     // judged on instantaneous peak and jerk rather than the smoothed RMS, which
