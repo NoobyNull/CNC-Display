@@ -1,4 +1,5 @@
 #include "ui/pages.h"
+#include "ui/shell.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
@@ -17,7 +18,32 @@ static int s_step = 2;
 static lv_obj_t* s_step_btn[4];
 static lv_obj_t* s_mid_lbl;
 
+// Hold-to-jog is offered at 1mm and below only. At 10mm a press is a deliberate
+// discrete move; a held key that ran away at coarse resolution is the wrong
+// thing to have under a thumb.
+static const float CONTINUOUS_MAX_MM = 1.0f;
+
+// Continuous jog re-issues short moves while the key is held, rather than
+// sending one long move and cancelling it on release (FluidDial's idiom, see
+// MultiJogScene::start_button_jog).
+//
+// That is deliberate. Against FluidNC v4.0.4 the JogCancel realtime byte (0x85)
+// did not stop a jog in testing -- neither raw, which is what GrblParserC sends
+// (GrblParserC.c:572), nor UTF-8 encoded -- while feed hold on the same channel
+// stopped it every time. Until that is understood on real hardware, nothing that
+// moves the machine may depend on that byte arriving. Releasing the key stops
+// the axis by *not asking for more*, which holds whatever the controller does
+// with realtime commands.
+//
+// Each tick asks for exactly one tick's worth of travel, so the planner stays fed
+// without the queue growing, and a release overshoots by at most one chunk. At
+// the 1mm step -- the fastest continuous setting -- that is 0.75mm.
+static const uint32_t JOG_TICK_MS = 150;
+
 struct dir_t { int dx, dy, dz; };
+
+static lv_timer_t* s_jog_timer = nullptr;
+static dir_t       s_jog_dir   = { 0, 0, 0 };
 
 // Pad slots in reading order; slot 4 is the centre and is not a button.
 static const dir_t PADDIR[9] = {
@@ -28,36 +54,98 @@ static const dir_t PADDIR[9] = {
 static const dir_t ZUP   = { 0, 0,  1 };
 static const dir_t ZDOWN = { 0, 0, -1 };
 
-static void jog_start(lv_event_t* e) {
-    const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
-    if (!d || (!d->dx && !d->dy && !d->dz)) return;
-    char buf[72];
-    float s = STEPS[s_step];
-    int n = snprintf(buf, sizeof(buf), "$J=G91F2000");
-    if (d->dx) n += snprintf(buf + n, sizeof(buf) - n, "X%.3f", (double)(d->dx * s));
-    if (d->dy) n += snprintf(buf + n, sizeof(buf) - n, "Y%.3f", (double)(d->dy * s));
-    if (d->dz) n += snprintf(buf + n, sizeof(buf) - n, "Z%.3f", (double)(d->dz * s));
+static void jog_send(const dir_t* d, float feed_mm_min, float dist_mm) {
+    char buf[80];
+    int n = snprintf(buf, sizeof(buf), "$J=G91F%.3f", (double)feed_mm_min);
+    if (d->dx) n += snprintf(buf + n, sizeof(buf) - n, "X%.4f", (double)(d->dx * dist_mm));
+    if (d->dy) n += snprintf(buf + n, sizeof(buf) - n, "Y%.4f", (double)(d->dy * dist_mm));
+    if (d->dz) n += snprintf(buf + n, sizeof(buf) - n, "Z%.4f", (double)(d->dz * dist_mm));
     send_jog_line(buf);
 }
 
-// Cancel on release AND on press-lost. Press-lost is the finger sliding off the
-// key; without it the axis keeps moving after the thumb reaches the bezel.
-static void jog_stop(lv_event_t*) { send_jog_cancel(); }
-
-static void attach_jog(lv_obj_t* btn, const dir_t* d) {
-    lv_obj_add_event_cb(btn, jog_start, LV_EVENT_PRESSED,    (void*)d);
-    lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_RELEASED,   (void*)d);
-    lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_PRESS_LOST, (void*)d);
+// A tap is one step, delivered whole.
+static void jog_start(lv_event_t* e) {
+    const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
+    if (!d || (!d->dx && !d->dy && !d->dz)) return;
+    jog_send(d, 2000.0f, STEPS[s_step]);
 }
 
-static void step_cb(lv_event_t* e) {
-    s_step = (int)(intptr_t)lv_event_get_user_data(e);
+// Feed tracks the selected step -- FluidDial's "5x the step per second" scaling
+// -- so the same key creeps at 0.01mm and traverses at 1mm, and the step
+// selector doubles as a speed selector.
+static float continuous_feed() { return STEPS[s_step] * 300.0f; }
+
+static void jog_stop(lv_event_t*);
+
+static void jog_chunk(lv_timer_t*) {
+    // Leaving the page with a key held would otherwise keep the timer running
+    // and the axis moving somewhere nobody is looking.
+    if (shell_current_page() != PAGE_JOG) {
+        jog_stop(nullptr);
+        return;
+    }
+    const float feed = continuous_feed();
+    jog_send(&s_jog_dir, feed, feed / 60.0f * (JOG_TICK_MS / 1000.0f));
+}
+
+// Held past LVGL's 400ms long-press, the discrete step gives way to a continuous
+// jog in the same direction -- but only at 1mm and below. At 10mm a press stays
+// a deliberate discrete move: that cap is what keeps the worst case of a lost
+// release down to one 0.75mm chunk instead of a coarse runaway.
+static void jog_hold(lv_event_t* e) {
+    const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
+    if (!d || (!d->dx && !d->dy && !d->dz)) return;
+    if (STEPS[s_step] > CONTINUOUS_MAX_MM) return;
+    if (s_jog_timer) return;
+
+    s_jog_dir   = *d;
+    s_jog_timer = lv_timer_create(jog_chunk, JOG_TICK_MS, nullptr);
+    jog_chunk(nullptr);   // first chunk now, not one tick from now
+}
+
+// Stop on release AND on press-lost -- press-lost is the finger sliding off the
+// key, and without it the axis keeps moving once the thumb reaches the bezel.
+//
+// Only a hold gets stopped. A tap has to deliver its whole step: cancelling
+// every release truncated the move to however long the finger happened to be
+// down, which is precisely wrong when the step is the number you are trusting
+// for a touch-off.
+//
+// The jog cancel is a bonus, not the mechanism. Stopping the chunks is what
+// actually halts the axis; if the realtime byte does land it just stops sooner.
+static void jog_stop(lv_event_t*) {
+    if (!s_jog_timer) return;
+    lv_timer_del(s_jog_timer);
+    s_jog_timer = nullptr;
+    send_jog_cancel();
+}
+
+static void attach_jog(lv_obj_t* btn, const dir_t* d) {
+    lv_obj_add_event_cb(btn, jog_start, LV_EVENT_PRESSED,      (void*)d);
+    lv_obj_add_event_cb(btn, jog_hold,  LV_EVENT_LONG_PRESSED, (void*)d);
+    lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_RELEASED,     (void*)d);
+    lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_PRESS_LOST,   (void*)d);
+}
+
+static void step_apply(int idx) {
+    s_step = idx;
     for (int i = 0; i < 4; i++) {
         lv_obj_set_style_bg_color(s_step_btn[i], i == s_step ? C_ACCENT : C_RAISE, 0);
     }
     char b[12];
     snprintf(b, sizeof(b), "%g", (double)STEPS[s_step]);
     lv_label_set_text(s_mid_lbl, b);
+}
+
+static void step_cb(lv_event_t* e) {
+    step_apply((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+// The dead centre of the pad was a label. It is the one spot a thumb can reach
+// without leaving the pad, so tapping it walks the step by a factor of ten and
+// wraps: 0.01 -> 0.1 -> 1 -> 10 -> 0.01.
+static void step_cycle_cb(lv_event_t*) {
+    step_apply((s_step + 1) % 4);
 }
 
 static void zero_cb(lv_event_t* e) {
@@ -97,9 +185,17 @@ void page_jog_build(lv_obj_t* p) {
             lv_obj_t* mid = lv_obj_create(pad);
             w_flatten(mid);
             lv_obj_set_grid_cell(mid, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
+            // C_SURFACE, not the direction keys' C_RAISE: it reads as tappable
+            // without reading as a ninth direction in the middle of the pad.
+            lv_obj_set_style_bg_color(mid, C_SURFACE, 0);
+            lv_obj_set_style_bg_opa(mid, LV_OPA_COVER, 0);
+            lv_obj_add_flag(mid, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(mid, step_cycle_cb, LV_EVENT_CLICKED, nullptr);
             lv_obj_t* cap = w_label(mid, "STEP", &lv_font_montserrat_10, C_DIM);
             lv_obj_align(cap, LV_ALIGN_CENTER, 0, -12);
-            s_mid_lbl = w_label(mid, "1", &lv_font_montserrat_20, C_ACCENT);
+            // Text set by step_apply() at the end of build, so the label, the
+            // selector highlight and s_step have exactly one owner.
+            s_mid_lbl = w_label(mid, "", &lv_font_montserrat_20, C_ACCENT);
             lv_obj_align(s_mid_lbl, LV_ALIGN_CENTER, 0, 8);
             continue;
         }
@@ -138,8 +234,7 @@ void page_jog_build(lv_obj_t* p) {
     lv_obj_set_style_pad_column(steps, U, 0);
     static const char* SLBL[4] = { "0.01", "0.1", "1.0", "10" };
     for (int i = 0; i < 4; i++) {
-        s_step_btn[i] = w_button(steps, SLBL[i], "mm",
-                                 i == s_step ? C_ACCENT : C_RAISE, C_TEXT,
+        s_step_btn[i] = w_button(steps, SLBL[i], "mm", C_RAISE, C_TEXT,
                                  step_cb, (void*)(intptr_t)i);
         lv_obj_set_flex_grow(s_step_btn[i], 1);
         lv_obj_set_height(s_step_btn[i], LV_PCT(100));
@@ -168,6 +263,8 @@ void page_jog_build(lv_obj_t* p) {
     lv_obj_set_grid_cell(b1, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
     lv_obj_set_grid_cell(b2, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
     lv_obj_set_grid_cell(b3, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
+
+    step_apply(s_step);   // paints the selector and the centre from one place
 }
 
 void page_jog_tick() {}
