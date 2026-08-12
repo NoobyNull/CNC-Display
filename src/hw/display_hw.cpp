@@ -4,101 +4,67 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <LovyanGFX.hpp>
-#include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
-#include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lvgl.h>
+#include <esp_lcd_panel_rgb.h>
+#include <esp_lcd_panel_ops.h>
 
 // ============================================================
-// LovyanGFX Display -- Waveshare ESP32-S3-Touch-LCD-7B (1024x600 RGB565)
+// RGB panel -- Waveshare ESP32-S3-Touch-LCD-7B (1024x600 RGB565)
 // ============================================================
-
-// Straight from Waveshare's rgb_lcd_port.h. The sync widths look wrong next to
-// a typical 1024x600 datasheet — a 162-clock hsync pulse is enormous — but this
-// is the combination they ship and validate against the panel they solder on.
-// Do not "correct" them from a generic ST7262 table.
 //
-// PCLK is the one number worth touching. 30 MHz x 2 bytes is 60 MB/s read out
-// of PSRAM, which is most of what octal PSRAM at 80 MHz can give while LVGL is
-// also writing to it. If the panel tears, shears, or shows a rolling band,
-// drop this to 21 MHz first — refresh falls from ~33 Hz to ~23 Hz and the
-// bandwidth pressure goes with it.
+// This drives the ESP-IDF esp_lcd_rgb_panel directly rather than going through
+// LovyanGFX, for two reasons found the hard way on real hardware:
+//
+//  1. LovyanGFX's Bus_RGB::config_t stores every porch and pulse width in an
+//     `int8_t`. Waveshare's real values -- hsync pulse 162, back porch 152 --
+//     wrap to -94 and -104, the horizontal timing generator gets garbage, the
+//     panel never syncs and the screen sits white with the backlight lit. Still
+//     true on LovyanGFX master; there is no version to upgrade to.
+//
+//  2. LovyanGFX has no bounce buffer and cannot be given one. Its
+//     Panel_RGB::initFrameBuffer() unconditionally puts the whole framebuffer in
+//     PSRAM ("provisional implementation ... ToDo: split allocation") and its
+//     use_psram setting is marked `unimplemented`. Streaming 1.2 MB per frame
+//     straight out of PSRAM while LVGL writes into it produces the static-TV
+//     noise this panel showed at both 30 MHz and 21 MHz.
+//
+// esp_lcd fixes both: uint32_t timings, and two DRAM bounce buffers that the
+// DMA feeds from, which is exactly how Waveshare's own driver runs this panel.
 static const uint32_t LCD_PCLK_HZ = 30000000;
 
-class LGFX : public lgfx::LGFX_Device {
-public:
-  lgfx::Bus_RGB   _bus_instance;
-  lgfx::Panel_RGB _panel_instance;
+// Waveshare's real timings, straight from their rgb_lcd_port.cpp. The 162-clock
+// hsync pulse looks enormous next to a generic 1024x600 datasheet and is correct
+// for the panel they solder on. Do not "fix" them from a generic ST7262 table.
+static const uint32_t HSYNC_PULSE = 162, HSYNC_BACK = 152, HSYNC_FRONT = 48;
+static const uint32_t VSYNC_PULSE = 45,  VSYNC_BACK = 13,  VSYNC_FRONT = 3;
 
-  LGFX(void) {
-    {
-      auto cfg = _panel_instance.config();
-      cfg.memory_width  = SCREEN_WIDTH;
-      cfg.memory_height = SCREEN_HEIGHT;
-      cfg.panel_width   = SCREEN_WIDTH;
-      cfg.panel_height  = SCREEN_HEIGHT;
-      cfg.offset_x = 0;
-      cfg.offset_y = 0;
-      _panel_instance.config(cfg);
-    }
-    {
-      auto cfg = _bus_instance.config();
-      cfg.panel = &_panel_instance;
-      // d0-d4 blue, d5-d10 green, d11-d15 red — RGB565 bit order.
-      cfg.pin_d0  = GPIO_NUM_14; cfg.pin_d1  = GPIO_NUM_38;   // B3, B4
-      cfg.pin_d2  = GPIO_NUM_18; cfg.pin_d3  = GPIO_NUM_17;   // B5, B6
-      cfg.pin_d4  = GPIO_NUM_10; cfg.pin_d5  = GPIO_NUM_39;   // B7, G2
-      cfg.pin_d6  = GPIO_NUM_0;  cfg.pin_d7  = GPIO_NUM_45;   // G3, G4
-      cfg.pin_d8  = GPIO_NUM_48; cfg.pin_d9  = GPIO_NUM_47;   // G5, G6
-      cfg.pin_d10 = GPIO_NUM_21; cfg.pin_d11 = GPIO_NUM_1;    // G7, R3
-      cfg.pin_d12 = GPIO_NUM_2;  cfg.pin_d13 = GPIO_NUM_42;   // R4, R5
-      cfg.pin_d14 = GPIO_NUM_41; cfg.pin_d15 = GPIO_NUM_40;   // R6, R7
-      cfg.pin_henable = GPIO_NUM_5;
-      cfg.pin_vsync   = GPIO_NUM_3;
-      cfg.pin_hsync   = GPIO_NUM_46;
-      cfg.pin_pclk    = GPIO_NUM_7;
-      cfg.freq_write  = LCD_PCLK_HZ;
-      cfg.hsync_polarity    = 0; cfg.hsync_front_porch = 48;
-      cfg.hsync_pulse_width = 162; cfg.hsync_back_porch = 152;
-      cfg.vsync_polarity    = 0; cfg.vsync_front_porch = 3;
-      cfg.vsync_pulse_width = 45; cfg.vsync_back_porch = 13;
-      cfg.pclk_active_neg = 1;
-      cfg.de_idle_high    = 0;
-      cfg.pclk_idle_high  = 0;
-      _bus_instance.config(cfg);
-      _panel_instance.setBus(&_bus_instance);
-    }
-    // No Light_PWM: the backlight is not on a GPIO at all, it is a PWM register
-    // on the io-extender. set_backlight() below drives it.
-    setPanel(&_panel_instance);
-  }
-};
+// Two DRAM bounce buffers of this many pixels each. The DMA reads from these
+// instead of from PSRAM, which is what keeps the scanout clean at 30 MHz.
+// 1024*10 px * 2 B * 2 buffers = 40 KB of internal RAM.
+static const size_t BOUNCE_PX = SCREEN_WIDTH * 10;
 
-static LGFX lcd;
+static esp_lcd_panel_handle_t s_panel = nullptr;
 
 // ============================================================
-// LVGL Display Flush Callback
+// LVGL flush
 // ============================================================
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1;
 static lv_color_t *buf2;
 
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
-  uint32_t w = area->x2 - area->x1 + 1;
-  uint32_t h = area->y2 - area->y1 + 1;
-  lcd.startWrite();
-  lcd.setAddrWindow(area->x1, area->y1, w, h);
-  lcd.writePixels((lgfx::rgb565_t *)color_p, w * h);
-  lcd.endWrite();
+  // esp_lcd takes an exclusive end coordinate; LVGL's area is inclusive.
+  esp_lcd_panel_draw_bitmap(s_panel, area->x1, area->y1,
+                            area->x2 + 1, area->y2 + 1, color_p);
   lv_disp_flush_ready(disp);
 }
 
 // ============================================================
-// display_init() -- panel rails + LCD init
+// display_init() -- panel rails + RGB panel
 // ============================================================
 void display_init() {
-  // VCOM rail and backlight enable both live on the extender. The panel reset
-  // is released too — it is wired, not strapped, and comes up asserted.
+  // VCOM rail and backlight enable both live on the extender. The panel reset is
+  // released too -- it is wired, not strapped, and comes up asserted.
   ioexp_write(EXIO_LCD_VDD_EN, true);
   ioexp_write(EXIO_LCD_RST, false);
   delay(10);
@@ -106,9 +72,58 @@ void display_init() {
   delay(50);
   ioexp_write(EXIO_DISP, true);
 
-  lcd.begin();
-  lcd.fillScreen(TFT_BLACK);
-  delay(200);
+  // Field-by-field rather than a designated initializer: sram_trans_align and
+  // psram_trans_align are deprecated and union'd with dma_burst_size in IDF 5.x,
+  // so positional init breaks across versions.
+  esp_lcd_rgb_panel_config_t cfg = {};
+  cfg.clk_src = LCD_CLK_SRC_DEFAULT;
+
+  cfg.timings.pclk_hz           = LCD_PCLK_HZ;
+  cfg.timings.h_res             = SCREEN_WIDTH;
+  cfg.timings.v_res             = SCREEN_HEIGHT;
+  cfg.timings.hsync_pulse_width = HSYNC_PULSE;
+  cfg.timings.hsync_back_porch  = HSYNC_BACK;
+  cfg.timings.hsync_front_porch = HSYNC_FRONT;
+  cfg.timings.vsync_pulse_width = VSYNC_PULSE;
+  cfg.timings.vsync_back_porch  = VSYNC_BACK;
+  cfg.timings.vsync_front_porch = VSYNC_FRONT;
+  cfg.timings.flags.pclk_active_neg = 1;
+
+  cfg.data_width            = 16;
+  cfg.bits_per_pixel        = 16;
+  cfg.num_fbs               = 1;          // LVGL draws partial areas, not whole frames
+  cfg.bounce_buffer_size_px = BOUNCE_PX;
+  cfg.flags.fb_in_psram     = 1;
+
+  cfg.hsync_gpio_num = 46;
+  cfg.vsync_gpio_num = 3;
+  cfg.de_gpio_num    = 5;
+  cfg.pclk_gpio_num  = 7;
+  cfg.disp_gpio_num  = -1;                // no DISP signal on this board
+
+  // d0-d4 blue, d5-d10 green, d11-d15 red -- RGB565 bit order, matching
+  // Waveshare's rgb_lcd_port.h exactly.
+  const int data_pins[16] = { 14, 38, 18, 17, 10,      // B3..B7
+                              39,  0, 45, 48, 47, 21,  // G2..G7
+                               1,  2, 42, 41, 40 };    // R3..R7
+  for (int i = 0; i < 16; i++) cfg.data_gpio_nums[i] = data_pins[i];
+
+  esp_err_t err = esp_lcd_new_rgb_panel(&cfg, &s_panel);
+  if (err != ESP_OK) {
+      Serial.printf("[lcd] esp_lcd_new_rgb_panel FAILED: %s\n", esp_err_to_name(err));
+      return;
+  }
+  err = esp_lcd_panel_reset(s_panel);
+  if (err != ESP_OK) Serial.printf("[lcd] reset: %s\n", esp_err_to_name(err));
+  err = esp_lcd_panel_init(s_panel);
+  if (err != ESP_OK) {
+      Serial.printf("[lcd] esp_lcd_panel_init FAILED: %s\n", esp_err_to_name(err));
+      return;
+  }
+  Serial.printf("[lcd] rgb panel up, %dx%d @ %lu Hz, bounce %u px\n",
+                SCREEN_WIDTH, SCREEN_HEIGHT,
+                (unsigned long)LCD_PCLK_HZ, (unsigned)BOUNCE_PX);
+
   Serial.println("Display initialized");
 }
 
@@ -138,6 +153,11 @@ void lvgl_init() {
   indev_drv.type    = LV_INDEV_TYPE_POINTER;
   indev_drv.read_cb = touch_read_cb;
   lv_indev_drv_register(&indev_drv);
+}
+
+void display_resync() {
+  if (!s_panel) return;
+  esp_lcd_rgb_panel_restart(s_panel);
 }
 
 // ============================================================

@@ -118,7 +118,7 @@
 /* Extra widgets */
 #define LV_USE_ANIMIMG 0
 #define LV_USE_CALENDAR 0
-#define LV_USE_CHART 0
+#define LV_USE_CHART 1   /* jerk histogram on the Setup page */
 #define LV_USE_COLORWHEEL 0
 #define LV_USE_IMGBTN 0
 #define LV_USE_KEYBOARD 1
