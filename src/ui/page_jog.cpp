@@ -5,7 +5,11 @@
 #include "GrblParserC.h"
 #include <stdio.h>
 
-static const lv_coord_t PAD    = U * 30;   // 240
+// The controls fill the page height rather than a fixed 240px. That constant
+// exactly filled the CrowPanel's 256px content area and left 120px of dead space
+// once the 7B's content area grew to 376. Everything on this page is squared or
+// split off PAD, so deriving it here reflows the whole layout.
+static const lv_coord_t PAD    = CONTENT_H - U * 2;
 static const lv_coord_t ZCOL_W = U * 11;   // 88
 
 static const float STEPS[4] = { 0.01f, 0.1f, 1.0f, 10.0f };
@@ -75,8 +79,11 @@ void page_jog_build(lv_obj_t* p) {
     lv_obj_t* pad = lv_obj_create(p);
     w_flatten(pad);
     lv_obj_set_size(pad, PAD, PAD);
-    static lv_coord_t pc[] = { TOUCH_HOLD, TOUCH_HOLD, TOUCH_HOLD, LV_GRID_TEMPLATE_LAST };
-    static lv_coord_t pr[] = { TOUCH_HOLD, TOUCH_HOLD, TOUCH_HOLD, LV_GRID_TEMPLATE_LAST };
+    // Fractional, not fixed: the cells divide PAD so the pad stays square and
+    // full-height. At 376px content that is ~120px a key, comfortably above the
+    // TOUCH_HOLD floor rather than three 80px keys with a gap underneath.
+    static lv_coord_t pc[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
+    static lv_coord_t pr[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
     lv_obj_set_grid_dsc_array(pad, pc, pr);
     lv_obj_set_layout(pad, LV_LAYOUT_GRID);
 
@@ -140,7 +147,10 @@ void page_jog_build(lv_obj_t* p) {
 
     lv_obj_t* zeros = lv_obj_create(rc);
     w_flatten(zeros);
-    lv_obj_set_size(zeros, LV_PCT(100), U * 21);
+    // Takes whatever the step selector leaves, so the right column ends level
+    // with the pad instead of stopping short at a fixed 168px.
+    lv_obj_set_width(zeros, LV_PCT(100));
+    lv_obj_set_flex_grow(zeros, 1);
     static lv_coord_t zcs[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
     static lv_coord_t zrs[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
     lv_obj_set_grid_dsc_array(zeros, zcs, zrs);

@@ -66,7 +66,11 @@ void page_probe_build(lv_obj_t* p) {
 
     for (int i = 0; i < 4; i++) {
         lv_obj_t* row = w_panel(left, C_SURFACE);
-        lv_obj_set_size(row, LV_PCT(100), U * 6);
+        // Share the column: four fixed 48px rows left the parameter list
+        // stranded at the top of the taller page. Growing keeps the +/- keys
+        // above the touch floor and ends the list level with the right column.
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_flex_grow(row, 1);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_left(row, U + 4, 0);
@@ -97,14 +101,16 @@ void page_probe_build(lv_obj_t* p) {
     lv_obj_set_style_pad_row(right, U, 0);
 
     lv_obj_t* st = w_panel(right, C_SURFACE);
-    lv_obj_set_size(st, LV_PCT(100), U * 14);
+    lv_obj_set_width(st, LV_PCT(100));
+    lv_obj_set_flex_grow(st, 1);
     lv_obj_t* stk = w_label(st, "PROBE INPUT", &lv_font_montserrat_10, C_DIM);
     lv_obj_align(stk, LV_ALIGN_CENTER, 0, -12);
     lv_obj_t* stv = w_label(st, "OPEN", &lv_font_montserrat_20, C_OK);
     lv_obj_align(stv, LV_ALIGN_CENTER, 0, 10);
 
     lv_obj_t* go = lv_btn_create(right);
-    lv_obj_set_size(go, LV_PCT(100), U * 14);
+    lv_obj_set_width(go, LV_PCT(100));
+    lv_obj_set_flex_grow(go, 1);
     lv_obj_set_style_bg_color(go, C_WARN, 0);
     lv_obj_set_style_radius(go, 3, 0);
     lv_obj_set_style_shadow_width(go, 0, 0);

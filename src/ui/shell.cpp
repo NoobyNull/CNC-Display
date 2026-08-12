@@ -16,7 +16,16 @@
 // would mean 7.5U items and a broken grid; a nested menu would cost a tap on
 // things used constantly.
 #define NAV_COUNT   8
-#define NAV_VISIBLE 5
+
+// How many nav slots fit in the rail between the two scroll arrows. Derived from
+// the panel rather than fixed: this was hardcoded to 5, which exactly filled the
+// CrowPanel's 480px screen (40 + 5*80 + 40) and left 120px of dead rail on the
+// 7B's 600px one. At 600px it yields 6; a taller panel gets more, and once a
+// panel is tall enough for all eight the scroll arrows simply stay dimmed.
+static const int NAV_FIT = (SCREEN_H - 2 * RAIL_SCROLL_H) / TOUCH_HOLD;
+static const int NAV_VISIBLE = NAV_FIT > NAV_COUNT ? NAV_COUNT : NAV_FIT;
+
+static_assert(NAV_VISIBLE >= 1, "rail is too short for a single nav slot");
 
 static const char* NAV_LABEL[NAV_COUNT] = {
     "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "DIAG", "SETUP"
@@ -38,8 +47,15 @@ static lv_obj_t* s_state_chip;
 static lv_obj_t* s_state_lbl;
 static lv_obj_t* s_wcs_lbl;
 static lv_obj_t* s_link_lbl;
-static lv_obj_t* s_axis_work[3];
-static lv_obj_t* s_axis_mach[3];
+// FluidNC reports its axis count in every status report and the model already
+// tracks it in n_axes; myAxes/myWco are sized 6. The DRO used to draw a fixed
+// XYZ and clamp the count to 3, so a machine with a rotary A simply never showed
+// it. Build all six and reveal the ones the controller says exist.
+#define MAX_AXES 6
+static lv_obj_t* s_axis_cell[MAX_AXES];
+static lv_obj_t* s_axis_work[MAX_AXES];
+static lv_obj_t* s_axis_mach[MAX_AXES];
+static int       s_axes_shown = 0;   // 0 = nothing laid out yet
 static lv_obj_t* s_flip_btn;
 static lv_obj_t* s_close_btn;
 static lv_obj_t* s_ovr_box;
@@ -188,6 +204,37 @@ static void build_safety(lv_obj_t* parent) {
 }
 
 // ---- DRO -------------------------------------------------------------------
+// Width left for the axis cells once the state/WCS column is taken out.
+static const lv_coord_t AXES_W = CONTENT_W - U * 16;
+
+// Reflow the DRO for n axes. The readout font has to come down as the cells
+// narrow — a 40px "-1234.567" needs about 230px, so it fits three cells across
+// and clips at four. Picked off the resulting cell width rather than the axis
+// count so it stays right if the DRO or the panel is ever resized.
+static void dro_layout(int n) {
+    if (n < 1)         n = 1;
+    if (n > MAX_AXES)  n = MAX_AXES;
+    if (n == s_axes_shown) return;
+    s_axes_shown = n;
+
+    const lv_coord_t cw = AXES_W / n;
+    const lv_font_t* f = cw >= U * 30 ? &lv_font_montserrat_40
+                       : cw >= U * 22 ? &lv_font_montserrat_28
+                                      : &lv_font_montserrat_20;
+
+    for (int i = 0; i < MAX_AXES; i++) {
+        if (i < n) {
+            lv_obj_clear_flag(s_axis_cell[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_width(s_axis_cell[i], cw);
+            // Divider between cells, but not trailing off the last one.
+            lv_obj_set_style_border_width(s_axis_cell[i], i < n - 1 ? 1 : 0, 0);
+            lv_obj_set_style_text_font(s_axis_work[i], f, 0);
+        } else {
+            lv_obj_add_flag(s_axis_cell[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
 static void build_dro(lv_obj_t* parent) {
     s_dro = lv_obj_create(parent);
     w_flatten(s_dro);
@@ -218,25 +265,27 @@ static void build_dro(lv_obj_t* parent) {
 
     lv_obj_t* axes = lv_obj_create(s_dro);
     w_flatten(axes);
-    lv_obj_set_size(axes, CONTENT_W - U * 16, LV_PCT(100));
+    lv_obj_set_size(axes, AXES_W, LV_PCT(100));
     lv_obj_set_flex_flow(axes, LV_FLEX_FLOW_ROW);
 
-    static const char* AX[3] = { "X", "Y", "Z" };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < MAX_AXES; i++) {
         lv_obj_t* c = lv_obj_create(axes);
         w_flatten(c);
-        lv_obj_set_size(c, (CONTENT_W - U * 16) / 3, LV_PCT(100));
+        lv_obj_set_height(c, LV_PCT(100));
         lv_obj_set_style_pad_left(c, U * 2, 0);
         lv_obj_set_style_border_side(c, LV_BORDER_SIDE_RIGHT, 0);
         lv_obj_set_style_border_color(c, C_LINE, 0);
-        lv_obj_set_style_border_width(c, i < 2 ? 1 : 0, 0);
         lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(c, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-        w_label(c, AX[i], &lv_font_montserrat_12, C_DIM);
+        // axisNumToChar() is the model's own "XYZABC" mapping — no second copy.
+        char nm[2] = { axisNumToChar(i), 0 };
+        w_label(c, nm, &lv_font_montserrat_12, C_DIM);
         s_axis_work[i] = w_label(c, "0.000", &lv_font_montserrat_40, C_TEXT);
         s_axis_mach[i] = w_label(c, "M 0.000", &lv_font_montserrat_12, C_DIM);
+        s_axis_cell[i] = c;
     }
+    dro_layout(3);   // until FluidNC says otherwise
 }
 
 // ---- rail ------------------------------------------------------------------
@@ -256,7 +305,12 @@ static void build_rail(lv_obj_t* parent) {
 
     for (int i = 0; i < NAV_VISIBLE; i++) {
         lv_obj_t* b = lv_btn_create(s_rail);
-        lv_obj_set_size(b, LV_PCT(100), TOUCH_HOLD);
+        // TOUCH_HOLD is the floor, not the height: whatever the slot count does
+        // not divide evenly is shared out here so the rail ends flush with the
+        // bottom of the screen instead of leaving a stub of background.
+        lv_obj_set_width(b, LV_PCT(100));
+        lv_obj_set_height(b, TOUCH_HOLD);
+        lv_obj_set_flex_grow(b, 1);
         lv_obj_set_style_radius(b, 0, 0);
         lv_obj_set_style_shadow_width(b, 0, 0);
         lv_obj_set_style_bg_color(b, C_SURFACE, 0);
@@ -357,7 +411,13 @@ void shell_tick() {
     }
     if (model_take_dro()) {
         char b[32];
-        int n = n_axes < 3 ? n_axes : 3;
+        // Follow the controller. A 4-axis machine reports 4 and the A column
+        // appears on its own; dro_layout() returns early when nothing changed,
+        // so this costs a compare per DRO update.
+        int n = n_axes;
+        if (n < 1)        n = 1;
+        if (n > MAX_AXES) n = MAX_AXES;
+        dro_layout(n);
         for (int a = 0; a < n; a++) {
             fmt_pos(b, sizeof(b), myAxes[a]);
             lv_label_set_text(s_axis_work[a], b);

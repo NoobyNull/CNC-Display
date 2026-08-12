@@ -7,7 +7,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#define VISIBLE_ROWS 6
+// Work-system rows that fit the table, derived from the panel. Fixed at 6
+// before, which is what the CrowPanel's 240px page held; the 7B fits 9, enough
+// to show G54-G59 without scrolling at all.
+// Layout: the column header, then the rows, separated by a 2px pad_row.
+static const int VISIBLE_ROWS = (CONTENT_H - U * 2 - U * 3) / (U * 4 + 2);
 
 static lv_obj_t* s_rowobj[VISIBLE_ROWS];
 static lv_obj_t* s_name[VISIBLE_ROWS];

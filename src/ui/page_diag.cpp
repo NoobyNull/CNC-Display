@@ -8,7 +8,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ROWS 5
+// Settings rows that fit the list, derived from the panel. Fixed at 5 before,
+// which is what the CrowPanel's 240px page held; the 7B fits 8. There are ~150
+// settings to page through, so every extra row is one less scroll.
+static const int ROWS = (CONTENT_H - U * 2 + 2) / (U * 5 + 2);
 
 static lv_obj_t* s_row[ROWS];
 static lv_obj_t* s_name[ROWS];
@@ -146,9 +149,13 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_set_style_border_color(s_edit_ta, C_LINE, 0);
     lv_obj_add_event_cb(s_edit_ta, edit_focus_cb, LV_EVENT_CLICKED, nullptr);
 
+    // The two button rows take the slack. The nav bar and the one-line editor
+    // have a natural size and look wrong stretched; taller command buttons are
+    // a straight win on a panel operated with a gloved hand.
     lv_obj_t* btns = lv_obj_create(right);
     w_flatten(btns);
-    lv_obj_set_size(btns, LV_PCT(100), U * 6);
+    lv_obj_set_width(btns, LV_PCT(100));
+    lv_obj_set_flex_grow(btns, 1);
     lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(btns, U, 0);
     lv_obj_t* a = w_button(btns, "ALL", "$S", C_RAISE, C_TEXT, all_cb, nullptr);
@@ -158,7 +165,8 @@ void page_diag_build(lv_obj_t* p) {
 
     lv_obj_t* diag = lv_obj_create(right);
     w_flatten(diag);
-    lv_obj_set_size(diag, LV_PCT(100), U * 6);
+    lv_obj_set_width(diag, LV_PCT(100));
+    lv_obj_set_flex_grow(diag, 1);
     lv_obj_set_flex_flow(diag, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(diag, U, 0);
     static const char* CMDS[3]  = { "$Limits/Show", "$CI", "$GD" };

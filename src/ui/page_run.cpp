@@ -12,7 +12,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ROWS 3
+// File rows that fit the list, derived from the panel. This was fixed at 3,
+// which is exactly what the CrowPanel's 240px page held — the formula returns 3
+// for that screen and 4 for the 7B, so the list grows with the panel instead of
+// leaving a band of background under the last row.
+// Layout: the control bar, then the rows, all separated by a 2px pad_row.
+static const int ROWS = (CONTENT_H - U * 2 - U * 5) / (U * 8 + 2);
 
 static lv_obj_t* s_crumb;
 static lv_obj_t* s_row[ROWS];
@@ -182,8 +187,12 @@ void page_run_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(acts, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(acts, U, 0);
 
+    // RUN absorbs the slack rather than every button growing equally: it is the
+    // primary action on the page and the size hierarchy over DRY/SEND/RELOAD is
+    // deliberate, so the extra height reinforces it instead of flattening it.
     lv_obj_t* run = w_button(acts, "RUN", "$SD/Run", C_OK, C_BG, run_cb, nullptr);
-    lv_obj_set_size(run, LV_PCT(100), U * 10);
+    lv_obj_set_width(run, LV_PCT(100));
+    lv_obj_set_flex_grow(run, 1);
     lv_obj_t* dry = w_button(acts, "DRY", "$C", C_RAISE, C_TEXT, dry_cb, nullptr);
     lv_obj_set_size(dry, LV_PCT(100), U * 6);
     lv_obj_t* snd = w_button(acts, "SEND", "$XR", C_ACCENT, C_BG, upload_cb, nullptr);
