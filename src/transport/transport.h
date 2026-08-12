@@ -1,16 +1,21 @@
 #pragma once
 #include <stdint.h>
 
-// Picks between the wired UART and the WiFi/Telnet link at runtime, honouring
-// the on-screen Setup toggles. GrblParserC only ever sees fnc_putchar/getchar,
-// so nothing above this layer knows or cares which one is live.
+// The wired UART link, hunting across its two candidate baud rates. GrblParserC
+// only ever sees fnc_putchar/getchar, so nothing above this layer knows how the
+// bytes get there.
+//
+// A WiFi/Telnet transport used to sit alongside this one and was removed: the
+// ESP32-S3's WiFi stack blacks out the flash cache, and the RGB panel's ISR is
+// not IRAM-safe in arduino-esp32's prebuilt libs, so the display tore and
+// drifted whenever the radio worked. The machine link is a cable.
 
-enum transport_t { TRANSPORT_NONE = 0, TRANSPORT_UART, TRANSPORT_WIFI };
+enum transport_t { TRANSPORT_NONE = 0, TRANSPORT_UART };
 
 void        transport_init();
 void        transport_poll();       // hunting, reconnection, baud cycling
 transport_t transport_active();
-const char* transport_label();      // e.g. "UART 1M", "TELNET", "NO LINK"
+const char* transport_label();      // e.g. "UART 1M", "UART 115K", "NO LINK"
 const char* transport_detail();     // longer status for the Setup page
 
 // Called when a Setup toggle changes so the hunt restarts immediately.

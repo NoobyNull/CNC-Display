@@ -1,80 +1,85 @@
 #include "model/settings.h"
+#include "hw/display_hw.h"
 #include <Preferences.h>
 #include <string.h>
 
 static Preferences prefs;
 
 static bool     s_uart_en = true;
-static bool     s_wifi_en = false;
-static char     s_ssid[33] = { 0 };
-static char     s_pass[65] = { 0 };
-static char     s_host[64] = { 0 };
-static uint16_t s_port     = 23;
 static uint8_t  s_bright   = 200;
 static uint8_t  s_vibmode  = 0;   // monitor until deliberately armed
+static float    s_vib_hold = 0.5f;    // CNC-TW THRESHOLD_HOLD_RMS_G
+static float    s_vib_peak = 4.0f;    // CNC-TW THRESHOLD_ESTOP_PEAK_G
+static float    s_vib_jerk = 50.0f;   // CNC-TW THRESHOLD_ESTOP_JERK_GPS
 
+// The wifi_en / ssid / pass / host / port keys are deliberately not read back.
+// The WiFi transport is gone, and any values left in NVS from an older build are
+// dead weight rather than something to migrate.
 void settings_load() {
     prefs.begin("cncdisp", /*readOnly=*/true);
     s_uart_en = prefs.getBool("uart_en", true);
-    s_wifi_en = prefs.getBool("wifi_en", false);
-    prefs.getString("ssid", s_ssid, sizeof(s_ssid));
-    prefs.getString("pass", s_pass, sizeof(s_pass));
-    prefs.getString("host", s_host, sizeof(s_host));
-    s_port   = prefs.getUShort("port", 23);
     s_bright  = prefs.getUChar("bright", 200);
     s_vibmode  = prefs.getUChar("vibmode", 0);
+    s_vib_hold = prefs.getFloat("vibhold", 0.5f);
+    s_vib_peak = prefs.getFloat("vibpeak", 4.0f);
+    s_vib_jerk = prefs.getFloat("vibjerk", 50.0f);
     prefs.end();
 }
 
-static void put_bool(const char* k, bool v) {
+// An NVS write disables the flash cache while it erases and programs, and the
+// RGB panel's ISR is not IRAM-safe in arduino-esp32's prebuilt libs, so the DMA
+// loses its place and the frame shifts. Resync after every write rather than at
+// the call sites: brightness is adjusted with +/- buttons that each write a key,
+// so this path is hit far more often than "a few times in a machine's life".
+static void nvs_put_bool(const char* k, bool v) {
     prefs.begin("cncdisp", false); prefs.putBool(k, v); prefs.end();
+    display_resync();
+}
+
+static void nvs_put_uchar(const char* k, uint8_t v) {
+    prefs.begin("cncdisp", false); prefs.putUChar(k, v); prefs.end();
+    display_resync();
 }
 
 bool settings_uart_enabled() { return s_uart_en; }
 void settings_set_uart_enabled(bool on) {
     if (on == s_uart_en) return;
-    s_uart_en = on; put_bool("uart_en", on);
-}
-
-bool settings_wifi_enabled() { return s_wifi_en; }
-void settings_set_wifi_enabled(bool on) {
-    if (on == s_wifi_en) return;
-    s_wifi_en = on; put_bool("wifi_en", on);
-}
-
-const char* settings_wifi_ssid() { return s_ssid; }
-const char* settings_wifi_pass() { return s_pass; }
-
-void settings_set_wifi_creds(const char* ssid, const char* pass) {
-    if (ssid) { strncpy(s_ssid, ssid, sizeof(s_ssid) - 1); s_ssid[sizeof(s_ssid) - 1] = 0; }
-    if (pass) { strncpy(s_pass, pass, sizeof(s_pass) - 1); s_pass[sizeof(s_pass) - 1] = 0; }
-    prefs.begin("cncdisp", false);
-    prefs.putString("ssid", s_ssid);
-    prefs.putString("pass", s_pass);
-    prefs.end();
-}
-
-const char* settings_fnc_host() { return s_host; }
-uint16_t    settings_fnc_port() { return s_port; }
-
-void settings_set_fnc_host(const char* host, uint16_t port) {
-    if (host) { strncpy(s_host, host, sizeof(s_host) - 1); s_host[sizeof(s_host) - 1] = 0; }
-    s_port = port ? port : 23;
-    prefs.begin("cncdisp", false);
-    prefs.putString("host", s_host);
-    prefs.putUShort("port", s_port);
-    prefs.end();
+    s_uart_en = on; nvs_put_bool("uart_en", on);
 }
 
 uint8_t settings_vib_mode() { return s_vibmode; }
 void settings_set_vib_mode(uint8_t m) {
     if (m > 2 || m == s_vibmode) return;
     s_vibmode = m;
-    prefs.begin("cncdisp", false); prefs.putUChar("vibmode", m); prefs.end();
+    nvs_put_uchar("vibmode", m);
+}
+
+float settings_vib_hold() { return s_vib_hold; }
+float settings_vib_peak() { return s_vib_peak; }
+float settings_vib_jerk() { return s_vib_jerk; }
+
+// Clamped rather than trusted. These decide whether a running machine gets
+// stopped: a zero or negative threshold would either fire constantly or never,
+// and both are worse than a badly-chosen but sane number.
+void settings_set_vib_thresholds(float hold_g, float peak_g, float jerk_gps) {
+    if (hold_g   < 0.05f) hold_g   = 0.05f;   if (hold_g   > 5.0f)   hold_g   = 5.0f;
+    if (peak_g   < 0.5f)  peak_g   = 0.5f;    if (peak_g   > 16.0f)  peak_g   = 16.0f;
+    if (jerk_gps < 5.0f)  jerk_gps = 5.0f;    if (jerk_gps > 500.0f) jerk_gps = 500.0f;
+
+    if (hold_g == s_vib_hold && peak_g == s_vib_peak && jerk_gps == s_vib_jerk) return;
+    s_vib_hold = hold_g; s_vib_peak = peak_g; s_vib_jerk = jerk_gps;
+
+    prefs.begin("cncdisp", false);
+    prefs.putFloat("vibhold", s_vib_hold);
+    prefs.putFloat("vibpeak", s_vib_peak);
+    prefs.putFloat("vibjerk", s_vib_jerk);
+    prefs.end();
+    display_resync();
 }
 
 uint8_t settings_brightness() { return s_bright; }
 void settings_set_brightness(uint8_t b) {
+    if (b == s_bright) return;      // the +/- buttons clamp, so this repeats at the ends
     s_bright = b;
-    prefs.begin("cncdisp", false); prefs.putUChar("bright", b); prefs.end();
+    nvs_put_uchar("bright", b);
 }

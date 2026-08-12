@@ -34,8 +34,8 @@ unsigned long fnc_tx_count();
 void     fnc_set_baud(uint32_t baud);
 uint32_t fnc_get_baud();
 
-// Raw UART access. fnc_putchar/fnc_getchar live in transport.cpp, which picks
-// between this and the WiFi link at runtime.
+// Raw UART access. fnc_putchar/fnc_getchar live in transport.cpp, for which
+// this is now the only transport.
 void uart_putc(uint8_t c);
 int  uart_getc();
 bool uart_rx_waiting();
