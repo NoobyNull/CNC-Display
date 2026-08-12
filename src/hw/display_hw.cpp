@@ -1,6 +1,8 @@
 #include "display_hw.h"
 #include "touch.h"
 #include "io_expander.h"
+#include "model/screensaver.h"
+#include "model/settings.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -179,4 +181,26 @@ void set_backlight(uint8_t level) {
 
 uint8_t get_backlight() {
   return current_brightness;
+}
+
+// ============================================================
+// Idle blanking
+// ============================================================
+// The decision lives in model/screensaver.cpp so it can be tested on the host;
+// all this does is follow it with the enable line. See display_hw.h for why the
+// enable line and not the PWM.
+void screen_idle_tick(bool machine_busy) {
+  const bool was_off = screensaver_is_off();
+  screensaver_update(lv_disp_get_inactive_time(NULL),
+                     settings_screen_off_min(), machine_busy);
+  const bool now_off = screensaver_is_off();
+  if (now_off == was_off) return;
+
+  ioexp_write(EXIO_DISP, !now_off);
+  if (!now_off) {
+    // Woken by something other than the finger -- the machine started moving,
+    // or the timeout was turned off. Restart the idle clock so it does not
+    // blank again on the very next tick.
+    lv_disp_trig_activity(NULL);
+  }
 }

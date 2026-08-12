@@ -18,3 +18,12 @@ void display_resync();
 
 void set_backlight(uint8_t level);   // 0=off, 255=max. Drives the io-extender PWM.
 uint8_t get_backlight();
+
+// Idle blanking. Call once per UI tick with whatever the machine is doing;
+// screen_idle_tick() reads the timeout from settings and drives the backlight.
+//
+// It gates the panel's EXIO_DISP enable line rather than winding the PWM down,
+// because ioexp_backlight() clamps at 247/255 -- past that the boost converter
+// latches off and only a power cycle brings it back. So "dimmest" is as dark as
+// the PWM safely goes, while the enable line is a real off and reversible.
+void screen_idle_tick(bool machine_busy);

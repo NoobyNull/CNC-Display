@@ -398,6 +398,19 @@ void shell_set_expanded(bool on) {
     }
 }
 
+// Only a machine that is genuinely sitting still lets the panel go dark. Every
+// alarm state counts as busy: an alarm you cannot see is an alarm nobody acts
+// on. Disconnected counts as idle -- a panel with no controller answering has
+// no reason to stay lit all night.
+static bool machine_busy(state_t s) {
+    switch (s) {
+        case Idle:
+        case Disconnected:
+        case GrblSleep:   return false;
+        default:          return true;
+    }
+}
+
 // E4_POS_T stores positions as fixed point with 4 decimal places.
 static void fmt_pos(char* out, size_t n, pos_t v) {
     snprintf(out, n, "%s", e4_to_cstr(v, 3));
@@ -451,4 +464,6 @@ void shell_tick() {
         default: break;
     }
     expanded_tick();
+
+    screen_idle_tick(machine_busy(state));
 }

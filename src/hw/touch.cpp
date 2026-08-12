@@ -1,5 +1,6 @@
 #include "touch.h"
 #include "io_expander.h"
+#include "model/screensaver.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -177,6 +178,14 @@ void touch_poll() {
 // press is reported on the first poll that sees a finger.
 void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     (void)drv;
+    if (!screensaver_touch_allowed(touch_down)) {
+        // Blanked, or still holding the press that woke it. A finger on the
+        // glass is not idleness, so keep the clock fresh -- otherwise the panel
+        // would re-blank underneath a held finger.
+        if (touch_down) lv_disp_trig_activity(NULL);
+        data->state = LV_INDEV_STATE_REL;
+        return;
+    }
     data->point.x = touch_x;
     data->point.y = touch_y;
     data->state   = touch_down ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;

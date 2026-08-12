@@ -23,3 +23,9 @@ void  settings_set_vib_thresholds(float hold_g, float peak_g, float jerk_gps);
 
 uint8_t settings_brightness();
 void    settings_set_brightness(uint8_t b);
+
+// Minutes of no touch before the backlight goes off, 0..60. 0 = never blank,
+// and that is the default: a panel that goes dark unasked next to a running
+// spindle is the wrong surprise, so this is opt-in.
+uint8_t settings_screen_off_min();
+void    settings_set_screen_off_min(uint8_t m);

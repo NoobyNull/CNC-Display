@@ -271,7 +271,7 @@ least half the peak threshold — an impact is fast **and** large.
 | Board wiki | https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-7B |
 | Vendor demos | https://github.com/waveshareteam/ESP32-S3-Touch-LCD-7B |
 | Build | `pio run -e ws7b` |
-| Tests | `pio test -e native` (51 cases) |
+| Tests | `pio test -e native` (65 cases) |
 | Repo | `https://git.yax.family/matthew/CNC-Disply` |
 
 ### Topology
@@ -309,9 +309,13 @@ picked off cell width, since a 40px `-1234.567` clips at four columns.
 
 - **RS485 on GPIO 15/16 is unused.** It is the better long-cable link to the
   machine if the Corgi end ever gets a transceiver.
-- **`corgi_config.yaml:184`** sets the Airedale passthrough to `57600` / `8E1`
-  while the panel probes 1M and 115200, both `8N1`. Those cannot meet. Decide
-  which end moves before wiring the pendant.
+- ~~**`corgi_config.yaml:184`** passthrough baud mismatch~~ — **not a mismatch.**
+  `passthrough_baud`/`passthrough_mode` are read only by `Uart::enterPassthrough()`
+  (`Uart.cpp:99`), reached only via the `$Uart/Passthrough` command, which
+  forwards firmware uploads through the Corgi to a downstream MCU. Normal pendant
+  traffic uses `uart2`'s own `baud: 1000000` / `mode: 8N1` — exactly what
+  `transport.cpp:12` probes first. 57600/8E1 is the Airedale's reflash rate and
+  should stay.
 - **The keyboard is a singleton** — `w_keyboard()` returns one object and both
   `page_diag.cpp` and `page_setup.cpp` used to attach their own `kb_done_cb` to
   it. Setup's is gone with the WiFi fields; if a second page ever needs the

@@ -11,6 +11,7 @@ static uint8_t  s_vibmode  = 0;   // monitor until deliberately armed
 static float    s_vib_hold = 0.5f;    // CNC-TW THRESHOLD_HOLD_RMS_G
 static float    s_vib_peak = 4.0f;    // CNC-TW THRESHOLD_ESTOP_PEAK_G
 static float    s_vib_jerk = 50.0f;   // CNC-TW THRESHOLD_ESTOP_JERK_GPS
+static uint8_t  s_scroff   = 0;       // minutes; 0 = never blank
 
 // The wifi_en / ssid / pass / host / port keys are deliberately not read back.
 // The WiFi transport is gone, and any values left in NVS from an older build are
@@ -23,6 +24,7 @@ void settings_load() {
     s_vib_hold = prefs.getFloat("vibhold", 0.5f);
     s_vib_peak = prefs.getFloat("vibpeak", 4.0f);
     s_vib_jerk = prefs.getFloat("vibjerk", 50.0f);
+    s_scroff   = prefs.getUChar("scroff", 0);
     prefs.end();
 }
 
@@ -82,4 +84,12 @@ void settings_set_brightness(uint8_t b) {
     if (b == s_bright) return;      // the +/- buttons clamp, so this repeats at the ends
     s_bright = b;
     nvs_put_uchar("bright", b);
+}
+
+uint8_t settings_screen_off_min() { return s_scroff; }
+void settings_set_screen_off_min(uint8_t m) {
+    if (m > 60) m = 60;
+    if (m == s_scroff) return;
+    s_scroff = m;
+    nvs_put_uchar("scroff", m);
 }
