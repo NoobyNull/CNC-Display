@@ -1,22 +1,103 @@
-# Handoff — CNC Console, 2026-08-10
+# Handoff — CNC Console, 2026-08-11
 
 The firmware moved from the Elecrow CrowPanel Advance 7.0" to the **Waveshare
 ESP32-S3-Touch-LCD-7B**. The old board was abandoned because it could not be put
 into download mode: its CH340's TX line was dead and EN was shorted to IO0. None
 of that survives here — the 7B flashes over native USB.
 
-Everything above the driver layer is unchanged. The port touched the panel, the
-touch reset path, the SD card, the console, and the layout constants.
-
 ---
 
 ## Status
 
-Builds clean (`23.8%` flash of a 6 MB app partition, `28.6%` RAM), 51/51 host
-tests pass. **Nothing has run on the new hardware** — it arrives 2026-08-11.
-Work through the acceptance checklist at the end of the plan document once it
-does; the one that matters most is still: press a jog key, slide your finger off
-without lifting, confirm the axis stops (`LV_EVENT_PRESS_LOST`).
+**First hardware bring-up is done.** The panel draws, touch works, the UI is up
+and interactive. `13.6%` flash of a 6 MB app partition, `20.6%` RAM, 58/58 host
+tests pass.
+
+The jog acceptance test passes: press a jog key, slide off without lifting, the
+axis stops (`LV_EVENT_PRESS_LOST`). That only worked after the GT911 press-state
+fix below — before it, the press never survived long enough to be lost.
+
+**Not yet verified against hardware:**
+
+- **The machine link.** Nothing has been wired to the UART terminal yet, so the
+  A-axis DRO, the file list and every `$`-command path are untested end to end.
+  `transport_poll()` cycling 1M/115200 with `rx=0` is correct behaviour with
+  nothing on the wire, not a fault.
+- **The vibration guard.** No IMU has ever successfully sat on this bus, so the
+  jerk histogram, thresholds and smoothed peak are covered by host tests only.
+
+---
+
+## Bring-up: what actually went wrong
+
+Five days of assumptions died on contact with the hardware. In order of how long
+each cost:
+
+### The panel was white because LovyanGFX cannot express these timings
+
+`Bus_RGB::config_t` stores every porch and pulse width in an **`int8_t`**
+(`Bus_RGB.hpp:85-90`, still true on upstream master). Waveshare's real values —
+`hsync_pulse_width 162`, `hsync_back_porch 152` — wrap to **-94** and **-104**.
+The horizontal timing generator gets garbage, the panel never syncs, and the
+screen sits white with the backlight lit.
+
+Everything else checked out and wasted hours: the pin map matches Waveshare's
+`rgb_lcd_port.h` exactly, so do the timings, the PCLK and the io-extender.
+
+### Then it was static, because LovyanGFX has no bounce buffer
+
+`Panel_RGB::initFrameBuffer()` unconditionally puts the whole framebuffer in
+PSRAM — its `use_psram` field is literally marked `unimplemented`, and the code
+comments itself as "provisional implementation ... ToDo: split allocation".
+Streaming 1.2 MB per frame straight out of PSRAM while LVGL writes into it
+produces static-TV noise. Dropping PCLK to 21 MHz reduced it; nothing removed it.
+
+**The driver is now ESP-IDF `esp_lcd_rgb_panel` directly** (`display_hw.cpp`):
+`uint32_t` timings so the true 162/152 are restored, two DRAM bounce buffers
+(`1024*10` px), full 30 MHz. LovyanGFX is no longer in the display path.
+
+### Touch worked all along; we were throwing the press away
+
+`touch_poll()` treated GT911 status `0x00` as a finger lift. It means "no fresh
+scan since you last cleared the buffer" — the normal case, since we poll at 50Hz
+and the controller refreshes slower. `touch_down` was dropping to false between
+refreshes, flickering the press faster than LVGL samples the input device.
+Press-and-hold on a jog key was impossible. Now the previous state stands unless
+bit 7 is set.
+
+### An SD card can stop the board booting entirely
+
+A faulty microSD in the slot pulls the 3.3 V rail down hard enough that the chip
+never starts — **no USB enumeration at all**, which is below firmware and below
+boot mode. Symptom is indistinguishable from a dead board or a charge-only cable.
+A known-good card behaves perfectly. If the panel is completely dark, pull the
+card before suspecting anything else.
+
+### A miswired I2C device takes out every input on the panel
+
+An ICM-20948 wired wrong held a line low and wedged the bus. `ESP_ERR_INVALID_STATE`
+on every transaction from then on — and since the GT911 shares SDA 8 / SCL 9,
+**all touch died, safety bar included**. `touch_poll()` now counts consecutive
+failures and re-inits the bus after 25 (~0.5 s), and `imu_probe()` recovers the
+bus after a failed probe, because SparkFun's `begin()` against a missing device
+is what wedges it in the first place.
+
+---
+
+## WiFi was removed
+
+The WiFi/Telnet transport is gone: `wifi_link.{h,cpp}` deleted, `TRANSPORT_WIFI`,
+the Telnet host/port settings and the Setup credentials UI with it.
+
+The ESP32-S3's WiFi stack blacks out the flash cache, and arduino-esp32 ships its
+prebuilt libs with **`CONFIG_LCD_RGB_ISR_IRAM_SAFE` unset** — so the RGB panel's
+ISR cannot run during those blackouts, the DMA loses sync and the display tears
+and drifts. Bounce buffers do not cover it. It cost 623 KB of flash and the
+machine link is a cable anyway.
+
+`display_resync()` survives that removal and is called after every **NVS write**,
+which blanks the cache the same way — the brightness +/- buttons write a key per
+press.
 
 ---
 
@@ -164,10 +245,43 @@ The Airdale is a passthrough, not the controller. FluidNC runs on the Corgi, and
 its SD card is unreachable inside a sealed box — which is why the panel's own
 card is the G-code source.
 
+### Layout: everything derives from the panel now
+
+The port left the CrowPanel's constants in place and the extra 120 px showed as
+dead space on every page. All of it is now computed from `CONTENT_H` / `SCREEN_H`
+rather than fixed, so a future panel reflows on its own:
+
+| Was | Now | Where |
+|---|---|---|
+| `NAV_VISIBLE 5` | 6 | `shell.cpp` — 5 exactly filled the 480px CrowPanel |
+| `ROWS 3` (files) | 4 | `page_run.cpp` |
+| `ROWS 5` (settings) | 8 | `page_diag.cpp` |
+| `VISIBLE_ROWS 6` (WCS) | 9 | `page_offsets.cpp` — G54–G59 with no scrolling |
+| `PAD = U*30` | `CONTENT_H - U*2` | `page_jog.cpp` |
+
+The derivation reproduces every one of the old constants exactly when fed the
+CrowPanel's 240px page — which is how we know they were stale rather than chosen.
+
+**The DRO follows `n_axes` from FluidNC** instead of clamping to 3, so the Corgi's
+A axis appears on its own. Readout font steps 40 → 28 → 20 px as cells narrow,
+picked off cell width, since a 40px `-1234.567` clips at four columns.
+
 ### Still open
 
-- **Layout has 47% more content height** (376 px vs 256) and 224 px more width.
-  Nothing was redesigned to use it; the grid just reflowed. Worth a look once
-  you can see it.
 - **RS485 on GPIO 15/16 is unused.** It is the better long-cable link to the
   machine if the Corgi end ever gets a transceiver.
+- **`corgi_config.yaml:184`** sets the Airedale passthrough to `57600` / `8E1`
+  while the panel probes 1M and 115200, both `8N1`. Those cannot meet. Decide
+  which end moves before wiring the pendant.
+- **The keyboard is a singleton** — `w_keyboard()` returns one object and both
+  `page_diag.cpp` and `page_setup.cpp` used to attach their own `kb_done_cb` to
+  it. Setup's is gone with the WiFi fields; if a second page ever needs the
+  keyboard, the handlers will fight.
+- **LVGL's shift key is labelled `ABC`**, bottom-left of the second row. Not
+  discoverable. Custom keymaps would fix it, ~20 lines.
+- **CNC-TW still escalates to e-stop on jerk alone** (see above). Not fixed
+  there. Its `smoothed_peak`, `rms_rate` and `margin` feed a 5-level feed-override
+  ladder this panel does not have — only `smoothed_peak` was ported.
+- **`xtensa/config/core.h` includes `"../hal.h"`, which does not exist.** GCC
+  survives on search-path fallback; clangd does not, so every file reaching
+  `<Arduino.h>` shows one editor-only error. The build is unaffected.

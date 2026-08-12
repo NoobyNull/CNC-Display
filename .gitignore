@@ -30,3 +30,6 @@ cad/*.FCStd1
 cad/*.stl
 cad/*.FCBak
 cad/print/
+
+# clangd compilation database, regenerate with: pio run -e ws7b -t compiledb
+compile_commands.json
