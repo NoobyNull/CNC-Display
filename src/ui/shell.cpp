@@ -15,7 +15,7 @@
 // panel height, with every target at the full 10U. Fitting all eight at once
 // would mean 7.5U items and a broken grid; a nested menu would cost a tap on
 // things used constantly.
-#define NAV_COUNT   8
+#define NAV_COUNT   9
 
 // How many nav slots fit in the rail between the two scroll arrows. Derived from
 // the panel rather than fixed: this was hardcoded to 5, which exactly filled the
@@ -28,7 +28,7 @@ static const int NAV_VISIBLE = NAV_FIT > NAV_COUNT ? NAV_COUNT : NAV_FIT;
 static_assert(NAV_VISIBLE >= 1, "rail is too short for a single nav slot");
 
 static const char* NAV_LABEL[NAV_COUNT] = {
-    "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "DIAG", "SETUP"
+    "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "CAL", "DIAG", "SETUP"
 };
 
 static lv_obj_t* s_scr;
@@ -358,7 +358,8 @@ void shell_build() {
 
     page_build_fn BUILD[PAGE_COUNT] = {
         page_jog_build, page_home_build, page_probe_build, page_offsets_build,
-        page_run_build, page_macro_build, page_diag_build, page_setup_build
+        page_run_build, page_macro_build, page_cal_build,
+        page_diag_build, page_setup_build
     };
     for (int i = 0; i < PAGE_COUNT; i++) {
         s_pages[i] = lv_obj_create(s_content);
@@ -461,6 +462,7 @@ void shell_tick() {
         case PAGE_RUN:     page_run_tick();     break;
         case PAGE_SETUP:   page_setup_tick();   break;
         case PAGE_DIAG:    page_diag_tick();    break;
+        case PAGE_CAL:     page_cal_tick();     break;
         default: break;
     }
     expanded_tick();

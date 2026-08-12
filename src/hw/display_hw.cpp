@@ -189,18 +189,28 @@ uint8_t get_backlight() {
 // The decision lives in model/screensaver.cpp so it can be tested on the host;
 // all this does is follow it with the enable line. See display_hw.h for why the
 // enable line and not the PWM.
+// What the backlight is actually doing, tracked here rather than inferred from
+// the screensaver's own state.
+//
+// Inferring it was a bug that left the panel permanently dark: the touch driver
+// clears the blanked flag itself when it swallows the wake tap, so by the time
+// this ran there was no transition left to see, the backlight was never
+// re-enabled, and nothing afterwards could recover it. Comparing "what the
+// screensaver wants" against "what the hardware is doing" cannot miss an edge,
+// whoever moved it.
+static bool s_backlight_off = false;
+
 void screen_idle_tick(bool machine_busy) {
-  const bool was_off = screensaver_is_off();
   screensaver_update(lv_disp_get_inactive_time(NULL),
                      settings_screen_off_min(), machine_busy);
-  const bool now_off = screensaver_is_off();
-  if (now_off == was_off) return;
 
-  ioexp_write(EXIO_DISP, !now_off);
-  if (!now_off) {
-    // Woken by something other than the finger -- the machine started moving,
-    // or the timeout was turned off. Restart the idle clock so it does not
-    // blank again on the very next tick.
+  const bool want_off = screensaver_is_off();
+  if (want_off == s_backlight_off) return;
+
+  s_backlight_off = want_off;
+  ioexp_write(EXIO_DISP, !want_off);
+  if (!want_off) {
+    // Restart the idle clock so a wake does not blank again on the next tick.
     lv_disp_trig_activity(NULL);
   }
 }
