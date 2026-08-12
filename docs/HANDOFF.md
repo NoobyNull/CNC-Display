@@ -17,14 +17,53 @@ The jog acceptance test passes: press a jog key, slide off without lifting, the
 axis stops (`LV_EVENT_PRESS_LOST`). That only worked after the GT911 press-state
 fix below — before it, the press never survived long enough to be lost.
 
-**Not yet verified against hardware:**
+**The link is proven, against a stand-in controller.** An FTDI on the UART
+terminal answering `?` with a 4-axis Grbl status report brings the panel fully
+up: it locks the baud, leaves `Disconnected`, fires `$#` and
+`$Files/ListGCode=/sd` from `prime_link_if_up()`, and the DRO grows its **A
+column and tracks it live**. So the transport, GrblParserC, the priming path and
+the multi-axis layout are all confirmed — only the real machine at the far end
+is untested.
 
-- **The machine link.** Nothing has been wired to the UART terminal yet, so the
-  A-axis DRO, the file list and every `$`-command path are untested end to end.
-  `transport_poll()` cycling 1M/115200 with `rx=0` is correct behaviour with
-  nothing on the wire, not a fault.
+Reproduce it with `fakefluidnc.py` (see below): it answers status polls and
+pushes a report every 200ms, which is what `$RI=200` asks for. Without the
+periodic push the panel decides the link went away.
+
+**Still not verified against hardware:**
+
+- **The real controller.** See the Airedale baud/parity note under *Still open* —
+  the stand-in worked because it spoke 115200 8N1, which is what the panel
+  already hunts for. The Corgi as configured does not.
 - **The vibration guard.** No IMU has ever successfully sat on this bus, so the
   jerk histogram, thresholds and smoothed peak are covered by host tests only.
+  The one that was wired held an I2C line low and took out all touch until it
+  was unplugged — see below.
+
+---
+
+## Bringing the panel up with no machine attached
+
+An FTDI on the UART terminal is enough to exercise everything above the wire.
+`tools/fakefluidnc.py` answers `?` with a 4-axis report and `ok` to every line,
+so `send_line()` never spins in `_ackwait`:
+
+```bash
+python3 tools/fakefluidnc.py /dev/ttyUSB0 115200 120
+```
+
+Two things that cost time working this out:
+
+- **"Wired UART" persists in NVS.** With the Setup toggle off, `s_active` stays
+  `TRANSPORT_NONE` and `fnc_putchar()` writes nothing at all — the panel is
+  silent on the wire and it looks exactly like miswiring. Check the toggle before
+  suspecting TX/RX.
+- **The UART1/UART2 switch** routes the one UART peripheral to a single PH2.0
+  terminal. The other terminal is electrically dead. Waveshare's docs describe
+  the switch as selecting between the two terminals, *not* between the CH343 and
+  a terminal as an earlier revision of this document claimed.
+- **Which Type-C is which:** `303a:1001` is the native USB (flashing + `Serial`
+  console); `1a86:55d3` is the CH343 USB-UART. The VID tells you which port the
+  cable is in when the silkscreen does not.
 
 ---
 
