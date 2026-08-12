@@ -28,6 +28,19 @@ void i2c_give() {
     if (i2c_mutex) xSemaphoreGive(i2c_mutex);
 }
 
+// Tear the I2C master down and bring it back up. A device that holds SDA or SCL
+// low — a miswired breakout on the I2C terminal will do it — leaves the ng
+// driver returning ESP_ERR_INVALID_STATE on every transaction from then on, and
+// since the GT911 shares this bus that silently costs every touch input on the
+// panel, safety bar included. Observed on hardware, not hypothetical.
+//
+// Caller must hold the mutex.
+void i2c_bus_recover() {
+    Wire.end();
+    Wire.begin(GT911_SDA_PIN, GT911_SCL_PIN);
+    Wire.setClock(400000);
+}
+
 // ============================================================
 // GT911 touch — direct I2C via Wire
 // ============================================================
@@ -38,6 +51,7 @@ static volatile uint16_t touch_x = 0;
 static volatile uint16_t touch_y = 0;
 
 static uint32_t touch_err_timer = 0;   // rate-limit error logging
+static uint16_t s_err_run = 0;         // consecutive I2C failures
 
 void touch_init() {
     i2c_mutex = xSemaphoreCreateMutex();
@@ -92,6 +106,16 @@ void touch_poll() {
     Wire.write(0x4E);
     int err = Wire.endTransmission();
     if (err != 0) {
+        // A run of failures means the bus is wedged, not that one read was
+        // unlucky — most likely a device on the I2C terminal holding a line low.
+        // Recover it rather than losing touch until the next power cycle: the
+        // safety bar lives behind this input. 25 polls is about half a second,
+        // long enough that a transient never triggers it.
+        if (++s_err_run >= 25) {
+            s_err_run = 0;
+            i2c_bus_recover();
+            Serial.println("[i2c] bus wedged — re-initialised");
+        }
         i2c_give();
         if (millis() - touch_err_timer > 2000) {
             touch_err_timer = millis();
@@ -100,6 +124,7 @@ void touch_poll() {
         touch_down = false;
         return;
     }
+    s_err_run = 0;
 
     Wire.requestFrom(gt911_addr, (uint8_t)1);
     if (!Wire.available()) {
@@ -111,7 +136,18 @@ void touch_poll() {
     uint8_t status  = Wire.read();
     uint8_t touches = status & 0x0F;
 
-    if ((status & 0x80) && touches > 0) {
+    // Bit 7 is "a fresh scan is waiting". With it clear the controller simply has
+    // not re-scanned since we last emptied the buffer, which is the normal case:
+    // we poll at 50Hz and the GT911 refreshes slower. That is NOT a finger lift,
+    // so the previous state has to stand — treating it as a release drops
+    // touch_down for a poll at a time, which flickers the press faster than LVGL
+    // samples the input device and makes press-and-hold on a jog key impossible.
+    if (!(status & 0x80)) {
+        i2c_give();
+        return;
+    }
+
+    if (touches > 0) {
         // Touch point 0 at 0x8150
         Wire.beginTransmission(gt911_addr);
         Wire.write(0x81);
@@ -124,10 +160,10 @@ void touch_poll() {
             touch_down = true;
         }
     } else {
-        touch_down = false;
+        touch_down = false;         // fresh scan, zero points = a real lift
     }
 
-    // Clear the status register
+    // Clear the status register, but only having consumed a fresh scan.
     Wire.beginTransmission(gt911_addr);
     Wire.write(0x81);
     Wire.write(0x4E);
