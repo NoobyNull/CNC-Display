@@ -17,5 +17,11 @@ void screensaver_update(uint32_t inactive_ms, uint8_t timeout_min, bool machine_
 bool screensaver_is_off();
 
 // Call once per touch poll. True when the sample should reach the UI. False
-// while blanked, and for the whole press that wakes the panel.
-bool screensaver_touch_allowed(bool touch_down);
+// while blanked, and for the press that wakes the panel.
+//
+// now_ms bounds how long a wake press can be swallowed. Waiting only for the
+// finger to lift was a bug that killed touch outright: the GT911 holds its last
+// state when it stops producing fresh scans, so a stuck touch_down meant the
+// release never arrived, every sample was swallowed for ever, and the only way
+// back was a power cycle. Nothing here may depend on seeing a release.
+bool screensaver_touch_allowed(bool touch_down, uint32_t now_ms);

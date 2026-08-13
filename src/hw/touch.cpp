@@ -178,7 +178,7 @@ void touch_poll() {
 // press is reported on the first poll that sees a finger.
 void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     (void)drv;
-    if (!screensaver_touch_allowed(touch_down)) {
+    if (!screensaver_touch_allowed(touch_down, millis())) {
         // Blanked, or still holding the press that woke it. A finger on the
         // glass is not idleness, so keep the clock fresh -- otherwise the panel
         // would re-blank underneath a held finger.
