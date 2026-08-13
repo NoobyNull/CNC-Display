@@ -54,6 +54,7 @@ void setup() {
     gt911_reset();         // address strap is latched here, before any probing
     display_init();        // LCD rails + RGB panel
     gt911_discover();
+    gt911_dump_config();   // read-only; the stall lead lives at 0x804D and 0x8055
     lvgl_init();
     set_backlight(settings_brightness());
 
@@ -152,13 +153,13 @@ static void link_watchdog() {
                   (unsigned)settings_screen_off_min(),
                   (unsigned long)(lv_disp_get_inactive_time(NULL) / 1000),
                   screensaver_is_off() ? " BLANK" : "");
-    Serial.printf("[touch] down=%d scans=%lu polls=%lu lockfail=%lu staterr=%lu resets=%lu\n",
+    Serial.printf("[touch] down=%d scans=%lu polls=%lu lockfail=%lu staterr=%lu int=%u stat=0x%02X\n",
                   touch_is_down() ? 1 : 0,
                   (unsigned long)touch_fresh_count(),
                   (unsigned long)touch_poll_count(),
                   (unsigned long)touch_lock_fails(),
                   (unsigned long)touch_stat_errs(),
-                  (unsigned long)touch_reset_count());
+                  touch_int_level(), touch_last_status());
 }
 
 static void prime_link_if_up() {

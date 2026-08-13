@@ -22,15 +22,20 @@ void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);  // LVGL callbac
 bool i2c_take(uint32_t timeout_ms = 10);
 void i2c_give();
 
-// Diagnostics. fresh_count rises every time the GT911 reports a new scan, so a
-// stalled counter means the controller has gone quiet even though the bus is
-// answering; reset_count is how often the watchdog has had to revive it.
+// Diagnostics. fresh_count rises every time the GT911 reports a new scan. A
+// stalled counter is NOT a fault: this chip reports only while something is
+// happening, so untouched it stops at whatever it last reached. See touch.cpp.
 bool     touch_is_down();
 uint32_t touch_fresh_count();
-uint32_t touch_reset_count();
 uint32_t touch_poll_count();   // polls attempted
 uint32_t touch_lock_fails();   // polls that lost the I2C mutex
 uint32_t touch_stat_errs();    // status reads the chip refused
+uint8_t  touch_int_level();    // live INT pin level -- stuck high/low is diagnostic
+uint8_t  touch_last_status();  // last 0x814E byte seen
+
+// Print the GT911's stored configuration. Read-only: nothing is ever written
+// back, see the implementation for why.
+void gt911_dump_config();
 
 // Re-init the I2C master after a device wedges the bus. Caller must hold the
 // mutex. See the implementation for why this is not paranoia.
