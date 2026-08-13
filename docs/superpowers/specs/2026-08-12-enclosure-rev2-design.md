@@ -84,8 +84,23 @@ in supports.
 - Entry through the **rear wall**, alongside the existing 11 × 30 loom slot, so
   the cable still leaves pointing down at the arm and drops into its tray.
 - Two-screw printed saddle clamping the jacket, immediately inside the entry.
-- Shallow tray with a retaining lip for the adapter board, on the rear wall
-  inboard of the entry, sized by the constants below.
+- Adapter board mounted on two printed bosses, on the rear wall inboard of the
+  entry.
+
+Measured board:
+
+```
+RJ_BOARD_X    = 30.0    # along the edge the holes reference
+RJ_BOARD_Z    = 28.0
+RJ_HOLE_D     = 3.25    # M3 clearance
+RJ_HOLE_PITCH = 21.0    # centred on the 30mm span -> 4.5mm from each end
+RJ_HOLE_EDGE  = 4.25    # offset from the 30mm edge
+```
+
+Bosses are Ø7 with a 2.5mm pilot, so an M3 self-taps straight into the plastic;
+drill to 4.2 for a heat-set insert instead if the board will come out often. Two
+screws only, so the board is located by the pair plus a lip against one edge to
+stop it pivoting.
 
 ### Restart button
 
@@ -123,7 +138,7 @@ nothing is a guessed number.
 
 | Constant | Needed for | How to get it |
 |---|---|---|
-| `RJ_BOARD_X`, `RJ_BOARD_Z`, `RJ_BOARD_T`, hole pattern | Tray size and standoffs | Calipers, or export the outline from the EasyEDA project |
+| `RJ_STACK_H` — tallest thing on the adapter, measured from the board face | Bump-out/cavity clearance over the board | Calipers over the fitted RJ12 jack. **This is the one that can still bite:** a 6P6C jack stands ~13mm, which with a 1.6mm board is ~15mm of the 20.3mm cavity. It fits only where the panel PCB behind it is shallow, so the board's position depends on this number. If the jack is left unpopulated the problem disappears |
 | `RESTART_GPIO` | Firmware only | Flash a probe setting 6, 15 and 16 to `INPUT_PULLUP` and print them; short the header's GPIO to GND and read which drops. By elimination it is one of those three — CAN is muxed onto the USB pins per `EXIO_CAN_SEL`, so RS485 takes two and the sensor header the last. GPIO6 is the likely one |
 
 ## Verification
