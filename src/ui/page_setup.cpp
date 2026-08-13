@@ -19,16 +19,28 @@ static lv_obj_t* s_vib_chart;
 static lv_chart_series_t* s_vib_ser;
 static lv_obj_t* s_vib_lbl;
 
+// Shown as a percentage. The hardware is 0-255 and stays that way in NVS and in
+// set_backlight(); only the display and the step are in human units, because
+// "180" means nothing to anyone standing at the machine.
+static const int BRIGHT_MIN_PCT = 10;   // never fully dark - see below
+static const int BRIGHT_STEP_PCT = 5;
+
+static int bright_pct() { return ((int)get_backlight() * 100 + 127) / 255; }
+
 static void bright_cb(lv_event_t* e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
-    int b = (int)get_backlight() + dir * 25;
+    int pct = bright_pct() + dir * BRIGHT_STEP_PCT;
+    // Round to the step so the first press off an odd stored value lands tidily.
+    pct = (pct / BRIGHT_STEP_PCT) * BRIGHT_STEP_PCT;
     // Never fully dark: an unreadable panel next to a running spindle is a hazard.
-    if (b < 25)  b = 25;
-    if (b > 255) b = 255;
-    set_backlight((uint8_t)b);
-    settings_set_brightness((uint8_t)b);
+    if (pct < BRIGHT_MIN_PCT) pct = BRIGHT_MIN_PCT;
+    if (pct > 100)            pct = 100;
+
+    const uint8_t level = (uint8_t)((pct * 255 + 50) / 100);
+    set_backlight(level);
+    settings_set_brightness(level);
     char t[8];
-    snprintf(t, sizeof(t), "%d", b);
+    snprintf(t, sizeof(t), "%d%%", pct);
     lv_label_set_text(s_bright_lbl, t);
 }
 
@@ -238,7 +250,7 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_style_pad_row(right, U, 0);
 
     char b0[12];
-    snprintf(b0, sizeof(b0), "%d", (int)settings_brightness());
+    snprintf(b0, sizeof(b0), "%d%%", ((int)settings_brightness() * 100 + 127) / 255);
     s_bright_lbl = bump_row(right, "Brightness", b0, bright_cb);
 
     char s0[12];

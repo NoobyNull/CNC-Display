@@ -16,6 +16,7 @@
 #include "transport/uart.h"
 #include "transport/transport.h"
 #include "model/settings.h"
+#include "model/screensaver.h"
 #include "transport/xmodem_rx.h"
 #include "transport/xmodem_tx.h"
 #include "model/FluidNCModel.h"
@@ -145,9 +146,12 @@ static void link_watchdog() {
     transport_poll();
     if ((int32_t)(now - next_log) < 0) return;
     next_log = now + 2000;
-    Serial.printf("[link] %-10s %-32s state=%d rx=%lu tx=%lu\n",
+    Serial.printf("[link] %-10s %-32s state=%d rx=%lu tx=%lu  scroff=%umin idle=%lus%s\n",
                   transport_label(), transport_detail(),
-                  (int)state, fnc_rx_count(), fnc_tx_count());
+                  (int)state, fnc_rx_count(), fnc_tx_count(),
+                  (unsigned)settings_screen_off_min(),
+                  (unsigned long)(lv_disp_get_inactive_time(NULL) / 1000),
+                  screensaver_is_off() ? " BLANK" : "");
 }
 
 static void prime_link_if_up() {
