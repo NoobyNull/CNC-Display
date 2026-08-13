@@ -54,6 +54,30 @@ static volatile uint16_t touch_y = 0;
 static uint32_t touch_err_timer = 0;   // rate-limit error logging
 static uint16_t s_err_run = 0;         // consecutive I2C failures
 
+// The GT911's data-ready bit means "something changed", NOT "I am alive": with
+// no finger on the glass it legitimately reports nothing for as long as you
+// leave it alone. Measured on hardware — a few scans after reset, then silence.
+// So absence of scans is not a fault and must never trigger recovery, or the
+// controller gets reset every few seconds for the crime of being idle.
+//
+// What IS a fault is touch_down stuck asserted with no fresh scan to justify it.
+// touch_poll() keeps the last state when no new frame arrives, so a press that
+// is never followed by a release freezes the input: LVGL sees a permanent hold,
+// nothing new registers, and the panel looks dead. The s_err_run recovery below
+// cannot catch it because the bus is answering perfectly.
+//
+// That matters more here than on a tablet. The safety bar lives behind this
+// input, so silent loss of touch means no HOLD and no RESET on a running
+// machine.
+static uint32_t s_last_fresh_ms = 0;
+static uint32_t s_fresh_count   = 0;
+static uint32_t s_reset_count   = 0;
+static const uint32_t FRESH_STALE_MS = 5000;
+
+bool     touch_is_down()      { return touch_down; }
+uint32_t touch_fresh_count()  { return s_fresh_count; }
+uint32_t touch_reset_count()  { return s_reset_count; }
+
 void touch_init() {
     i2c_mutex = xSemaphoreCreateMutex();
     configASSERT(i2c_mutex != NULL);
@@ -95,6 +119,25 @@ void gt911_discover() {
         delay(100);
     }
     Serial.println("GT911 not found!");
+}
+
+// Full controller reset when it has gone quiet. Must be called with the mutex
+// RELEASED: gt911_reset() takes it again via ioexp_write(), and it blocks for
+// 300ms, so this only ever runs on the rare recovery path and never in the
+// normal poll.
+static void touch_watchdog() {
+    // Only a stuck PRESS is a fault. Idle silence is the normal state.
+    if (!touch_down) return;
+    if (s_last_fresh_ms == 0) return;                       // nothing seen yet
+    if (millis() - s_last_fresh_ms < FRESH_STALE_MS) return;
+
+    s_last_fresh_ms = millis();   // re-arm before the slow part, not after
+    ++s_reset_count;
+    Serial.printf("[touch] press stuck %lums with no new frame — resetting GT911 (%lu)\n",
+                  (unsigned long)FRESH_STALE_MS, (unsigned long)s_reset_count);
+    touch_down = false;
+    gt911_reset();
+    gt911_discover();
 }
 
 void touch_poll() {
@@ -145,8 +188,11 @@ void touch_poll() {
     // samples the input device and makes press-and-hold on a jog key impossible.
     if (!(status & 0x80)) {
         i2c_give();
+        touch_watchdog();
         return;
     }
+    s_last_fresh_ms = millis();
+    ++s_fresh_count;
 
     if (touches > 0) {
         // Touch point 0 at 0x8150
