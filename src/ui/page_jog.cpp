@@ -4,6 +4,7 @@
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
 #include "GrblParserC.h"
+#include <Arduino.h>
 #include <stdio.h>
 
 // The controls fill the page height rather than a fixed 240px. That constant
@@ -85,7 +86,14 @@ static void jog_chunk(lv_timer_t*) {
         return;
     }
     const float feed = continuous_feed();
+    // send_jog_line() is ack-gated on UART (jog_flow_control() == Blocking), so a
+    // chunk can sit in fnc_send_line()'s `while (_ackwait)` for its full timeout.
+    // This runs inside lv_timer_handler(), which also drives touch_poll and
+    // LVGL's input read -- so a slow chunk is a frozen panel, not a slow jog.
+    uint32_t t0 = millis();
     jog_send(&s_jog_dir, feed, feed / 60.0f * (JOG_TICK_MS / 1000.0f));
+    uint32_t dt = millis() - t0;
+    if (dt > 20) Serial.printf("[jog] chunk blocked %lums\n", (unsigned long)dt);
 }
 
 // Held past LVGL's 400ms long-press, the discrete step gives way to a continuous
@@ -120,11 +128,22 @@ static void jog_stop(lv_event_t*) {
     send_jog_cancel();
 }
 
+// Every key attach_jog() touched, so the link guard below has one list to walk.
+static lv_obj_t* s_jog_keys[10];
+static uint8_t   s_jog_key_n = 0;
+
 static void attach_jog(lv_obj_t* btn, const dir_t* d) {
     lv_obj_add_event_cb(btn, jog_start, LV_EVENT_PRESSED,      (void*)d);
     lv_obj_add_event_cb(btn, jog_hold,  LV_EVENT_LONG_PRESSED, (void*)d);
     lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_RELEASED,     (void*)d);
     lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_PRESS_LOST,   (void*)d);
+    // Dim rather than restyle: opa covers the glyph and the background together,
+    // so a disabled key reads as unavailable without a second colour to keep in
+    // step with the theme.
+    lv_obj_set_style_opa(btn, LV_OPA_40, LV_STATE_DISABLED);
+    if (s_jog_key_n < (uint8_t)(sizeof(s_jog_keys) / sizeof(s_jog_keys[0]))) {
+        s_jog_keys[s_jog_key_n++] = btn;
+    }
 }
 
 static void step_apply(int idx) {
@@ -267,4 +286,29 @@ void page_jog_build(lv_obj_t* p) {
     step_apply(s_step);   // paints the selector and the centre from one place
 }
 
-void page_jog_tick() {}
+// A jog key with no controller behind it is not a harmless no-op. send_jog_line()
+// is ack-gated on UART, so every press parks in fnc_send_line()'s `while
+// (_ackwait)` until the timeout expires -- inside the same lv_timer_handler()
+// pass that reads touch. Held past 400ms it is worse: jog_chunk() re-sends every
+// 150ms, each send costing more than the tick that scheduled it, so the timer is
+// permanently overdue, the input read is starved, and the release that would
+// call jog_stop() never arrives. The panel is then dead until a power cycle.
+//
+// lv_obj_hit_test() rejects LV_STATE_DISABLED outright, so disabling the keys
+// stops the press ever reaching an event handler -- no press, no long press, no
+// timer. And a key that cannot work must not look like it can.
+void page_jog_tick() {
+    static bool was_off = false;
+    bool off = (state == Disconnected);
+    if (off == was_off) return;
+    was_off = off;
+
+    for (uint8_t i = 0; i < s_jog_key_n; i++) {
+        if (off) lv_obj_add_state(s_jog_keys[i], LV_STATE_DISABLED);
+        else     lv_obj_clear_state(s_jog_keys[i], LV_STATE_DISABLED);
+    }
+    // A link that drops mid-hold must not leave the chunk timer running: it
+    // would keep asking a controller that is no longer answering, at the full
+    // ack timeout per tick.
+    if (off) jog_stop(nullptr);
+}
