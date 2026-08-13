@@ -15,8 +15,10 @@ static lv_obj_t* s_bright_lbl;
 static lv_obj_t* s_uart_sw;
 static lv_obj_t* s_status_lbl;
 static lv_obj_t* s_vib_btn[3];
-static lv_obj_t* s_vib_chart;
-static lv_chart_series_t* s_vib_ser;
+// The jerk histogram chart is gone. model/vibration.cpp still accumulates the
+// bins and still has its tests; nothing displays them now. Left in place rather
+// than ripped out, because the data is cheap to keep and the next person who
+// wants a distribution will want it back.
 static lv_obj_t* s_vib_lbl;
 
 // Shown as a percentage. The hardware is 0-255 and stays that way in NVS and in
@@ -72,16 +74,59 @@ static void uart_sw_cb(lv_event_t* e) {
 // Three thresholds, stepped by a percentage rather than a fixed amount: they
 // span 0.5g to 50g/s, so one absolute step size cannot suit all three.
 enum { VT_HOLD = 0, VT_PEAK, VT_JERK };
-static lv_obj_t* s_vt_lbl[3];
+static lv_obj_t* s_vt_thr[3];   // the threshold, under the name
+static lv_obj_t* s_vt_val[3];   // the live reading, right of the bar
+static lv_obj_t* s_vt_bar[3];
+
+// The bar shows the live reading measured against its own threshold, not
+// against the setting's absolute range. A cut at 0.5g means nothing on a 0-5g
+// scale; what matters is how much of the margin is used up. The threshold
+// therefore sits at a FIXED fraction of every bar, so all three read the same
+// way and the space past the tick is the overshoot you are not supposed to see.
+static const int BAR_RANGE   = 1000;
+static const int BAR_THR_PCT = 70;
 
 static void vt_refresh() {
-    char b[16];
-    snprintf(b, sizeof(b), "%.2f", (double)settings_vib_hold());
-    lv_label_set_text(s_vt_lbl[VT_HOLD], b);
-    snprintf(b, sizeof(b), "%.1f", (double)settings_vib_peak());
-    lv_label_set_text(s_vt_lbl[VT_PEAK], b);
-    snprintf(b, sizeof(b), "%.0f", (double)settings_vib_jerk());
-    lv_label_set_text(s_vt_lbl[VT_JERK], b);
+    char b[20];
+    snprintf(b, sizeof(b), "thr %.2f g",   (double)settings_vib_hold()); lv_label_set_text(s_vt_thr[VT_HOLD], b);
+    snprintf(b, sizeof(b), "thr %.1f g",   (double)settings_vib_peak()); lv_label_set_text(s_vt_thr[VT_PEAK], b);
+    snprintf(b, sizeof(b), "thr %.0f g/s", (double)settings_vib_jerk()); lv_label_set_text(s_vt_thr[VT_JERK], b);
+}
+
+// Live values into the bars. Called from the tick, so it must stay cheap.
+static void vt_bars_update(bool live) {
+    const vib_result_t* v = live ? vib_result() : nullptr;
+    // Smoothed figures, not raw: the raw peak and jerk twitch far faster than
+    // anyone can read, and a bar that blurs is worse than no bar.
+    const float reading[3] = {
+        v ? v->smoothed_rms : 0.0f, v ? v->smoothed_peak : 0.0f, v ? v->jerk : 0.0f
+    };
+    const float thr[3] = {
+        settings_vib_hold(), settings_vib_peak(), settings_vib_jerk()
+    };
+
+    for (int i = 0; i < 3; i++) {
+        const float ratio = thr[i] > 0.0f ? reading[i] / thr[i] : 0.0f;
+        int fill = (int)(ratio * BAR_THR_PCT * (BAR_RANGE / 100.0f));
+        if (fill < 0)         fill = 0;
+        if (fill > BAR_RANGE) fill = BAR_RANGE;
+        lv_bar_set_value(s_vt_bar[i], fill, LV_ANIM_OFF);
+
+        // Amber before the tick, not at it: a guard you only notice once it has
+        // already fired is a guard you cannot tune.
+        lv_obj_set_style_bg_color(s_vt_bar[i],
+            !live      ? C_LINE :
+            ratio >= 1.0f ? C_CRIT :
+            ratio >= 0.75f ? C_WARN : C_OK,
+            LV_PART_INDICATOR);
+
+        char b[16];
+        if (!live)      snprintf(b, sizeof(b), "--");
+        else if (i == VT_JERK) snprintf(b, sizeof(b), "%.0f", (double)reading[i]);
+        else                   snprintf(b, sizeof(b), "%.2f", (double)reading[i]);
+        lv_label_set_text(s_vt_val[i], b);
+        lv_obj_set_style_text_color(s_vt_val[i], live ? C_TEXT : C_DIM, 0);
+    }
 }
 
 static void vt_bump_cb(lv_event_t* e) {
@@ -103,33 +148,61 @@ static void vt_bump_cb(lv_event_t* e) {
     vt_refresh();
 }
 
-static lv_obj_t* vt_row(lv_obj_t* parent, const char* name, const char* unit, int which) {
+// name / threshold | bar with a fixed threshold tick | live value | - | +
+static lv_obj_t* vt_row(lv_obj_t* parent, const char* name, int which) {
     lv_obj_t* row = w_panel(parent, C_SURFACE);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_flex_grow(row, 1);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_left(row, U + 4, 0);
+    lv_obj_set_style_pad_right(row, U + 4, 0);
+    lv_obj_set_style_pad_column(row, 4, 0);
 
     lv_obj_t* col = lv_obj_create(row);
     w_flatten(col);
-    lv_obj_set_flex_grow(col, 1);
-    lv_obj_set_height(col, LV_PCT(100));
+    lv_obj_set_size(col, U * 11, LV_PCT(100));
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     w_label(col, name, &lv_font_montserrat_14, C_TEXT);
-    w_label(col, unit, &lv_font_montserrat_10, C_DIM);
+    s_vt_thr[which] = w_label(col, "thr", &lv_font_montserrat_10, C_DIM);
+
+    // The tick is a sibling of the bar rather than a style on it, because LVGL
+    // bars have no marker of their own and drawing one costs a custom draw hook.
+    lv_obj_t* holder = lv_obj_create(row);
+    w_flatten(holder);
+    lv_obj_set_flex_grow(holder, 1);
+    lv_obj_set_height(holder, LV_PCT(100));
+
+    lv_obj_t* bar = lv_bar_create(holder);
+    lv_obj_set_size(bar, LV_PCT(100), U * 3);
+    lv_obj_align(bar, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_bar_set_range(bar, 0, BAR_RANGE);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, C_BG, 0);
+    lv_obj_set_style_bg_color(bar, C_OK, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 2, 0);
+    lv_obj_set_style_radius(bar, 2, LV_PART_INDICATOR);
+    s_vt_bar[which] = bar;
+
+    lv_obj_t* tick = lv_obj_create(holder);
+    w_flatten(tick);
+    lv_obj_set_size(tick, 2, U * 5);
+    lv_obj_set_style_bg_color(tick, C_TEXT, 0);
+    lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);
+    lv_obj_align(tick, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_x(tick, lv_pct(BAR_THR_PCT));
+
+    s_vt_val[which] = w_label(row, "--", &lv_font_montserrat_16, C_TEXT);
+    lv_obj_set_width(s_vt_val[which], U * 7);
+    lv_obj_set_style_text_align(s_vt_val[which], LV_TEXT_ALIGN_CENTER, 0);
 
     lv_obj_t* dn = w_button(row, "-", nullptr, C_RAISE, C_ACCENT,
                             vt_bump_cb, (void*)(intptr_t)((which << 1) | 0));
-    lv_obj_set_size(dn, U * 7, U * 6);
-    s_vt_lbl[which] = w_label(row, "0", &lv_font_montserrat_16, C_TEXT);
-    lv_obj_set_width(s_vt_lbl[which], U * 8);
-    lv_obj_set_style_text_align(s_vt_lbl[which], LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_size(dn, U * 6, U * 6);
     lv_obj_t* up = w_button(row, "+", nullptr, C_RAISE, C_ACCENT,
                             vt_bump_cb, (void*)(intptr_t)((which << 1) | 1));
-    lv_obj_set_size(up, U * 7, U * 6);
-    lv_obj_set_style_pad_right(row, U + 4, 0);
+    lv_obj_set_size(up, U * 6, U * 6);
     return row;
 }
 
@@ -262,59 +335,44 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_size(rst, LV_PCT(100), U * 6);
 
     // --- vibration sensitivity ---
-    w_label(right, "SENSITIVITY", &lv_font_montserrat_10, C_DIM);
-    vt_row(right, "Sustained",  "g RMS -> feed hold", VT_HOLD);
-    vt_row(right, "Impact",     "g peak -> e-stop",   VT_PEAK);
-    vt_row(right, "Jerk",       "g/s -> e-stop",      VT_JERK);
+    w_label(right, "SENSITIVITY   live reading vs threshold", &lv_font_montserrat_10, C_DIM);
+    vt_row(right, "Sustained", VT_HOLD);
+    vt_row(right, "Impact",    VT_PEAK);
+    vt_row(right, "Jerk",      VT_JERK);
     vt_refresh();
+    vt_bars_update(false);
 
-    // --- vibration guard ---
-    lv_obj_t* vrow = lv_obj_create(left);
-    w_flatten(vrow);
-    lv_obj_set_size(vrow, LV_PCT(100), U * 6);
-    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(vrow, U, 0);
-    static const char* VM[3]  = { "MONITOR", "SOFT", "HARD" };
-    static const char* VS[3]  = { "watch only", "feed hold", "hold + reset" };
-    uint8_t cur = settings_vib_mode();
+    // --- vibration guard: 2x2 rather than a row of four ---
+    // The histogram that used to sit under this is gone. The bars on the right
+    // say the same thing about the cut happening now, and say it continuously.
+    w_label(left, "VIBRATION GUARD", &lv_font_montserrat_10, C_DIM);
+    lv_obj_t* vgrid = lv_obj_create(left);
+    w_flatten(vgrid);
+    lv_obj_set_width(vgrid, LV_PCT(100));
+    lv_obj_set_flex_grow(vgrid, 1);
+    static lv_coord_t vc[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
+    static lv_coord_t vr[] = { LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST };
+    lv_obj_set_grid_dsc_array(vgrid, vc, vr);
+    lv_obj_set_layout(vgrid, LV_LAYOUT_GRID);
+    lv_obj_set_style_pad_column(vgrid, U, 0);
+    lv_obj_set_style_pad_row(vgrid, U, 0);
+
+    static const char* VM[3] = { "MONITOR", "SOFT", "HARD" };
+    static const char* VS[3] = { "watch only", "feed hold", "hold + reset" };
     for (int i = 0; i < 3; i++) {
-        s_vib_btn[i] = w_button(vrow, VM[i], VS[i],
-                                i == cur ? C_ACCENT : C_RAISE,
-                                i == cur ? C_BG : C_TEXT,
+        s_vib_btn[i] = w_button(vgrid, VM[i], VS[i], C_RAISE, C_TEXT,
                                 vib_mode_cb, (void*)(intptr_t)i);
-        lv_obj_set_flex_grow(s_vib_btn[i], 1);
-        lv_obj_set_height(s_vib_btn[i], LV_PCT(100));
+        lv_obj_set_grid_cell(s_vib_btn[i], LV_GRID_ALIGN_STRETCH, i % 2, 1,
+                                           LV_GRID_ALIGN_STRETCH, i / 2, 1);
     }
-    // Narrower than a mode button so it does not read as a fourth mode.
-    lv_obj_t* srch = w_button(vrow, "SEARCH", "find IMU", C_SURFACE, C_ACCENT,
+    // Fourth cell, and deliberately not styled like a mode: it does something
+    // once rather than selecting a state.
+    lv_obj_t* srch = w_button(vgrid, "SEARCH", "find IMU", C_SURFACE, C_ACCENT,
                               imu_search_cb, nullptr);
-    lv_obj_set_size(srch, U * 12, LV_PCT(100));
+    lv_obj_set_grid_cell(srch, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
     vib_mode_paint();   // one owner of the armed/unarmed colours
 
-    lv_obj_t* vst = w_panel(left, C_RAISE);
-    // Last in the column, so it takes the remainder and the stack ends flush.
-    lv_obj_set_width(vst, LV_PCT(100));
-    lv_obj_set_flex_grow(vst, 1);
-    lv_obj_t* vk = w_label(vst, "JERK HISTOGRAM  g/s", &lv_font_montserrat_10, C_DIM);
-    lv_obj_align(vk, LV_ALIGN_TOP_LEFT, U + 4, 4);
-    s_vib_lbl = w_label(vst, "no sensor", &lv_font_montserrat_12, C_DIM);
-    lv_obj_align(s_vib_lbl, LV_ALIGN_BOTTOM_LEFT, U + 4, -5);
-
-    // lv_chart in bar mode rather than a hand-drawn canvas: LVGL already does
-    // the layout, scaling and redraw, and it costs one widget.
-    s_vib_chart = lv_chart_create(vst);
-    lv_obj_set_size(s_vib_chart, LV_PCT(100) - U * 4, U * 9);
-    lv_obj_align(s_vib_chart, LV_ALIGN_CENTER, 0, 0);
-    lv_chart_set_type(s_vib_chart, LV_CHART_TYPE_BAR);
-    lv_chart_set_point_count(s_vib_chart, VIB_HIST_BINS);
-    lv_chart_set_range(s_vib_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 1);
-    lv_chart_set_div_line_count(s_vib_chart, 0, 0);
-    lv_obj_set_style_bg_opa(s_vib_chart, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_vib_chart, 0, 0);
-    lv_obj_set_style_pad_all(s_vib_chart, 0, 0);
-    lv_obj_set_style_pad_column(s_vib_chart, 2, 0);
-    s_vib_ser = lv_chart_add_series(s_vib_chart, C_ACCENT, LV_CHART_AXIS_PRIMARY_Y);
-
+    s_vib_lbl = w_label(left, "no sensor", &lv_font_montserrat_12, C_DIM);
 }
 
 void page_setup_tick() {
@@ -326,27 +384,20 @@ void page_setup_tick() {
                                      : "NO SENSOR — guard not active");
         lv_obj_set_style_text_color(s_vib_lbl,
             settings_vib_mode() == 0 ? C_DIM : C_WARN, 0);
+        vt_bars_update(false);   // grey and dashed, not a confident zero
         return;
     }
+
+    vt_bars_update(true);
+
     const vib_result_t* v = vib_result();
-    // Smoothed figures first: the raw peak and jerk twitch far faster than
-    // anyone can read them, the EMAs are what you actually judge a cut by.
+    // The raw figures still get a line: the bars carry the smoothed values, and
+    // seeing raw next to smoothed is how you tell a real impact from an EMA
+    // still catching up.
     char b[96];
-    snprintf(b, sizeof(b), "rms %.2f~%.2f  peak %.2f~%.2f  jerk %.0f",
-             (double)v->rms,  (double)v->smoothed_rms,
-             (double)v->peak, (double)v->smoothed_peak,
-             (double)v->jerk);
+    snprintf(b, sizeof(b), "raw  rms %.2f  peak %.2f  jerk %.0f",
+             (double)v->rms, (double)v->peak, (double)v->jerk);
     lv_label_set_text(s_vib_lbl, b);
     lv_obj_set_style_text_color(s_vib_lbl,
         v->level == VIB_ESTOP ? C_CRIT : (v->level == VIB_HOLD ? C_WARN : C_DIM), 0);
-
-    // Rescale to the tallest bin so the shape stays readable whether the machine
-    // has produced fifty samples or fifty thousand.
-    const uint32_t* h   = vib_hist();
-    uint32_t        top = vib_hist_max();
-    if (top < 1) top = 1;
-    lv_chart_set_range(s_vib_chart, LV_CHART_AXIS_PRIMARY_Y, 0, (lv_coord_t)top);
-    for (int i = 0; i < VIB_HIST_BINS; i++) {
-        lv_chart_set_value_by_id(s_vib_chart, s_vib_ser, i, (lv_coord_t)h[i]);
-    }
 }
