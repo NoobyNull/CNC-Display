@@ -2,7 +2,6 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "ui/view_expanded.h"
-#include "hw/touch.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
 #include "model/model_compat.h"
@@ -419,15 +418,6 @@ static void fmt_pos(char* out, size_t n, pos_t v) {
 }
 
 void shell_tick() {
-    // Four fingers held in the four corners opens the console log, from
-    // wherever you are. It is an escape hatch: the moment you want the log is
-    // the moment the UI is behaving oddly, so the way in must not depend on
-    // reaching a particular button on a particular page. Detected in the touch
-    // driver because LVGL's pointer input only ever sees one contact.
-    if (touch_take_corner_gesture() && !expanded_is_open()) {
-        expanded_open(EXPANDED_CONSOLE);
-    }
-
     if (model_take_state() || take_redisplay()) {
         lv_label_set_text(s_state_lbl, state_word(state));
         lv_obj_set_style_bg_color(s_state_chip, state_colour(state), 0);
