@@ -7,7 +7,121 @@ of that survives here — the 7B flashes over native USB.
 
 ---
 
-## Session 2026-08-12 — read this first
+## Session 2026-08-12 (evening) — read this first
+
+**75/75 host tests pass**, flash 14.5%, RAM 20.8%.
+
+### The GT911 was never broken. The watchdog was.
+
+The previous session shipped a watchdog that hard-reset the touch controller
+after 5s without a frame, built on the belief that *a healthy GT911 free-runs at
+5-10 frames/s while untouched*. **That belief is false**, and it was measured
+from a panel already assumed to be broken — the exact trap the previous handoff
+warned about, walked into anyway.
+
+What this chip actually does, measured with a finger on the glass:
+
+```
+idle=115s                                 <- quiet for two minutes, "stalled"
+[touch] frame 64 t=115870 status=0x81     <- finger lands
+[touch] press 63,342 t=115870
+[touch] frame 65..68  (10-40ms apart)     <- scanning at its 8ms refresh
+[touch] lift t=116005
+idle=0s  down=1  scans 63->74->88  int=0  <- LVGL received it
+```
+
+It reports only while something is happening. Untouched it emits three frames
+after reset and then nothing, indefinitely. **Idle silence is its resting state,
+not a fault.** So the watchdog spent every session resetting a working
+controller every 5 seconds — 27 resets in 170s — each costing 300ms of blocked
+UI and a forced `touch_down = false` that ate any press in flight. Its own
+backoff could never fire: each reset yielded three frames, which looked like
+progress and cleared the futile-reset counter.
+
+Removed entirely: `touch_watchdog()`, `FRESH_STALE_MS`, `s_last_fresh_ms`,
+`s_fresh_at_reset`, `s_futile_resets`, `s_reset_count` and its accessor. The
+I2C error recovery stays — a real bus fault shows up as `staterr`, not silence.
+**Do not add a no-frames watchdog back.** There is a blunt comment in
+`touch.cpp` where it used to live.
+
+The chip's stored config was read for the first time and is intact — checksum
+valid, 1024x600, INT falling-edge, 8ms refresh, `lowpower=3s`. `lowpower` looked
+like the culprit until the frame timestamps showed the quiet starting ~20ms
+after reset, not 3s. `gt911_dump_config()` prints all of it at boot; it is
+one-shot and only runs with a USB host attached.
+
+### Jog keys are disabled when there is no controller
+
+`send_jog_line()` is ack-gated on UART, so every press parks in
+`fnc_send_line()`'s `while (_ackwait)` until the 2000ms timeout — inside the
+same `lv_timer_handler()` pass that reads touch. Held past 400ms it is worse:
+`jog_chunk()` re-sends every 150ms, each send costing more than the tick that
+scheduled it, so the timer is permanently overdue, the input read is starved,
+and the release that would call `jog_stop()` never arrives.
+
+`page_jog_tick()` now greys the ten direction keys out while
+`state == Disconnected`. `lv_obj_hit_test()` rejects `LV_STATE_DISABLED`
+outright, so the press never reaches an event handler.
+
+**This makes the jog page inert on a bench with no controller.** Run the
+simulator (below) and the keys come back by themselves.
+
+### STILL OPEN — the blocking send
+
+Disabling the keys does **not** fix the dangerous case. A *connected* controller
+that stops acking — busy planner, ALARM, XOFF, a cable glitch — blocks
+identically, because `state != Disconnected`. That is the case that happens
+mid-cut, when a frozen panel means no HOLD and no RESET.
+
+It is not jog-specific either: `zero_cb` and `motors_off_cb` go `send_linef` ->
+`vsend_linef` -> `send_line` -> `fnc_send_line(s, 2000)`. X/Y/Z ZERO and
+STEPPERS OFF freeze the panel ~2s per press with the link down.
+
+The fix is one place — the UI must never wait on an ack. `show_ok()` already
+exists in `FluidNCModel.cpp` and already decrements a jog-window counter, so
+acks are visible app-side: a chunk can **skip** when one is outstanding instead
+of blocking, which also stops the planner queue growing.
+
+### The simulator is fixed — five faults, stacked
+
+`~/Projects/FluidNC`, run from `simrun/`. The previous handoff blamed
+`ttybridge.py`; **the bridge was innocent**.
+
+| Fault | Fix |
+|---|---|
+| Telnet 23 / HTTP 80 are privileged ports. Arduino-Emulator's `EthernetServer::begin_()` loops `while (::bind(...) < 0) { delay(1000); }` **for ever**, so startup never completed | `simrun/native_nvs/Telnet.Enable` + `HTTP.Enable` = one `0x00` byte each |
+| `MAX_N_GPIO 49` (ESP32-S3) but the machine is a plain ESP32, so `gpio.23/32/33` did not exist | `MAX_N_GPIO 40` in `capture/Platform.h` — the line was already there, commented out |
+| `MAX_N_I2SO 0` made every 6-Pack step/dir/disable pin an "Unknown pin type" | `MAX_N_I2SO 1`, and `capture/i2s_out.cpp` (a 4-line stub with only `init`) got `read`/`write`/`delay` over a RAM bit array |
+| `MAX_N_UARTS 2`, but the machine uses `uart2` for the expansion port. `Spindles/VFD/*` was excluded wholesale, so `Huanyang:` was an ignored key too | `MAX_N_UARTS 3`; `+<Spindles/VFD/ModbusVFD.cpp>` and `+<Spindles/VFD/Huanyang.cpp>` in `platformio.ini` |
+| `engine: I2S_STREAM` is not a registered host engine, so it silently fell back to `step_engines[0]` (Timed) — which demands gpio step pins, failing all five motors | `engine: Simulator` with `sim.0-3` step/dir pins. posix defines `DEFAULT_STEPPING_ENGINE` as `SIMULATOR` and `StandardStepper::validate()` has an explicit `sim` escape hatch |
+
+Any one of them alone kept it in Alarm with `$X` refusing to clear
+(`error:152`). Verified: `$J=G91F1000X10` -> `ok`, MPos 0 -> 10 -> 20, and the
+panel links over the FTDI at `state=5 rx=51 tx=25`.
+
+**`sim.N` is an axis, not a pin** — `sim.0`=X, `sim.1`=Y, `sim.2`=Z — and the
+same sim pin is valid for both step and dir. Y1 and Y2 share `sim.1`.
+
+**The gotcha that cost the most time:** FluidNC's host build reads
+`simrun/native_localfs/config.yaml`, not `simrun/config.yaml`. They are
+different files. The outer one is stale and unused. Edit the localfs copy.
+
+### Next on the sim
+
+After the handshake `rx` froze at 51 and `tx` at 59 — the link is up and acking,
+but no status reports flow, so the DRO will not track a jog live. Unsolved.
+
+### Diagnostics added, all deliberately kept
+
+`[touch] press x,y` / `lift` on every touch, `[touch] frame N t= status=` for the
+first 8 frames after a reset, `int=` and `stat=` on the 2s status line, and
+`[jog] chunk blocked Nms` when a jog send costs more than 20ms. The press log is
+what proved the controller healthy; the frame timestamps are what killed the
+`lowpower` theory.
+
+---
+
+## Session 2026-08-12 (earlier)
 
 Everything below the next divider is still accurate except where this section
 contradicts it. **73/73 host tests pass**, flash 14.4%, RAM 20.6%.
