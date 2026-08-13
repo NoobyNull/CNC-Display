@@ -72,7 +72,7 @@ void setup() {
 
     shell_build();
     lv_timer_create(ui_tick_cb, 50, nullptr);      // 20 Hz UI
-    lv_timer_create(touch_tick_cb, 20, nullptr);   // 50 Hz touch
+    lv_timer_create(touch_tick_cb, 10, nullptr);   // 100 Hz gate; the read itself is INT-driven
 
     Serial.printf("PSRAM free: %u\n", (unsigned)ESP.getFreePsram());
     Serial.printf("Heap free:  %u\n", (unsigned)ESP.getFreeHeap());

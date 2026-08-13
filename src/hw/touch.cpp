@@ -91,6 +91,36 @@ static uint32_t s_stat_err   = 0;
 static uint32_t s_fresh_at_reset = 0;
 static uint8_t  s_futile_resets  = 0;
 
+// INT tells us a frame is ready instead of us asking 50 times a second on a bus
+// the IMU is already using. The ISR only raises a flag — I2C cannot be done from
+// an ESP32 ISR — so the timer still does the reading, it just stops reading for
+// nothing.
+static volatile bool s_int_flag = false;
+static uint32_t      s_last_read_ms = 0;
+
+// Interrupts are the latency path, not the only path. A missed or mis-polarised
+// edge would otherwise be indistinguishable from a wedged controller, and the
+// stall watchdog needs a heartbeat to measure against. 100ms idle polling keeps
+// both honest and still cuts idle bus traffic fivefold.
+static const uint32_t IDLE_POLL_MS = 100;
+
+// A physical tap can begin and end between two LVGL reads and never be seen:
+// touch polls at 50Hz, LVGL reads at 30ms, and nothing keeps them in phase. The
+// latch guarantees every press reaches LVGL at least once, which is the
+// difference between a button that works and one that "sometimes" works.
+static volatile bool s_press_latched = false;
+
+static void IRAM_ATTR gt911_isr() { s_int_flag = true; }
+
+static void gt911_int_attach() {
+    pinMode(GT911_INT_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(GT911_INT_PIN), gt911_isr, CHANGE);
+}
+
+static void gt911_int_detach() {
+    detachInterrupt(digitalPinToInterrupt(GT911_INT_PIN));
+}
+
 bool     touch_is_down()      { return touch_down; }
 uint32_t touch_fresh_count()  { return s_fresh_count; }
 uint32_t touch_reset_count()  { return s_reset_count; }
@@ -110,6 +140,9 @@ void touch_init() {
 // before gt911_discover() and before anything else on the bus expects an
 // answer from the touch controller.
 void gt911_reset() {
+    // The address strap needs INT driven, so the interrupt cannot stay attached
+    // across a reset — and the watchdog resets while running.
+    gt911_int_detach();
     pinMode(GT911_INT_PIN, OUTPUT);
     digitalWrite(GT911_INT_PIN, LOW);
     ioexp_write(EXIO_TP_RST, false);
@@ -117,7 +150,8 @@ void gt911_reset() {
     digitalWrite(GT911_INT_PIN, LOW);       // hold it through the release edge
     ioexp_write(EXIO_TP_RST, true);
     delay(200);                             // datasheet wants >50ms before I2C
-    pinMode(GT911_INT_PIN, INPUT);          // let the controller drive it again
+    gt911_int_attach();                     // let the controller drive it again
+    s_int_flag = true;                      // read once now, do not wait for an edge
 }
 
 // Probe 0x5D and 0x14. Call AFTER gt911_reset().
@@ -175,6 +209,13 @@ static void touch_watchdog() {
 
 void touch_poll() {
     if (gt911_addr == 0) return;
+
+    // Read on an edge, or on the idle heartbeat. Nothing else.
+    const uint32_t now = millis();
+    if (!s_int_flag && (now - s_last_read_ms) < IDLE_POLL_MS) return;
+    s_int_flag     = false;
+    s_last_read_ms = now;
+
     ++s_poll_count;
     if (!i2c_take(10)) { ++s_lock_fail; return; }   // bus busy, skip this cycle
 
@@ -239,6 +280,7 @@ void touch_poll() {
         if (Wire.available() >= 4) {
             touch_x = Wire.read() | (Wire.read() << 8);
             touch_y = Wire.read() | (Wire.read() << 8);
+            if (!touch_down) s_press_latched = true;   // a new press must not be missable
             touch_down = true;
         }
     } else {
@@ -264,10 +306,26 @@ void touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         // glass is not idleness, so keep the clock fresh -- otherwise the panel
         // would re-blank underneath a held finger.
         if (touch_down) lv_disp_trig_activity(NULL);
+        s_press_latched = false;   // a swallowed wake tap must not resurface later
         data->state = LV_INDEV_STATE_REL;
         return;
     }
+
     data->point.x = touch_x;
     data->point.y = touch_y;
-    data->state   = touch_down ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+
+    if (touch_down) {
+        s_press_latched = false;         // LVGL is seeing it live
+        data->state = LV_INDEV_STATE_PR;
+        return;
+    }
+    if (s_press_latched) {
+        // Pressed and released between two reads. Report the press at the
+        // coordinates it happened at; the release follows on the next read and
+        // LVGL turns the pair into a click.
+        s_press_latched = false;
+        data->state = LV_INDEV_STATE_PR;
+        return;
+    }
+    data->state = LV_INDEV_STATE_REL;
 }

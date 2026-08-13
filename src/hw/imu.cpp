@@ -8,7 +8,17 @@
 
 // 200Hz, matching CNC-TW. Fast enough to catch an impact, slow enough that the
 // I2C transaction does not starve touch polling on the shared bus.
-#define IMU_RATE_HZ  200
+// 200Hz was costing far more than it bought. getAGMT() reads ~23 bytes, so at
+// 200Hz the IMU held the shared I2C bus for roughly 12% of wall clock, from
+// inside loop(), directly delaying lvgl_tick() — a visibly sluggish UI to
+// oversample a guard whose thresholds are an EMA and a peak-hold.
+//
+// Not lower than this, though. The guard exists to catch an impact, jerk is
+// computed from the real interval so the arithmetic stays correct at any rate,
+// but the BANDWIDTH does not: 50Hz still resolves 25Hz, while 10Hz resolves 5Hz
+// and a 20ms impact would fall clean between two samples. That would not make
+// the guard slower, it would make it blind while still appearing armed.
+#define IMU_RATE_HZ  50
 #define IMU_PERIOD_US (1000000 / IMU_RATE_HZ)
 
 static ICM_20948_I2C s_icm;
