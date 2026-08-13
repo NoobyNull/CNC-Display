@@ -7,6 +7,99 @@ of that survives here — the 7B flashes over native USB.
 
 ---
 
+## Session 2026-08-12 — read this first
+
+Everything below the next divider is still accurate except where this section
+contradicts it. **73/73 host tests pass**, flash 14.4%, RAM 20.6%.
+
+### Added
+
+| | |
+|---|---|
+| Screen blanking | SETUP -> "Screen off", 0-60min in 5s, **default Off** (opt-in) |
+| Brightness | now 10-100% in 5% steps; storage stays 0-255 |
+| Jog | hold a direction key for continuous motion at <=1mm; tap the pad centre to cycle the step x10 |
+| CAL page | new nav slot: command 10/50/100mm, measure, apply corrected steps_per_mm |
+| Sensor bars | SETUP thresholds are horizontal bars of live-vs-threshold; guard buttons 2x2; jerk histogram removed from the UI |
+
+### Two bugs shipped and fixed the same session — both worth remembering
+
+**The backlight never came back.** `screen_idle_tick()` decided whether to touch
+the backlight by comparing the screensaver's state before and after updating it,
+but the touch driver clears that same flag when it swallows the wake tap. No
+transition left to observe, `EXIO_DISP` never re-enabled, panel dark until a
+power cycle. Fixed by tracking what the backlight *is* doing against what the
+screensaver *wants*. **Never infer a hardware edge from state another layer can
+also move.**
+
+**A stuck touch killed the panel.** The wake-tap swallow waited for a release.
+The GT911 holds its last reported state when it stops producing fresh scans, so
+`touch_down` stayed asserted, the release never came, every sample was swallowed
+for ever. Fixed with a 600ms cap on the swallow. **Any gate that can only be
+opened by an event from hardware is a gate hardware can leave shut.**
+
+Neither was caught by the host tests, and the first could not have been — the
+pure module was correct both times, the faults were in the hardware follower.
+The regression test for the second one fails against the old implementation.
+
+The console line now carries `scroff=<n>min idle=<n>s [BLANK]`. That diagnostic
+turned "I don't think the timeout worked" into a fact in one reading, twice.
+Leave it in.
+
+### Verified on hardware this session
+
+- Blanking fires at exactly `idle=301s` on a 5min setting, and stays blank.
+- Panel links to a real FluidNC v4.0.4 (the simulator) over the FTDI, locks
+  115200, primes offsets and the file list, tracks state live.
+
+### NOT verified
+
+- **The CAL page has never talked to a controller.** `$/axes/<x>/steps_per_mm`
+  read-back and apply are untested against anything real.
+- **The jog changes have never moved a machine.**
+- **The vibration bars have never seen an IMU.**
+
+### Open questions left on the table
+
+1. **Panel power.** Do **not** run the panel off the Airedale's RJ12 5V — that
+   port was sized for a FluidDial (~100mA), and a 7" panel with backlight is
+   500-800mA through 26AWG phone cable. ~0.5V drop at 800mA over 2m, and 5V has
+   no headroom. Feed it at its own PH2.0 `POWER/GND/5V` input from a buck at the
+   panel, **cut the RJ12 5V conductor**, keep RJ12 GND for the UART reference.
+2. **File flow undecided.** The panel already does both directions —
+   `upload_start()` sends `$XR=`, `pathload_start()` sends `$XS=`. If G-code
+   lives on the controller's SD (put there over WiFi), nothing more is needed:
+   list it and `$SD/Run=`. A panel-side copy needs a new sink in
+   `path_loader.cpp:19`. Decide before building.
+3. **USB thumb drive is a dead end.** The 7B's native USB-C has 5.1K pulldowns
+   on CC1/CC2 (sink) and VBUS hard-tied to the 5V rail with no switch — it is
+   wired as a device. Confirmed from the Waveshare schematic. A microSD
+   extension ribbon solves the real problem; keep it **short**, the card runs
+   SDMMC 1-bit at 20MHz (`sdcard.cpp:27`), not SPI.
+4. **`JogCancel` (0x85) did not stop a jog on FluidNC v4.0.4** — neither raw
+   (which is what `GrblParserC.c:572` sends) nor UTF-8 encoded, while `!` worked
+   every time. Unexplained. Continuous jog therefore re-issues bounded chunks
+   and never depends on that byte. Worth settling on real hardware.
+
+### The simulator rig is broken
+
+`~/Projects/FluidNC/simrun` no longer answers commands on the pty or a pipe. It
+boots fully (config parses, `fault_pin`/`estop_pin` reported) then loops on
+`Emulator - Error: bind failed` after `HTTP started on port 80`. Root cause not
+isolated. It was working earlier the same day; the confound was three orphaned
+`program` instances fighting over ports 80/23, and clearing them did **not**
+restore it.
+
+`ttybridge.py` gained `--serial <port> --baud <n>` to serve the pty and a real
+UART at once. The pty half stopped delivering once the panel joined. Suspect
+that change before suspecting the simulator.
+
+**Kill simulator processes by PID, never by pattern.** `pkill -f`, and any
+`/proc` scan matching a string that also appears in your own command line, kills
+the agent session (exit 144). Happened again this session.
+
+---
+
 ## Status
 
 **First hardware bring-up is done.** The panel draws, touch works, the UI is up
