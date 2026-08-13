@@ -198,6 +198,7 @@ void loop() {
             if (!fnc_rx_waiting()) break;
         }
     }
+    send_pump();   // queued controller lines; never sent from a UI callback
     imu_poll();
     vib_guard();
     upload_poll();

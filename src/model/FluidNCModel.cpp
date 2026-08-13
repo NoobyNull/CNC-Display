@@ -10,6 +10,7 @@
 #include "model/model_compat.h"
 #include "transport/uart.h"
 #include "e4math.h"
+#include "model/sendq.h"
 
 #ifdef USE_WIFI
 #    include "WiFiConnection.h"  // wifi_use_uart_mode()
@@ -176,9 +177,61 @@ extern "C" void show_dro(const pos_t* axes, const pos_t* wco, bool isMpos, bool*
 }
 #endif
 
+// ---- non-blocking send -----------------------------------------------------
+// fnc_send_line() opens with `while (_ackwait)`, spinning until the previous
+// line is acked or its timeout expires. Every UI caller reaches it from inside
+// an LVGL event callback, i.e. from inside lv_timer_handler(), which is also
+// what drives touch_poll() and the input read. So a controller that is slow or
+// silent does not slow the machine down, it freezes the panel.
+//
+// That was measured, not guessed: at link-up the panel stalled 2175ms and then
+// 6175ms -- the second is three consecutive 2000ms timeouts -- from the priming
+// lines alone. 8.4s of dead screen, every power-on, with no way to press HOLD.
+//
+// The fix belongs here rather than at the ~20 call sites: every page sends
+// something, and a guard per caller is both a bigger diff and one someone will
+// forget. Queue, and drain from loop().
+static const int32_t ACK_TIMEOUT_MS = 2000;
+
+static sendq_t  s_sendq;
+static uint32_t s_ack_deadline = 0;   // 0 = nothing outstanding
+
+// Mirrors GrblParserC's private _ackwait. Deliberately self-healing: it expires
+// slightly AFTER the parser's own limit, so a missed ok/error/timeout callback
+// costs one late send instead of wedging the queue for ever. State another
+// layer can also move must never be the only thing holding a gate open -- see
+// the backlight bug in docs/HANDOFF.md.
+bool send_busy() {
+    if (s_ack_deadline == 0) return false;
+    if ((int32_t)(milliseconds() - s_ack_deadline) >= 0) {
+        s_ack_deadline = 0;
+        return false;
+    }
+    return true;
+}
+
+static void send_now(const char* line) {
+    fnc_send_line(line, ACK_TIMEOUT_MS);
+    s_ack_deadline = milliseconds() + ACK_TIMEOUT_MS + 100;
+}
+
+void send_pump() {
+    if (send_busy()) return;
+    char line[SENDQ_LINE];
+    if (!sendq_pop(&s_sendq, line, sizeof(line))) return;
+    send_now(line);
+}
+
 void send_line(const char* s, int timeout) {
-    fnc_send_line(s, timeout);
+    (void)timeout;   // the queue owns the timing now
+    if (!sendq_push(&s_sendq, s)) {
+        // A machine command has been thrown away. Say so; a silently dropped
+        // G10 or $H is exactly the kind of thing that gets blamed on the
+        // controller.
+        dbg_println("[send] QUEUE FULL - line dropped");
+    }
     dbg_println(s);
+    send_pump();   // straight out when the link is idle, which is the normal case
 }
 
 // Count of jog lines streamed over Telnet but not yet acked by "ok""" to prevent outrunning FluidNC planner.
@@ -202,7 +255,15 @@ void send_jog_line(const char* s) {
         return;
     }
 #endif
-    send_line(s);
+    // Deliberately NOT queued. Jog chunks are a real-time stream: one tick's
+    // worth of travel each, re-issued every 150ms while a key is held. Backing
+    // them up in a queue would keep the axis moving after the finger lifts,
+    // which is the runaway the whole design avoids. If the controller has not
+    // acked the last one it is behind, so skip this chunk -- the axis pauses
+    // for a tick and catches up on the next.
+    if (send_busy()) return;
+    send_now(s);
+    dbg_println(s);
 }
 
 JogFlowControl jog_flow_control() {
@@ -360,9 +421,11 @@ extern "C" void show_error(int error) {
 }
 
 extern "C" void show_timeout() {
+    s_ack_deadline = 0;   // parser just cleared _ackwait; keep the queue moving
     dbg_println("Timeout");
 }
 extern "C" void show_ok() {
+    s_ack_deadline = 0;   // parser just cleared _ackwait; keep the queue moving
 #ifdef FNC_RX_TRACE
     dbg_printf("[rx-ok]\n");
 #endif

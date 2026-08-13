@@ -56,6 +56,12 @@ int num_digits();
 
 void send_line(const char* s, int timeout = 2000);
 void send_jog_line(const char* s);  // nonblocking network jog send
+
+// send_line() queues rather than blocking: fnc_send_line() waits for the
+// previous ack inside lv_timer_handler(), which freezes touch. Drain from
+// loop(). See the comment block in FluidNCModel.cpp.
+void send_pump();
+bool send_busy();   // an ack is still outstanding
 void send_linef(const char* fmt, ...);
 
 JogFlowControl jog_flow_control();
