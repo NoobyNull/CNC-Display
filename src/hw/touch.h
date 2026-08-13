@@ -33,6 +33,11 @@ uint32_t touch_stat_errs();    // status reads the chip refused
 uint8_t  touch_int_level();    // live INT pin level -- stuck high/low is diagnostic
 uint8_t  touch_last_status();  // last 0x814E byte seen
 
+// True once per completed four-corner hold. Read-and-clear, so the caller that
+// takes it owns it. Multi-touch is invisible to LVGL, so this is detected in
+// the driver and polled from the shell.
+bool touch_take_corner_gesture();
+
 // Print the GT911's stored configuration. Read-only: nothing is ever written
 // back, see the implementation for why.
 void gt911_dump_config();

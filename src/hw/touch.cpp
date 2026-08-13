@@ -1,6 +1,8 @@
 #include "touch.h"
 #include "io_expander.h"
 #include "model/screensaver.h"
+#include "model/corner_gesture.h"
+#include "ui/theme.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -108,6 +110,18 @@ static volatile bool s_press_latched = false;
 // "the chip powers down after ~300ms" from "it emits a burst and quits".
 static uint8_t s_frame_log = 0;
 
+// Four fingers in the four corners opens the console log. Detection lives here
+// rather than in LVGL because LVGL's pointer input is single-contact by design
+// -- it never sees fingers two through five.
+static cg_state_t      s_corner;
+static volatile bool   s_corner_fired = false;
+
+bool touch_take_corner_gesture() {
+    if (!s_corner_fired) return false;
+    s_corner_fired = false;   // read-and-clear: one open per gesture
+    return true;
+}
+
 static void IRAM_ATTR gt911_isr() { s_int_flag = true; }
 
 static void gt911_int_attach() {
@@ -128,6 +142,7 @@ uint8_t  touch_int_level()    { return digitalRead(GT911_INT_PIN) ? 1 : 0; }
 uint8_t  touch_last_status()  { return s_last_status; }
 
 void touch_init() {
+    cg_init(&s_corner, SCREEN_W, SCREEN_H);
     i2c_mutex = xSemaphoreCreateMutex();
     configASSERT(i2c_mutex != NULL);
     Serial.println("I2C mutex created");
@@ -315,25 +330,48 @@ void touch_poll() {
     }
 
     if (touches > 0) {
-        // Touch point 0 at 0x8150
+        // Points start at 0x8150, eight bytes each:
+        //   track_id, x_lo, x_hi, y_lo, y_hi, size_lo, size_hi, reserved
+        // Point 0 still feeds LVGL exactly as before; the rest exist only so
+        // the corner gesture can see all four contacts. Reading 8*n instead of
+        // 4 costs a few hundred microseconds and only when fingers are down.
+        if (touches > CG_MAX_POINTS) touches = CG_MAX_POINTS;
+        const uint8_t want = (uint8_t)(touches * 8);
+
         Wire.beginTransmission(gt911_addr);
         Wire.write(0x81);
         Wire.write(0x50);
         Wire.endTransmission();
-        Wire.requestFrom(gt911_addr, (uint8_t)4);
-        if (Wire.available() >= 4) {
-            touch_x = Wire.read() | (Wire.read() << 8);
-            touch_y = Wire.read() | (Wire.read() << 8);
+        Wire.requestFrom(gt911_addr, want);
+        if (Wire.available() >= want) {
+            cg_point_t pts[CG_MAX_POINTS];
+            for (uint8_t i = 0; i < touches; i++) {
+                Wire.read();                                    // track id
+                pts[i].x = Wire.read() | (Wire.read() << 8);
+                pts[i].y = Wire.read() | (Wire.read() << 8);
+                Wire.read(); Wire.read();                       // size
+                Wire.read();                                    // reserved
+            }
+            touch_x = pts[0].x;
+            touch_y = pts[0].y;
             if (!touch_down) {
                 s_press_latched = true;   // a new press must not be missable
                 Serial.printf("[touch] press %u,%u t=%lu\n",
                               touch_x, touch_y, (unsigned long)now);
             }
             touch_down = true;
+
+            // Not while blanked: the wake tap is swallowed for LVGL, so a
+            // gesture that still fired would act on a screen nobody can see.
+            if (!screensaver_is_off() && cg_update(&s_corner, pts, touches, now)) {
+                s_corner_fired = true;
+                Serial.printf("[touch] four-corner hold t=%lu\n", (unsigned long)now);
+            }
         }
     } else {
         if (touch_down) Serial.printf("[touch] lift t=%lu\n", (unsigned long)now);
         touch_down = false;         // fresh scan, zero points = a real lift
+        cg_reset(&s_corner);        // all fingers gone: re-arm
     }
 
     // Clear the status register, but only having consumed a fresh scan.
