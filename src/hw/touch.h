@@ -28,6 +28,9 @@ void i2c_give();
 bool     touch_is_down();
 uint32_t touch_fresh_count();
 uint32_t touch_reset_count();
+uint32_t touch_poll_count();   // polls attempted
+uint32_t touch_lock_fails();   // polls that lost the I2C mutex
+uint32_t touch_stat_errs();    // status reads the chip refused
 
 // Re-init the I2C master after a device wedges the bus. Caller must hold the
 // mutex. See the implementation for why this is not paranoia.

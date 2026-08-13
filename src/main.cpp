@@ -152,9 +152,12 @@ static void link_watchdog() {
                   (unsigned)settings_screen_off_min(),
                   (unsigned long)(lv_disp_get_inactive_time(NULL) / 1000),
                   screensaver_is_off() ? " BLANK" : "");
-    Serial.printf("[touch] down=%d scans=%lu resets=%lu\n",
+    Serial.printf("[touch] down=%d scans=%lu polls=%lu lockfail=%lu staterr=%lu resets=%lu\n",
                   touch_is_down() ? 1 : 0,
                   (unsigned long)touch_fresh_count(),
+                  (unsigned long)touch_poll_count(),
+                  (unsigned long)touch_lock_fails(),
+                  (unsigned long)touch_stat_errs(),
                   (unsigned long)touch_reset_count());
 }
 

@@ -54,29 +54,49 @@ static volatile uint16_t touch_y = 0;
 static uint32_t touch_err_timer = 0;   // rate-limit error logging
 static uint16_t s_err_run = 0;         // consecutive I2C failures
 
-// The GT911's data-ready bit means "something changed", NOT "I am alive": with
-// no finger on the glass it legitimately reports nothing for as long as you
-// leave it alone. Measured on hardware — a few scans after reset, then silence.
-// So absence of scans is not a fault and must never trigger recovery, or the
-// controller gets reset every few seconds for the crime of being idle.
+// A healthy GT911 produces frames continuously — measured, roughly 5-10 a second
+// with nothing touching it. So a stalled scan counter IS the fault signal.
 //
-// What IS a fault is touch_down stuck asserted with no fresh scan to justify it.
-// touch_poll() keeps the last state when no new frame arrives, so a press that
-// is never followed by a release freezes the input: LVGL sees a permanent hold,
-// nothing new registers, and the panel looks dead. The s_err_run recovery below
-// cannot catch it because the bus is answering perfectly.
+// Worth recording how that was nearly got wrong: an earlier reading showed three
+// scans after each reset and then silence, which looked exactly like "the chip
+// only reports changes, so idle silence is normal". It was not. The chip was
+// already wedged, and the watchdog was being blamed for the symptom it was
+// detecting. Only a genuinely healthy panel showed the counter climbing while
+// idle. Never characterise normal behaviour from a device you are debugging
+// because it is broken.
+//
+// The failure mode: scans stop, no I2C errors, no mutex contention, touch_down
+// frozen at whatever it last held. The s_err_run recovery below cannot see it
+// because the bus is answering perfectly.
 //
 // That matters more here than on a tablet. The safety bar lives behind this
 // input, so silent loss of touch means no HOLD and no RESET on a running
 // machine.
+//
+// The backoff is not optional. A reset that does not revive the chip must not be
+// retried for ever: at 300ms of blocked UI each, that is its own failure.
 static uint32_t s_last_fresh_ms = 0;
 static uint32_t s_fresh_count   = 0;
 static uint32_t s_reset_count   = 0;
 static const uint32_t FRESH_STALE_MS = 5000;
 
+// Where a stall actually is. Without these, "scans stopped" has three different
+// causes that look identical from outside: the poll not running at all, the poll
+// losing the I2C mutex to the IMU hammering the same bus at 200Hz, or the chip
+// answering cleanly while having stopped scanning. Each wants a different fix,
+// so guessing between them is how an afternoon disappears.
+static uint32_t s_poll_count = 0;
+static uint32_t s_lock_fail  = 0;
+static uint32_t s_stat_err   = 0;
+static uint32_t s_fresh_at_reset = 0;
+static uint8_t  s_futile_resets  = 0;
+
 bool     touch_is_down()      { return touch_down; }
 uint32_t touch_fresh_count()  { return s_fresh_count; }
 uint32_t touch_reset_count()  { return s_reset_count; }
+uint32_t touch_poll_count()   { return s_poll_count; }
+uint32_t touch_lock_fails()   { return s_lock_fail; }
+uint32_t touch_stat_errs()    { return s_stat_err; }
 
 void touch_init() {
     i2c_mutex = xSemaphoreCreateMutex();
@@ -126,14 +146,27 @@ void gt911_discover() {
 // 300ms, so this only ever runs on the rare recovery path and never in the
 // normal poll.
 static void touch_watchdog() {
-    // Only a stuck PRESS is a fault. Idle silence is the normal state.
-    if (!touch_down) return;
     if (s_last_fresh_ms == 0) return;                       // nothing seen yet
     if (millis() - s_last_fresh_ms < FRESH_STALE_MS) return;
 
-    s_last_fresh_ms = millis();   // re-arm before the slow part, not after
+    // Did the last reset achieve anything? If the counter has not moved since,
+    // resetting again will not move it either.
+    if (s_fresh_count == s_fresh_at_reset) {
+        if (++s_futile_resets == 3) {
+            Serial.println("[touch] GT911 will not restart — giving up, power cycle needed");
+        }
+        if (s_futile_resets >= 3) {
+            s_last_fresh_ms = millis();   // stay quiet rather than storm
+            return;
+        }
+    } else {
+        s_futile_resets = 0;
+    }
+
+    s_last_fresh_ms  = millis();   // re-arm before the slow part, not after
+    s_fresh_at_reset = s_fresh_count;
     ++s_reset_count;
-    Serial.printf("[touch] press stuck %lums with no new frame — resetting GT911 (%lu)\n",
+    Serial.printf("[touch] no frames for %lums — resetting GT911 (%lu)\n",
                   (unsigned long)FRESH_STALE_MS, (unsigned long)s_reset_count);
     touch_down = false;
     gt911_reset();
@@ -142,7 +175,8 @@ static void touch_watchdog() {
 
 void touch_poll() {
     if (gt911_addr == 0) return;
-    if (!i2c_take(10)) return;             // bus busy, skip this cycle
+    ++s_poll_count;
+    if (!i2c_take(10)) { ++s_lock_fail; return; }   // bus busy, skip this cycle
 
     // Status register 0x814E
     Wire.beginTransmission(gt911_addr);
@@ -150,6 +184,7 @@ void touch_poll() {
     Wire.write(0x4E);
     int err = Wire.endTransmission();
     if (err != 0) {
+        ++s_stat_err;
         // A run of failures means the bus is wedged, not that one read was
         // unlucky — most likely a device on the I2C terminal holding a line low.
         // Recover it rather than losing touch until the next power cycle: the
