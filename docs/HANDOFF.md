@@ -87,24 +87,43 @@ of blocking, which also stops the planner queue growing.
 `~/Projects/FluidNC`, run from `simrun/`. The previous handoff blamed
 `ttybridge.py`; **the bridge was innocent**.
 
-| Fault | Fix |
+> **FluidNC ITSELF MUST STAY STOCK.** Every fix below lives in `simrun/` —
+> config and NVS data, nothing else. The first attempt at this fixed four of the
+> five by editing `capture/Platform.h`, `capture/i2s_out.cpp` and
+> `platformio.ini`, and that was thrown away. A simulator that only works
+> against a patched FluidNC proves nothing about the real controller, and the
+> patch is a permanent liability every time upstream moves. If a future fix
+> seems to need a FluidNC source change, it is the wrong fix.
+
+The host build's constraints are fixed, so the config bends to them: ESP32-S3
+pin table (legal `0-21` and `35-48`), `MAX_N_I2SO 0`, `MAX_N_UARTS 2`,
+`Spindles/VFD/*` excluded. `MAX_N_SIMULATOR 1` and
+`DEFAULT_STEPPING_ENGINE = SIMULATOR` come from stock `posix/Platform.h`.
+
+| Fault | Fix, entirely in `simrun/` |
 |---|---|
-| Telnet 23 / HTTP 80 are privileged ports. Arduino-Emulator's `EthernetServer::begin_()` loops `while (::bind(...) < 0) { delay(1000); }` **for ever**, so startup never completed | `simrun/native_nvs/Telnet.Enable` + `HTTP.Enable` = one `0x00` byte each |
-| `MAX_N_GPIO 49` (ESP32-S3) but the machine is a plain ESP32, so `gpio.23/32/33` did not exist | `MAX_N_GPIO 40` in `capture/Platform.h` — the line was already there, commented out |
-| `MAX_N_I2SO 0` made every 6-Pack step/dir/disable pin an "Unknown pin type" | `MAX_N_I2SO 1`, and `capture/i2s_out.cpp` (a 4-line stub with only `init`) got `read`/`write`/`delay` over a RAM bit array |
-| `MAX_N_UARTS 2`, but the machine uses `uart2` for the expansion port. `Spindles/VFD/*` was excluded wholesale, so `Huanyang:` was an ignored key too | `MAX_N_UARTS 3`; `+<Spindles/VFD/ModbusVFD.cpp>` and `+<Spindles/VFD/Huanyang.cpp>` in `platformio.ini` |
-| `engine: I2S_STREAM` is not a registered host engine, so it silently fell back to `step_engines[0]` (Timed) — which demands gpio step pins, failing all five motors | `engine: Simulator` with `sim.0-3` step/dir pins. posix defines `DEFAULT_STEPPING_ENGINE` as `SIMULATOR` and `StandardStepper::validate()` has an explicit `sim` escape hatch |
+| Telnet 23 / HTTP 80 are privileged ports. Arduino-Emulator's `EthernetServer::begin_()` loops `while (::bind(...) < 0) { delay(1000); }` **for ever**, so startup never completed | `native_nvs/Telnet.Enable` + `HTTP.Enable`, one `0x00` byte each (`EnumSetting` loads via `get_i8`, `OFF = 0`; the key's `/` becomes `.` in the filename) |
+| `gpio.23/32/33` do not exist in the S3 pin table | remapped in config to `gpio.20/40/41`. Motion parameters untouched |
+| Every `I2SO.n` disable pin is an "Unknown pin type", and the `i2so:` section an ignored key | `i2so:` section dropped; the five `disable_pin`s are `NO_PIN`. The simulator engine never drives them |
+| `uart2` (expansion) exceeds `MAX_N_UARTS 2`, and `Huanyang:` is an ignored key because the host build excludes the VFD sources | `uart2:`, `uart_channel2:` and `Huanyang:` sections dropped. No spindle and no Airedale in the sim |
+| `engine: I2S_STREAM` is not a registered host engine, so it silently fell back to `step_engines[0]` (Timed) — which demands gpio step pins, failing all five motors | `engine: Simulator` with `sim.0-3` step/dir pins; `StandardStepper::validate()` has an explicit `sim` escape hatch |
 
 Any one of them alone kept it in Alarm with `$X` refusing to clear
-(`error:152`). Verified: `$J=G91F1000X10` -> `ok`, MPos 0 -> 10 -> 20, and the
-panel links over the FTDI at `state=5 rx=51 tx=25`.
+(`error:152`). Verified against **stock** FluidNC: zero `ERR` lines at boot,
+`Stepping:Simulator`, `$J=G91F1000X10` -> `ok`, MPos 0 -> 10 -> 20, and the
+panel links over the FTDI at `state=5`.
 
 **`sim.N` is an axis, not a pin** — `sim.0`=X, `sim.1`=Y, `sim.2`=Z — and the
 same sim pin is valid for both step and dir. Y1 and Y2 share `sim.1`.
 
-**The gotcha that cost the most time:** FluidNC's host build reads
-`simrun/native_localfs/config.yaml`, not `simrun/config.yaml`. They are
-different files. The outer one is stale and unused. Edit the localfs copy.
+**Two gotchas, both of which cost real time:**
+
+1. FluidNC's host build reads `simrun/native_localfs/config.yaml`, **not**
+   `simrun/config.yaml`. They are different files; the outer one is stale and
+   unused. Edit the localfs copy.
+2. FluidNC's config parser takes the rest of the line as the value, so a
+   trailing `# comment` after a pin becomes **part of the pin name** —
+   `Cannot write to pin NO_PIN        # SIM ONLY...`. Notes go on their own line.
 
 ### Next on the sim
 
