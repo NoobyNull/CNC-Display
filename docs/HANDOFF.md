@@ -21,6 +21,8 @@ contradicts it. **73/73 host tests pass**, flash 14.4%, RAM 20.6%.
 | Jog | hold a direction key for continuous motion at <=1mm; tap the pad centre to cycle the step x10 |
 | CAL page | new nav slot: command 10/50/100mm, measure, apply corrected steps_per_mm |
 | Sensor bars | SETUP thresholds are horizontal bars of live-vs-threshold; guard buttons 2x2; jerk histogram removed from the UI |
+| Touch | now INT-driven (~7 reads/s, was 50); presses latched so a tap between two LVGL reads is never lost; stall watchdog with backoff |
+| IMU | 200Hz -> 50Hz. **Do not go lower**: jerk is rate-independent arithmetic but bandwidth is not — 10Hz resolves 5Hz and a 20ms impact falls between samples, leaving the guard blind while still appearing armed |
 
 ### Two bugs shipped and fixed the same session — both worth remembering
 
@@ -80,6 +82,38 @@ Leave it in.
    (which is what `GrblParserC.c:572` sends) nor UTF-8 encoded, while `!` worked
    every time. Unexplained. Continuous jog therefore re-issues bounded chunks
    and never depends on that byte. Worth settling on real hardware.
+
+### The GT911 stalls, and it is not cured
+
+**The open bug.** After a burst of touch activity the GT911 stops setting its
+data-ready bit and never resumes. Not a bus fault: `polls` climbs, `scans`
+freezes, `lockfail=0`, `staterr=0` — the chip answers every transaction and
+reports no frames. `touch_poll()` keeps the last state when no frame arrives, so
+`touch_down` freezes and the panel looks dead. A power cycle clears it.
+
+**Each watchdog reset yields exactly three more frames, then stalls again.**
+103 -> 106 -> 109, every time. That regularity is the lead.
+
+**Untried:** this driver has never written a GT911 config — no refresh rate, no
+INT trigger mode — it runs on whatever the chip has stored, and we now drive INT
+as an interrupt without knowing what mode it thinks it is in. Read
+`0x8047..0x80FF` and check the INT trigger byte at `0x804D` before writing
+anything; a bad checksum at `0x80FF` bricks touch until the chip is re-flashed.
+
+**Ruled out, with evidence — do not re-test:** bus wedging (`staterr=0`), the IMU
+starving the bus (`lockfail=0`), a GPIO4/RGB conflict (RGB uses
+14/38/18/17/10/39/0/45/48/47/21/1/2/42/41 + 46/3/5/7), screen blanking
+(reproduced seconds after boot, screen lit), the screensaver swallowing input
+(`idle` climbs during the stall), and the interrupt conversion itself.
+
+**Two wrong turns worth not repeating.** "Idle silence is normal for a GT911" is
+false — a healthy chip produces ~5-10 frames/s untouched. That was concluded from
+a chip already wedged, and a watchdog was narrowed to the wrong condition on the
+strength of it. *Never characterise normal behaviour from the device you are
+debugging.* And the first watchdog storm-reset every 5s at 300ms of blocked UI
+each; it now backs off after three futile attempts.
+
+Full write-up: `/tmp/HANDOFF-display-responsiveness-fix.md`.
 
 ### The simulator rig is broken
 
