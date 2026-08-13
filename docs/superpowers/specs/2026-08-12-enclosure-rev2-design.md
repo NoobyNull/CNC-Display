@@ -21,7 +21,7 @@ Recorded with the rejected options so they are not silently revisited.
 |---|---|---|
 | Battery role | UPS / ride-through | Panel, DRO and link survive a power blip or the e-stop cutting the cabinet |
 | Charger + boost | **None needed** | The board already has them — Waveshare item 13 is a 3.7V lithium PH2.0 header, items 19/20/21 are DONE / CHARGE / POWER indicators. An earlier version of this design mounted a TP4056 and a boost converter; both were wrong |
-| Depth for the cell | Local bump-out, left strip | Outside the VESA 100×100 so the arm still bolts flat, and the furthest point in the box from the ESP32 and backlight supply |
+| Depth for the cell | ~6mm bump-out, left strip | Outside the VESA 100×100 so the arm still bolts flat, and the furthest point in the box from the ESP32 and backlight supply |
 | Cell access | Sealed in, opens with the cover | One part, no seam, stiffer. Accepted trade: swapping the cell means taking the panel off the arm, because the M3 cover screws sit under the VESA plate |
 | Cable entry | Hardwired onto the adapter's terminal block | The panel is arm-mounted with the loom captive in the Ø12 tray under two bridges, so detachability buys almost nothing, while a connector is one more thing to vibrate loose. The adapter is kept anyway — its TVS diodes are the part earning their place near a VFD, not its socket |
 | Strain relief | Two-screw printed saddle | A knot grips only the jacket and lets conductors creep, putting the strain on solder joints |
@@ -69,15 +69,41 @@ of the three openings the wall is locally stepped back to roughly its present
 position. They are vertical faces in the print orientation, so they cost nothing
 in supports.
 
+### The left strip, and why the bump-out is small
+
+`USB_X_FACE = -55.03` is the panel PCB's left edge, so everything outboard of it
+has **no PCB behind it** — the full 20.3mm from the bracket face to the cavity
+floor is clear, and the overhang beyond the bracket gains a little more. After
+the full-back extension the strip is ~40mm wide and ~105mm tall inside.
+
+That is enough for both the cell and the adapter, stacked in Z:
+
+```
+   cell    69mm (protected 18650)  + clearance ~71
+   adapter 30mm                    + clearance
+   ------------------------------------------
+   ~101mm within ~105mm available
+```
+
+Both clear the USB plugs, which occupy Y -12.55..-8.49 — forward of everything
+in this strip.
+
 ### Battery bay
 
 - Left strip, X from the inner left wall to **-53**, clear of the VESA 100×100.
-- Bump-out projects rearward from `CAVITY_BACK_Y`; ~20mm proud, giving ~51mm
-  total from the glass in that corner only.
-- Cell vertical along Z: 69mm (protected 18650) inside a 110mm-tall cover.
-- Cradle bored Ø19.0 for an 18.6mm cell.
-- Two wires to the existing battery header, which sits at the PCB's top-left —
-  next to the bay, so the run is short.
+- **~6mm bump-out**, not 20. The cell plus a cradle wall needs ~20.1mm against
+  20.3mm available, which is not a fit; 6mm buys real retention and margin.
+  Worst-case depth from the glass becomes ~38mm, in that corner only.
+- Cell vertical along Z, cradle bored Ø19.0 for an 18.6mm cell.
+- Two wires to the existing battery header at the PCB's top-left — beside the
+  bay, so the run is short.
+
+### Adapter placement
+
+- Same strip, below the cell. **No bump-out required**: the measured stack is
+  17mm (board plus fitted 6P6C jack) against 20.3mm of clear depth.
+- A service loop of cable is coiled in this strip. Independent of the adapter:
+  slack means a damaged cable is re-terminated rather than replaced end to end.
 
 ### Cable entry and adapter tray
 
@@ -132,13 +158,12 @@ a bounce shorter than the hold does not fire, and a hold starting at
 
 ## Unverified constants
 
-Both are parameters, not blockers. Each gets a `# UNVERIFIED` comment so it is
-obvious what has and has not been measured — this file's own rule is that
+One remains. It gets a `# UNVERIFIED` comment so it is obvious what has and has
+not been measured — this file's own rule is that
 nothing is a guessed number.
 
 | Constant | Needed for | How to get it |
 |---|---|---|
-| `RJ_STACK_H` — tallest thing on the adapter, measured from the board face | Bump-out/cavity clearance over the board | Calipers over the fitted RJ12 jack. **This is the one that can still bite:** a 6P6C jack stands ~13mm, which with a 1.6mm board is ~15mm of the 20.3mm cavity. It fits only where the panel PCB behind it is shallow, so the board's position depends on this number. If the jack is left unpopulated the problem disappears |
 | `RESTART_GPIO` | Firmware only | Flash a probe setting 6, 15 and 16 to `INPUT_PULLUP` and print them; short the header's GPIO to GND and read which drops. By elimination it is one of those three — CAN is muxed onto the USB pins per `EXIO_CAN_SEL`, so RS485 takes two and the sensor header the last. GPIO6 is the likely one |
 
 ## Verification
