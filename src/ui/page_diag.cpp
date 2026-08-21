@@ -43,11 +43,12 @@ static void scroll_cb(lv_event_t* e) {
     refresh();
 }
 
-static void all_cb(lv_event_t*)     { s_scroll = 0; s_sel = -1; fncset_request_all(); }
-static void changed_cb(lv_event_t*) { s_scroll = 0; s_sel = -1; fncset_request_changed(); }
+static void all_cb(lv_event_t*)     { s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_all(); }
+static void changed_cb(lv_event_t*) { s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_changed(); }
 
 static void edit_focus_cb(lv_event_t*) {
-    if (s_sel < 0) return;                       // nothing selected, nothing to edit
+    // With a setting selected this edits its value; with nothing selected it is
+    // a free command line — anything typed goes to the controller verbatim.
     lv_keyboard_set_textarea(s_kb, s_edit_ta);
     lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_kb);
@@ -64,8 +65,17 @@ static void kb_done_cb(lv_event_t* e) {
     if (code != LV_EVENT_READY) return;
 
     const fnc_setting_t* st = fncset_at((size_t)s_sel);
-    if (!st) return;
-    fncset_write(st->name, lv_textarea_get_text(s_edit_ta));
+    if (st) {
+        fncset_write(st->name, lv_textarea_get_text(s_edit_ta));
+        return;
+    }
+    // No selection: the box is a command line. Replies are plain lines, so
+    // show the console to make ok/error visible.
+    const char* t = lv_textarea_get_text(s_edit_ta);
+    if (t && *t) {
+        send_line(t);
+        expanded_open(EXPANDED_CONSOLE);
+    }
 }
 
 static void diag_cmd_cb(lv_event_t* e) {
@@ -142,7 +152,7 @@ void page_diag_build(lv_obj_t* p) {
 
     s_edit_ta = lv_textarea_create(right);
     lv_textarea_set_one_line(s_edit_ta, true);
-    lv_textarea_set_placeholder_text(s_edit_ta, "select a setting");
+    lv_textarea_set_placeholder_text(s_edit_ta, "setting value / $ command");
     lv_obj_set_size(s_edit_ta, LV_PCT(100), U * 6);
     lv_obj_set_style_bg_color(s_edit_ta, C_SURFACE, 0);
     lv_obj_set_style_text_color(s_edit_ta, C_TEXT, 0);
@@ -177,6 +187,17 @@ void page_diag_build(lv_obj_t* p) {
         lv_obj_set_flex_grow(b, 1);
         lv_obj_set_height(b, LV_PCT(100));
     }
+
+    // $CD=<file> dumps the LIVE config tree over the file the controller boots
+    // from — the persistence FluidNC has but never documents. It rewrites the
+    // whole file (regenerated, comments gone), so it takes a hold, not a tap.
+    lv_obj_t* sv = w_button(diag, "SAVE CFG", "hold", C_RAISE, C_WARN, nullptr, nullptr);
+    lv_obj_set_flex_grow(sv, 1);
+    lv_obj_set_height(sv, LV_PCT(100));
+    lv_obj_add_event_cb(sv, [](lv_event_t*) {
+        send_line("$CD=config.yaml");
+        expanded_open(EXPANDED_CONSOLE);
+    }, LV_EVENT_LONG_PRESSED, nullptr);
 
     s_kb = w_keyboard();
     lv_obj_add_event_cb(s_kb, kb_done_cb, LV_EVENT_READY, nullptr);
