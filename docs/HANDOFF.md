@@ -1,5 +1,54 @@
 # Handoff — CNC Console, 2026-08-11
 
+## Session 2026-08-20 — CrowPanel Advance 7.0 V1.4 — read this first
+
+The Waveshare 7B went back on warranty (U13 mux dead, section below), and the
+firmware now targets the **Elecrow CrowPanel Advance 7.0 V1.4** (env `crowadv`,
+800×480, same N16R8 module). Everything below this section describes the 7B and
+stands as history; where it contradicts this section, this section wins.
+
+**The link works end-to-end for the first time**: panel → UART0-OUT →
+pigtail → Airedale pendant RJ12 → Corgi uart2 (gpio.27 TX / 25 RX @ 1M).
+Verified live: DRO tracks, boot log shows `IO Expander BOARD:Airedale v1.1`.
+
+Port facts, each of which cost real time — details in the code comments and in
+auto-memory (`crowpanel-advance-wiring`, `corgi-config-mismatch`):
+
+- Pin truth came from Elecrow's factory example
+  (`example/V1.3_and_V1.4_and_V1.5/PlatformIO`) and the V1.4 Eagle schematic,
+  not from third-party pinout sites — those were garbled.
+- **UART0-OUT is 3.3V direct; UART0-IN is a BSS138 shifter pulled to 5V.** The
+  IN connector is for 5V Arduino hosts; using it against a 3.3V controller was
+  ruled out on purpose.
+- **Console and link share GPIO 43/44** (the USB-C is a CH340K on the same
+  nets; no native USB). The Setup "Wired UART" toggle picks the owner at boot.
+  Flashing over the wire requires the link cable unplugged — or skip the wire:
+  **SETUP → hold UPDATE FW flashes `/update.bin` from the SD card** (two-slot
+  partition table as of today; the repartition itself was the last forced wire
+  flash).
+- Backlight/touch-reset/buzzer live on an **STC8H1K28 at I2C 0x30**: one byte
+  0–245 sets brightness (0 = full), 250 pulses the GT911 reset. GT911 INT is
+  GPIO 1, I2C is 15/16, SD is SPI on 4/5/6 with the **function DIP on
+  TF-CARD** (that position also disconnects UART1-OUT and the audio — one of
+  three, not à la carte).
+- **FluidNC only auto-reports on a uart_channel after it has received
+  something** (`UartChannel::_active`). A silent pendant hears silence forever;
+  every passive listen during bring-up was doomed. Poll first.
+- **`$CD=config.yaml` is FluidNC's undocumented persistent save** — dumps the
+  live config tree over the boot file. The DIAG page has a hold-button for it,
+  and a free-text `$` command line (tap the edit box with no setting selected).
+- **The Corgi's flash config is not `~/Desktop/CNC/corgi_config.yaml`.** Flash
+  runs a 3-axis FoxAlien-named config (uart2 pins correct); the desktop file is
+  the intended 4-axis spec, fixed but not uploaded. Reconcile before machine
+  work.
+- Boot splash in `src/ui/splash.cpp`; its timeline starts in `splash_begin()`
+  *after* blocking init, because the anim clock is wall-time and boot would
+  otherwise spend the whole sweep invisibly.
+
+Build `pio run -e crowadv`; tests unchanged (`pio test -e native`, 83 cases).
+
+---
+
 The firmware moved from the Elecrow CrowPanel Advance 7.0" to the **Waveshare
 ESP32-S3-Touch-LCD-7B**. The old board was abandoned because it could not be put
 into download mode: its CH340's TX line was dead and EN was shorted to IO0. None
@@ -317,10 +366,25 @@ Two things that cost time working this out:
   `TRANSPORT_NONE` and `fnc_putchar()` writes nothing at all — the panel is
   silent on the wire and it looks exactly like miswiring. Check the toggle before
   suspecting TX/RX.
-- **The UART1/UART2 switch** routes the one UART peripheral to a single PH2.0
-  terminal. The other terminal is electrically dead. Waveshare's docs describe
-  the switch as selecting between the two terminals, *not* between the CH343 and
-  a terminal as an earlier revision of this document claimed.
+- **The UART1/UART2 switch (SW1)** routes GPIO 43/44 through the FSUSB42UMX mux
+  (U13) to either the CH343 USB-C port ("UART1") or the H3 PH2.0 terminal
+  ("UART2"). The earlier revision of this doc had it right; the "two terminals"
+  correction was wrong — per the Waveshare wiki, "6 and 7 [USB TO UART port and
+  UART terminal] are the same UART, selected by switch". H3 pin order is
+  **3V3 · GND · RX · TX**.
+- **This board's H3 terminal is factory-dead** (confirmed 2026-08-15): 0 V even
+  on its 3V3 pin with a seated plug, while the I2C header next to it reads 3.3 V
+  with the same cable. Firmware, GPIO 43/44, mux, and switch all verified good —
+  internal loopback passes, and a full two-way link ran through the CH343 side.
+  Root cause isolated 2026-08-16: **U13 (FSUSB42UMX mux) is internally dead on
+  its terminal-side channel**. Proven by elimination: ESP→R107→mux common side
+  reads 499Ω and carried live 1 Mbaud data via the CH343 path; mux→H3 traces
+  beep; H3 legs reflowed. Fix: warranty swap, hot-air replace U13, or bypass
+  bodge (R107 mux-side pad → H3 pin 4, module RXD0 castellation → H3 pin 3,
+  SW1 left on UART2).
+- `init_fnc_uart()` now logs setup error codes and runs a silicon-internal
+  loopback self-test at boot (`[uart] internal loopback: n=4 data=PING` = the
+  transmitter provably works, wiring problems are downstream of the chip).
 - **Which Type-C is which:** `303a:1001` is the native USB (flashing + `Serial`
   console); `1a86:55d3` is the CH343 USB-UART. The VID tells you which port the
   cable is in when the silkscreen does not.
