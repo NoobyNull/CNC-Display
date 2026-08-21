@@ -1,13 +1,15 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// The console is USB CDC on the native USB-Serial-JTAG peripheral (GPIO 19/20,
-// the Type-C marked USB), set up by ARDUINO_USB_CDC_ON_BOOT in platformio.ini.
-// It costs no pins the panel or the link wants, and it is also the flashing
-// port, so the FluidNC link on 43/44 never has to be given up to update the
-// board. That is what the old UPDATE/PENDANT mode existed to work around.
+// There is no native-USB console on the Advance 7.0: the Type-C is a CH340K on
+// UART0 (GPIO 43/44) — the SAME pins the UART0-IN/OUT connectors expose, which
+// is where the FluidNC link plugs in. One UART, two masters, so the Setup
+// "Wired UART" toggle decides who owns it at boot: toggle ON = the link runs
+// at 1 Mbaud and the console stays silent; toggle OFF = a 115200 debug console
+// on the USB Type-C and the link is dead. Flashing is the ROM bootloader over
+// the CH340 and works either way (unplug the link cable if esptool misbehaves).
 #include "hw/display_hw.h"
-#include "hw/io_expander.h"
+#include "hw/stc8.h"
 #include "hw/touch.h"
 #include "hw/sdcard.h"
 #include "hw/imu.h"
@@ -27,6 +29,7 @@
 #include "model/filelist.h"
 #include "model/path_loader.h"
 #include "ui/shell.h"
+#include "ui/splash.h"
 #include "GrblParserC.h"
 
 static void ui_tick_cb(lv_timer_t*) { shell_tick(); }
@@ -37,26 +40,29 @@ static void touch_tick_cb(lv_timer_t*) { touch_poll(); }
 
 void setup() {
     settings_load();
-    Serial.begin(115200);
-    // A host that stops draining the CDC must not stall the UI. Without this,
-    // every Serial.printf blocks up to 100ms waiting for the ring buffer.
-    Serial.setTxTimeoutMs(0);
+    // Console and FluidNC link share UART0's pins — see the header comment.
+    // Un-begun, every Serial.print is a safe no-op.
+    if (!settings_uart_enabled()) Serial.begin(115200);
     Serial.println("\n=== CNC Console ===");
 
-    // The GT911 and the io-extender share one bus, and the extender gates the
-    // panel rails and the touch reset. Nothing below may touch Wire before
-    // this line.
+    // The GT911 and the STC8 share one bus, and the STC8 owns the touch reset
+    // line. Nothing below may touch Wire before this line.
     Wire.begin(GT911_SDA_PIN, GT911_SCL_PIN);
     Wire.setClock(400000);
 
     touch_init();          // create the I2C mutex before anything uses the bus
-    ioexp_init();          // panel rails, touch reset line, SD DAT3, USB/CAN mux
+    stc8_init();           // wait for the housekeeping MCU to answer
     gt911_reset();         // address strap is latched here, before any probing
-    display_init();        // LCD rails + RGB panel
+    display_init();        // RGB panel
     gt911_discover();
     gt911_dump_config();   // read-only; the stall lead lives at 0x804D and 0x8055
     lvgl_init();
     set_backlight(settings_brightness());
+
+    // Splash first, painted now: the rest of boot (SD probe, IMU, shell build)
+    // happens behind it instead of behind a black screen.
+    splash_show();
+    lv_timer_handler();
 
     clog_reset();
     offsets_reset();
@@ -85,6 +91,10 @@ void setup() {
     // Only these two are safe: both are a single putchar with no ack expected.
     fnc_putchar(0x11);          // XON, clear any stale XOFF on the far end
     fnc_realtime(StatusReport);
+
+    // Boot is done: start the splash timeline now, so the whole sweep plays on
+    // screen instead of being eaten by the blocking init above.
+    splash_begin();
 
     // Paint frame one now so the UI is up and interactive regardless of whether
     // anything is on the other end of the wire.

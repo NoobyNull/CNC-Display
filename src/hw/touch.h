@@ -2,18 +2,20 @@
 #include <cstdint>
 #include <lvgl.h>
 
-// TP_IRQ. The only touch signal on a real GPIO; RST is on the io-extender.
-#define GT911_INT_PIN 4
+// TP_IRQ (net IO1_TP_INT on the V1.4 schematic). The only touch signal on a
+// real GPIO; RST is a port pin on the STC8 helper MCU, reached by I2C command.
+#define GT911_INT_PIN 1
 
-// The panel's one I2C bus: GT911 touch (0x5D), io-extender (0x24), and an
-// ICM-20948 (0x68/0x69) if one is fitted to the I2C terminal. Defined here
-// rather than written literally at each Wire.begin() so the bus recovery below
-// cannot drift from what main.cpp brought the bus up with.
-#define GT911_SDA_PIN 8
-#define GT911_SCL_PIN 9
+// The panel's one I2C bus: GT911 touch (0x5D), STC8 housekeeping MCU (0x30),
+// BM8563 RTC (0x51), and an ICM-20948 (0x68/0x69) if one is fitted to the
+// I2C-OUT connector. Defined here rather than written literally at each
+// Wire.begin() so the bus recovery below cannot drift from what main.cpp
+// brought the bus up with.
+#define GT911_SDA_PIN 15
+#define GT911_SCL_PIN 16
 
 void touch_init();       // Create I2C mutex
-void gt911_reset();      // Pulse RST with INT held low -- call before discover
+void gt911_reset();      // Pulse RST (via the STC8) with INT held low -- call before discover
 void gt911_discover();   // Discover GT911 address -- call after gt911_reset()
 void touch_poll();       // Poll GT911 with mutex protection -- call from loop() at 20Hz
 void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);  // LVGL callback

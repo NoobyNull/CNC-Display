@@ -1,10 +1,10 @@
 #pragma once
 #include <cstdint>
 
-#define SCREEN_WIDTH  1024
-#define SCREEN_HEIGHT 600
+#define SCREEN_WIDTH  800
+#define SCREEN_HEIGHT 480
 
-void display_init();   // Panel rails via the io-extender + LovyanGFX RGB init
+void display_init();   // esp_lcd RGB panel init (rails/backlight are the STC8's job)
 void lvgl_init();      // Init LVGL buffers, register display/touch drivers
 void lvgl_tick();      // Call lv_timer_handler() -- call from loop()
 
@@ -16,14 +16,10 @@ void lvgl_tick();      // Call lv_timer_handler() -- call from loop()
 // boundary. Call it after any operation that blacks out the cache.
 void display_resync();
 
-void set_backlight(uint8_t level);   // 0=off, 255=max. Drives the io-extender PWM.
+void set_backlight(uint8_t level);   // 0=off, 255=max. I2C command to the STC8.
 uint8_t get_backlight();
 
 // Idle blanking. Call once per UI tick with whatever the machine is doing;
-// screen_idle_tick() reads the timeout from settings and drives the backlight.
-//
-// It gates the panel's EXIO_DISP enable line rather than winding the PWM down,
-// because ioexp_backlight() clamps at 247/255 -- past that the boost converter
-// latches off and only a power cycle brings it back. So "dimmest" is as dark as
-// the PWM safely goes, while the enable line is a real off and reversible.
+// screen_idle_tick() reads the timeout from settings and drives the backlight
+// through the STC8 (245 = off, fully reversible — no latch-off on this board).
 void screen_idle_tick(bool machine_busy);

@@ -1,5 +1,5 @@
 #include "touch.h"
-#include "io_expander.h"
+#include "stc8.h"
 #include "model/screensaver.h"
 
 #include <Arduino.h>
@@ -16,7 +16,7 @@
 
 // ============================================================
 // I2C mutex — protects all Wire operations (GT911 shares the bus
-// with the io-extender on SDA=8 / SCL=9)
+// with the STC8 and the RTC on SDA=15 / SCL=16)
 // ============================================================
 static SemaphoreHandle_t i2c_mutex = NULL;
 
@@ -134,22 +134,23 @@ void touch_init() {
 }
 
 // The GT911 latches its I2C address from the INT pin at the moment reset is
-// released: INT low picks 0x5D, INT high picks 0x14. RST hangs off the
-// io-extender, INT is a real GPIO, so both have to be driven by hand. Must run
-// before gt911_discover() and before anything else on the bus expects an
-// answer from the touch controller.
+// released: INT low picks 0x5D, INT high picks 0x14. On this board RST is a
+// port pin of the STC8, pulsed by command 250 ("activate touch"), while INT is
+// GPIO 1 — so the strap is: hold INT low, ask the STC8 to pulse reset, keep
+// holding through the release edge, then hand INT back to the controller.
+// This mirrors Elecrow's factory retry loop exactly. Must run before
+// gt911_discover() and before anything else on the bus expects an answer from
+// the touch controller.
 void gt911_reset() {
     // The address strap needs INT driven, so the interrupt cannot stay attached
-    // across a reset — and the watchdog resets while running.
+    // across a reset.
     gt911_int_detach();
     pinMode(GT911_INT_PIN, OUTPUT);
     digitalWrite(GT911_INT_PIN, LOW);
-    ioexp_write(EXIO_TP_RST, false);
-    delay(100);
-    digitalWrite(GT911_INT_PIN, LOW);       // hold it through the release edge
-    ioexp_write(EXIO_TP_RST, true);
-    delay(200);                             // datasheet wants >50ms before I2C
+    stc8_cmd(250);                          // STC8 pulses TP_RST
+    delay(120);                             // factory value: covers the pulse + release
     gt911_int_attach();                     // let the controller drive it again
+    delay(100);                             // datasheet wants >50ms before I2C
     s_int_flag = true;                      // read once now, do not wait for an edge
     s_frame_log = 8;
 }
@@ -214,10 +215,6 @@ void gt911_dump_config() {
     i2c_give();
     if (!ok) { Serial.println("[gt911] dump: read failed"); return; }
 
-    // Serial.setTxTimeoutMs(0) in setup() drops writes rather than blocking the
-    // UI, which would silently eat half the dump. Block just for this.
-    Serial.setTxTimeoutMs(100);
-
     Serial.printf("[gt911] id=%c%c%c%c fw=0x%02X%02X res=%ux%u vendor=0x%02X\n",
                   id[0], id[1], id[2], id[3], id[5], id[4],
                   (unsigned)(id[6] | (id[7] << 8)), (unsigned)(id[8] | (id[9] << 8)), id[10]);
@@ -242,8 +239,6 @@ void gt911_dump_config() {
         for (size_t j = 0; j < 16 && i + j < sizeof(cfg); j++) Serial.printf(" %02X", cfg[i + j]);
         Serial.println();
     }
-
-    Serial.setTxTimeoutMs(0);
 }
 
 void touch_poll() {

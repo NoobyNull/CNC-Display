@@ -17,13 +17,27 @@ static int         s_baud_idx = 0;
 static uint32_t    s_next_hunt = 0;
 static char        s_detail[64] = "no link";
 
+// On this board the link and the debug console are the same physical UART pins
+// (43/44 — see uart.h), so the driver is only installed when the Setup toggle
+// says the link owns them; otherwise the console keeps them. Enabling the
+// toggle at runtime claims the pins live (and the console goes quiet until the
+// next boot with the toggle off).
+static bool s_uart_ready = false;
+
 void transport_init() {
-    init_fnc_uart();
+    if (settings_uart_enabled()) {
+        init_fnc_uart();
+        s_uart_ready = true;
+    }
 }
 
 void transport_settings_changed() {
     s_active    = TRANSPORT_NONE;
     s_next_hunt = 0;
+    if (settings_uart_enabled() && !s_uart_ready) {
+        init_fnc_uart();
+        s_uart_ready = true;
+    }
 }
 
 transport_t transport_active() { return s_active; }

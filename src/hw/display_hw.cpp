@@ -1,6 +1,6 @@
 #include "display_hw.h"
 #include "touch.h"
-#include "io_expander.h"
+#include "stc8.h"
 #include "model/screensaver.h"
 #include "model/settings.h"
 
@@ -11,39 +11,23 @@
 #include <esp_lcd_panel_ops.h>
 
 // ============================================================
-// RGB panel -- Waveshare ESP32-S3-Touch-LCD-7B (1024x600 RGB565)
+// RGB panel -- Elecrow CrowPanel Advance 7.0 V1.4 (800x480 RGB565)
 // ============================================================
 //
-// This drives the ESP-IDF esp_lcd_rgb_panel directly rather than going through
-// LovyanGFX, for two reasons found the hard way on real hardware:
-//
-//  1. LovyanGFX's Bus_RGB::config_t stores every porch and pulse width in an
-//     `int8_t`. Waveshare's real values -- hsync pulse 162, back porch 152 --
-//     wrap to -94 and -104, the horizontal timing generator gets garbage, the
-//     panel never syncs and the screen sits white with the backlight lit. Still
-//     true on LovyanGFX master; there is no version to upgrade to.
-//
-//  2. LovyanGFX has no bounce buffer and cannot be given one. Its
-//     Panel_RGB::initFrameBuffer() unconditionally puts the whole framebuffer in
-//     PSRAM ("provisional implementation ... ToDo: split allocation") and its
-//     use_psram setting is marked `unimplemented`. Streaming 1.2 MB per frame
-//     straight out of PSRAM while LVGL writes into it produces the static-TV
-//     noise this panel showed at both 30 MHz and 21 MHz.
-//
-// esp_lcd fixes both: uint32_t timings, and two DRAM bounce buffers that the
-// DMA feeds from, which is exactly how Waveshare's own driver runs this panel.
-static const uint32_t LCD_PCLK_HZ = 30000000;
+// This stays on the ESP-IDF esp_lcd_rgb_panel driver the Waveshare 7B port
+// introduced (LovyanGFX has no bounce buffer, and streaming the framebuffer
+// straight out of PSRAM while LVGL writes into it produces static). Elecrow's
+// own V1.3+ factory example drives this panel through esp_lcd too — every
+// timing and flag below is copied from it verbatim.
+static const uint32_t LCD_PCLK_HZ = 18000000;
 
-// Waveshare's real timings, straight from their rgb_lcd_port.cpp. The 162-clock
-// hsync pulse looks enormous next to a generic 1024x600 datasheet and is correct
-// for the panel they solder on. Do not "fix" them from a generic ST7262 table.
-static const uint32_t HSYNC_PULSE = 162, HSYNC_BACK = 152, HSYNC_FRONT = 48;
-static const uint32_t VSYNC_PULSE = 45,  VSYNC_BACK = 13,  VSYNC_FRONT = 3;
+static const uint32_t HSYNC_PULSE = 4, HSYNC_BACK = 8, HSYNC_FRONT = 8;
+static const uint32_t VSYNC_PULSE = 4, VSYNC_BACK = 8, VSYNC_FRONT = 8;
 
 // Two DRAM bounce buffers of this many pixels each. The DMA reads from these
-// instead of from PSRAM, which is what keeps the scanout clean at 30 MHz.
-// 1024*10 px * 2 B * 2 buffers = 40 KB of internal RAM.
-static const size_t BOUNCE_PX = SCREEN_WIDTH * 10;
+// instead of from PSRAM, which is what keeps the scanout clean. 20 lines is
+// the factory value: 800*20 px * 2 B * 2 buffers = 64 KB of internal RAM.
+static const size_t BOUNCE_PX = SCREEN_WIDTH * 20;
 
 static esp_lcd_panel_handle_t s_panel = nullptr;
 
@@ -65,14 +49,8 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
 // display_init() -- panel rails + RGB panel
 // ============================================================
 void display_init() {
-  // VCOM rail and backlight enable both live on the extender. The panel reset is
-  // released too -- it is wired, not strapped, and comes up asserted.
-  ioexp_write(EXIO_LCD_VDD_EN, true);
-  ioexp_write(EXIO_LCD_RST, false);
-  delay(10);
-  ioexp_write(EXIO_LCD_RST, true);
-  delay(50);
-  ioexp_write(EXIO_DISP, true);
+  // No rails to sequence here: the STC8 powers the panel and backlight on its
+  // own at boot, and stc8_init() has already confirmed it is alive.
 
   // Field-by-field rather than a designated initializer: sram_trans_align and
   // psram_trans_align are deprecated and union'd with dma_burst_size in IDF 5.x,
@@ -90,24 +68,27 @@ void display_init() {
   cfg.timings.vsync_back_porch  = VSYNC_BACK;
   cfg.timings.vsync_front_porch = VSYNC_FRONT;
   cfg.timings.flags.pclk_active_neg = 1;
+  cfg.timings.flags.pclk_idle_high  = 1;  // factory flag; keep with the timings
 
   cfg.data_width            = 16;
   cfg.bits_per_pixel        = 16;
   cfg.num_fbs               = 1;          // LVGL draws partial areas, not whole frames
   cfg.bounce_buffer_size_px = BOUNCE_PX;
+  cfg.dma_burst_size        = 64;
   cfg.flags.fb_in_psram     = 1;
+  cfg.flags.bb_invalidate_cache = 1;
 
-  cfg.hsync_gpio_num = 46;
-  cfg.vsync_gpio_num = 3;
-  cfg.de_gpio_num    = 5;
-  cfg.pclk_gpio_num  = 7;
+  cfg.hsync_gpio_num = 40;
+  cfg.vsync_gpio_num = 41;
+  cfg.de_gpio_num    = 42;
+  cfg.pclk_gpio_num  = 39;
   cfg.disp_gpio_num  = -1;                // no DISP signal on this board
 
   // d0-d4 blue, d5-d10 green, d11-d15 red -- RGB565 bit order, matching
-  // Waveshare's rgb_lcd_port.h exactly.
-  const int data_pins[16] = { 14, 38, 18, 17, 10,      // B3..B7
-                              39,  0, 45, 48, 47, 21,  // G2..G7
-                               1,  2, 42, 41, 40 };    // R3..R7
+  // Elecrow's factory example exactly.
+  const int data_pins[16] = { 21, 47, 48, 45, 38,      // B0..B4
+                               9, 10, 11, 12, 13, 14,  // G0..G5
+                               7, 17, 18,  3, 46 };    // R0..R4
   for (int i = 0; i < 16; i++) cfg.data_gpio_nums[i] = data_pins[i];
 
   esp_err_t err = esp_lcd_new_rgb_panel(&cfg, &s_panel);
@@ -176,7 +157,7 @@ static uint8_t current_brightness = 200;
 
 void set_backlight(uint8_t level) {
   current_brightness = level;
-  ioexp_backlight(level);
+  stc8_backlight(level);
 }
 
 uint8_t get_backlight() {
@@ -187,8 +168,7 @@ uint8_t get_backlight() {
 // Idle blanking
 // ============================================================
 // The decision lives in model/screensaver.cpp so it can be tested on the host;
-// all this does is follow it with the enable line. See display_hw.h for why the
-// enable line and not the PWM.
+// all this does is follow it with the STC8 backlight command.
 // What the backlight is actually doing, tracked here rather than inferred from
 // the screensaver's own state.
 //
@@ -208,7 +188,7 @@ void screen_idle_tick(bool machine_busy) {
   if (want_off == s_backlight_off) return;
 
   s_backlight_off = want_off;
-  ioexp_write(EXIO_DISP, !want_off);
+  stc8_display(!want_off);
   if (!want_off) {
     // Restart the idle clock so a wake does not blank again on the next tick.
     lv_disp_trig_activity(NULL);

@@ -1,21 +1,24 @@
 #pragma once
 #include <stdint.h>
 
-// FluidNC link: the pendant cable from the Airdale plugs into the board's UART
-// terminal, the PH2.0 header next to the USB-UART Type-C.
+// FluidNC link: the pendant cable from the Airdale plugs into the Advance
+// 7.0's UART0-IN connector (the XH2.54 next to the function DIP; pin order
+// GND · 5V-IN · IO43-TX0 · IO44-RX0). UART0-OUT (HY2.0) is the same two nets
+// before the isolation FETs.
 //
 //   GPIO 43 = TX -> Airdale pendant RX
 //   GPIO 44 = RX <- Airdale pendant TX
 //
-// An onboard analog mux gives those two pins to *either* the CH343 USB-UART or
-// the terminal, never both — the board switch labelled UART picks one. Set it
-// to the terminal and leave it there: flashing and the console go over the
-// native USB Type-C, which does not touch these pins.
+// The CH340K on the USB Type-C sits on these same nets — there is no mux and
+// no other UART connector once the function DIP is on TF-CARD (UART1-OUT is
+// behind that mux and dead in TF-CARD mode; verified on the V1.4 schematic).
+// So the link and the debug console are runtime-exclusive: the Setup "Wired
+// UART" toggle decides which one owns the pins at boot (see main.cpp).
 //
 // These are UART0's default pins. We drive them from the UART2 peripheral
 // instead; the GPIO matrix does not care which peripheral owns which pin, and
-// taking UART0 out of the picture avoids a baud-rate fight over the same
-// hardware if anything ever re-enables a console there.
+// taking UART0 out of the picture avoids a baud-rate fight with the console's
+// UART0 peripheral over the same hardware.
 #define FNC_UART_NUM 2
 #define FNC_TX_PIN   43
 #define FNC_RX_PIN   44
