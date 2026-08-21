@@ -36,10 +36,24 @@ void init_fnc_uart() {
     conf.rx_flow_ctrl_thresh = 0;
     conf.source_clk          = UART_SCLK_XTAL;  // independent of APB frequency
 
-    uart_param_config(fnc_uart_port, &conf);
-    uart_set_pin(fnc_uart_port, (gpio_num_t)FNC_TX_PIN, (gpio_num_t)FNC_RX_PIN,
-                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_driver_install(fnc_uart_port, 4096, 0, 0, NULL, 0);
+    esp_err_t e_cfg = uart_param_config(fnc_uart_port, &conf);
+    esp_err_t e_pin = uart_set_pin(fnc_uart_port, (gpio_num_t)FNC_TX_PIN, (gpio_num_t)FNC_RX_PIN,
+                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    esp_err_t e_drv = uart_driver_install(fnc_uart_port, 4096, 0, 0, NULL, 0);
+    Serial.printf("[uart] num=%d tx=%d rx=%d baud=%lu cfg=%d pin=%d drv=%d\n",
+                  FNC_UART_NUM, FNC_TX_PIN, FNC_RX_PIN, (unsigned long)s_baud,
+                  (int)e_cfg, (int)e_pin, (int)e_drv);
+
+    // Silicon-internal loopback: TX routed to RX inside the chip, no pads
+    // involved. Proves the peripheral + driver actually transmit.
+    uart_set_loop_back(fnc_uart_port, true);
+    uart_flush_input(fnc_uart_port);
+    uart_write_bytes(fnc_uart_port, "PING", 4);
+    uart_wait_tx_done(fnc_uart_port, pdMS_TO_TICKS(100));
+    uint8_t rb[5] = {0};
+    int n = uart_read_bytes(fnc_uart_port, rb, 4, pdMS_TO_TICKS(100));
+    uart_set_loop_back(fnc_uart_port, false);
+    Serial.printf("[uart] internal loopback: n=%d data=%s\n", n, (const char*)rb);
 }
 
 void reinit_fnc_uart() {
