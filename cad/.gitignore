@@ -1,0 +1,12 @@
+
+# Vendor panel model: 25MB, freely downloadable from the Waveshare wiki.
+# Kept locally for interference checks, deliberately not committed.
+ESP32-S3-Touch-LCD-7B*.stp
+ESP32-S3-Touch-LCD-7B*.zip
+ESP32-S3-Touch-LCD-7B*.pdf
+fit_check.FCStd
+fit_check.FCBak
+
+# Full assembly embeds the vendor model above; regenerate with assembly.py.
+assembly.FCStd
+assembly.FCBak

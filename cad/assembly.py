@@ -1,5 +1,9 @@
 """
-Whole-stack assembly: panel, back cover, VESA plate, arm, base, table.
+Whole-stack assembly: panel, back cover, VESA plate, arm, base, table --
+and every piece of hardware, really modelled: cover screws, VESA screws,
+arm bolts and nylocs, bench screws on washers, the restart switch, a 20mm
+fan seated in its pocket, and the link cable woven through the strain
+relief with its PH2.0 plug.
 
 Run inside FreeCAD:  exec(open("cad/assembly.py").read())
 
@@ -22,7 +26,11 @@ import Part
 import math
 import os
 
-PANEL_STEP = None          # e.g. "/path/to/ESP32-S3-Touch-LCD-7B.stp"
+HERE = os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else "cad"
+
+# Vendor model, gitignored (25MB, freely downloadable -- see cad/.gitignore).
+# Loaded when present; without it you get the printed parts and hardware alone.
+PANEL_STEP = os.path.join(HERE, "ESP32-S3-Touch-LCD-7B.stp")
 
 JOINT_DEG   = 30.0         # both balls, well inside the measured +/-40
 TABLE_THK   = 25.0
@@ -125,9 +133,172 @@ add("BasePlate", load(mount, "BasePlate"), base_pl, GREY)
 table = Part.makeBox(600, 500, TABLE_THK, App.Vector(-300, -70, -TABLE_THK))
 add("Table", table, base_pl, WOOD)
 
+# ---------------------------------------------------------------- hardware
+# Positions come from back_cover.py's own constants (exec of everything above
+# its `def box(`), so a moved hole moves its screw with it. Nothing below is a
+# second copy of a number that already exists.
+bc = {}
+exec(compile(open(os.path.join(HERE, "back_cover.py")).read().split("\ndef box(")[0],
+             "back_cover-constants", "exec"), bc)
+
+hex_prism = g["hex_prism"]
+STEEL_BRIGHT = (0.75, 0.76, 0.78)      # fasteners, distinct from printed grey
+BLACK = (0.12, 0.12, 0.13)
+ROT_Y = App.Rotation(App.Vector(1, 0, 0), 90)      # shank built down -Z -> +Y
+
+
+def socket_cap(d, l, head_d, head_h, socket_af):
+    """Socket head cap screw: under-head plane at the origin, shank down -Z."""
+    s = Part.makeCylinder(d / 2.0, l, App.Vector(0, 0, -l))
+    head = Part.makeCylinder(head_d / 2.0, head_h)
+    depth = 0.6 * head_h
+    head = head.cut(hex_prism(socket_af, depth + 0.5,
+                              App.Vector(0, 0, head_h - depth)))
+    return s.fuse(head)
+
+
+def hex_bolt(d, l, af, head_h):
+    s = Part.makeCylinder(d / 2.0, l, App.Vector(0, 0, -l))
+    return s.fuse(hex_prism(af, head_h, App.Vector(0, 0, 0)))
+
+
+def nyloc(af, hex_h, collar_d, collar_h):
+    """M nyloc, top face at the origin, growing down -Z: hex body then collar."""
+    n = hex_prism(af, hex_h, App.Vector(0, 0, 0), App.Vector(0, 0, -1))
+    return n.fuse(Part.makeCylinder(collar_d / 2.0, collar_h,
+                                    App.Vector(0, 0, -hex_h - collar_h)))
+
+
+def washer(od, bore, t):
+    return Part.makeCylinder(od / 2.0, t).cut(
+        Part.makeCylinder(bore / 2.0, t + 2, App.Vector(0, 0, -1)))
+
+
+# 4x M3x25 socket cap: heads flush in the rear-face counterbores, threads
+# reaching the bracket's M3 holes. (True 25mm length -- the README's caveat
+# about shallow bracket engagement is a real-world check, not hidden here.)
+n = 0
+for x in bc["M3_X"]:
+    for z in bc["M3_Z"]:
+        n += 1
+        add("M3x25_%d" % n, socket_cap(3.0, 25.0, 5.5, 3.0, 2.5),
+            App.Placement(App.Vector(x, bc["CAVITY_BACK_Y"], z), ROT_Y),
+            STEEL_BRIGHT)
+
+# 4x M4x12 socket cap: through the VESA plate's counterbores into the cover's
+# tapped holes -- placed in the plate's own frame so they follow its pose.
+pl_plate = App.Placement(mount_pt, rot_plate)
+n = 0
+for sx in (-1, 1):
+    for sy in (-1, 1):
+        n += 1
+        local = App.Placement(App.Vector(sx * g["VESA_PITCH"] / 2.0,
+                                         sy * g["VESA_PITCH"] / 2.0,
+                                         g["VESA_T"] - g["M4_CBORE_H"]),
+                              App.Rotation())
+        add("M4x12_%d" % n, socket_cap(4.0, 12.0, 7.0, 4.0, 3.0),
+            pl_plate.multiply(local), STEEL_BRIGHT)
+
+# 4x M5x30 hex + nyloc clamping the arm halves onto the balls, seated in the
+# hex pockets arm_mount.py already cuts into the outer faces.
+pocket_floor = PRE + g["ARM_HALF_T"] - g["M5_HEX_D"]
+n = 0
+for cx in (-SPAN / 2.0, SPAN / 2.0):
+    for by in (-g["BOLT_Y"], g["BOLT_Y"]):
+        n += 1
+        add("M5x30_%d" % n, hex_bolt(5.0, 30.0, 8.0, 3.5),
+            arm_pl.multiply(App.Placement(App.Vector(cx, by, pocket_floor),
+                                          App.Rotation())), STEEL_BRIGHT)
+        add("M5nyloc_%d" % n, nyloc(8.0, 3.7, 6.8, 1.3),
+            arm_pl.multiply(App.Placement(App.Vector(cx, by, -pocket_floor),
+                                          App.Rotation())), STEEL_BRIGHT)
+
+# 4x M6x30 hex on a washer, straight down through the base plate into the
+# bench. 30mm keeps the tip inside the 25mm slab.
+n = 0
+for sx in (-1, 1):
+    for sy in (-1, 1):
+        n += 1
+        lx, ly = sx * g["SCREW_X"], sy * g["SCREW_Y"]
+        seat = g["BASE_T"] - g["SCREW_HEAD_H"]
+        add("BenchWasher_%d" % n, washer(13.0, 6.4, 1.2),
+            base_pl.multiply(App.Placement(App.Vector(lx, ly, seat),
+                                           App.Rotation())), STEEL_BRIGHT)
+        add("M6x30_%d" % n, hex_bolt(6.0, 30.0, 10.0, 4.0),
+            base_pl.multiply(App.Placement(App.Vector(lx, ly, seat + 1.2),
+                                           App.Rotation())), STEEL_BRIGHT)
+
+# Restart switch: flush-face momentary in its rear-face recess, cap standing
+# 0.5 below the outer surface, retaining nut inside, body reaching forward.
+swx, swz = bc["SW_CX"], bc["SW_CZ"]
+face_y = bc["BACK_Y"] + bc["SW_CBORE_T"]           # recess floor
+sw = Part.makeCylinder(6.4, 1.0, App.Vector(swx, face_y - 1.0, swz),
+                       App.Vector(0, 1, 0))         # flush cap in the recess
+sw = sw.fuse(Part.makeCylinder(3.3, 4.0, App.Vector(swx, face_y, swz),
+                               App.Vector(0, 1, 0)))            # threaded barrel
+sw = sw.fuse(Part.makeCylinder(4.75, 7.5, App.Vector(swx, face_y + 4.0, swz),
+                               App.Vector(0, 1, 0)))            # body
+for dz in (-2.0, 2.0):                               # solder prongs, tips at 14mm
+    sw = sw.fuse(Part.makeBox(0.8, 2.5, 2.0,
+                              App.Vector(swx - 0.4, face_y + 11.5, swz + dz - 1.0)))
+add("RestartSwitch", sw, App.Placement(), BLACK)
+add("SwitchNut", hex_prism(10.0, 2.0, App.Vector(0, 0, 0)),
+    App.Placement(App.Vector(swx, bc["CAVITY_BACK_Y"] + 2.0, swz), ROT_Y),
+    STEEL_BRIGHT)
+
+# 20mm fan seated in its pocket: frame against the grill floor, hub and five
+# pitched blades. Held by the seat walls, exactly as the seat was designed.
+fx, fz = bc["FAN_CX"], bc["FAN_CZ"]
+fy0 = bc["BACK_Y"] + bc["FAN_FLOOR_T"]              # seat floor
+frame = Part.makeBox(20.0, 10.0, 20.0, App.Vector(fx - 10.0, fy0, fz - 10.0))
+frame = frame.cut(Part.makeCylinder(9.0, 12.0, App.Vector(fx, fy0 - 1.0, fz),
+                                    App.Vector(0, 1, 0)))
+add("FanFrame", frame, App.Placement(), BLACK)
+rotor = Part.makeCylinder(4.5, 6.0, App.Vector(fx, fy0 + 2.0, fz),
+                          App.Vector(0, 1, 0))
+blade0 = Part.makeBox(4.6, 1.0, 5.5, App.Vector(4.2, -0.5, -2.75))
+for k in range(5):
+    b = blade0.copy()
+    b.rotate(App.Vector(6.5, 0, 0), App.Vector(1, 0, 0), 35)    # pitch
+    b.rotate(App.Vector(0, 0, 0), App.Vector(0, 1, 0), 72 * k)
+    b.translate(App.Vector(fx, fy0 + 5.0, fz))
+    rotor = rotor.fuse(b)
+add("FanRotor", rotor, App.Placement(), (0.35, 0.35, 0.37))
+
+# The hardwired link cable: tail dropping toward the arm, in through its
+# entry, woven through the three strain-relief posts, off to the UART header
+# on a PH2.0 plug. The weave wiggle is the jacket deforming into the pinch.
+ex, ez = bc["CABLE_ENTRY_X"], bc["CABLE_ENTRY_Z"]
+rx, rz = bc["RELIEF_X"], bc["RELIEF_Z"]
+ymid = bc["CAVITY_BACK_Y"] + bc["RELIEF_H"] / 2.0
+pts = [App.Vector(50.0, -46.0, -30.0),
+       App.Vector(48.5, -36.0, -14.0),
+       App.Vector(ex, -29.5, ez),
+       App.Vector(ex - 5.0, ymid, ez),
+       App.Vector(rx[0], ymid, ez + 1.2),
+       App.Vector(rx[1], ymid, ez - 1.2),
+       App.Vector(rx[2], ymid, ez + 1.2),
+       App.Vector(10.0, -22.0, 2.0),
+       App.Vector(45.0, -20.0, 4.5),
+       App.Vector(72.0, -19.6, 4.5)]
+sp = Part.BSplineCurve()
+sp.interpolate(pts)
+tangent = sp.tangent(sp.FirstParameter)[0]
+prof = Part.Wire([Part.makeCircle(bc["CABLE_OD_MAX"] / 2.0, pts[0], tangent)])
+add("LinkCable", Part.Wire([sp.toShape()]).makePipeShell([prof], True, False),
+    App.Placement(), BLACK)
+add("PH2Plug", Part.makeBox(8.0, 4.2, 4.5, App.Vector(70.0, -21.8, 2.25)),
+    App.Placement(), (0.9, 0.9, 0.88))
+
 if PANEL_STEP and os.path.exists(PANEL_STEP):
-    import Import
-    Import.insert(PANEL_STEP, doc.Name)
+    # ImportGui, not Import: the headless importer silently drops the STEP's
+    # colors and the whole panel comes in grey. Fall back when run headless.
+    try:
+        import ImportGui as _imp
+    except ImportError:
+        import Import as _imp
+    _imp.insert(PANEL_STEP, doc.Name)
 
 doc.recompute()
+doc.saveAs(os.path.join(HERE, "assembly.FCStd"))
 print("assembled; table normal in panel coords = %s" % (TABLE_NORMAL,))
