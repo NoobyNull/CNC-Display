@@ -342,20 +342,18 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_height(rst, LV_PCT(100));
     // Firmware from the card: put the build's firmware.bin on the SD as
     // /update.bin and hold this. No cable, no unplugging the link.
-    lv_obj_t* upd = w_button(sys, "UPDATE SD", "hold, /update.bin", C_RAISE, C_WARN,
-                             nullptr, nullptr);
+    // Plain taps: long-press proved unreliable on the glass, and the update
+    // modal itself now arms with a tap-to-cancel countdown.
+    lv_obj_t* upd = w_button(sys, "UPDATE SD", "/update.bin", C_RAISE, C_WARN,
+                             [](lv_event_t*) { fwupd_run(); }, nullptr);
     lv_obj_set_flex_grow(upd, 1);
     lv_obj_set_height(upd, LV_PCT(100));
-    lv_obj_add_event_cb(upd, [](lv_event_t*) { fwupd_run(); },
-                        LV_EVENT_LONG_PRESSED, nullptr);
     // Firmware from the repo: WiFi up, fetch, flash, WiFi off, reboot.
     // Creds bootstrap once from wifi.txt on the SD (ssid / pass / [url]).
-    lv_obj_t* net = w_button(sys, "UPDATE NET", "hold, wifi", C_RAISE, C_WARN,
-                             nullptr, nullptr);
+    lv_obj_t* net = w_button(sys, "UPDATE NET", "wifi", C_RAISE, C_WARN,
+                             [](lv_event_t*) { fwupd_net(); }, nullptr);
     lv_obj_set_flex_grow(net, 1);
     lv_obj_set_height(net, LV_PCT(100));
-    lv_obj_add_event_cb(net, [](lv_event_t*) { fwupd_net(); },
-                        LV_EVENT_LONG_PRESSED, nullptr);
 
     // --- vibration sensitivity ---
     w_label(right, "SENSITIVITY   live reading vs threshold", &lv_font_montserrat_10, C_DIM);

@@ -32,9 +32,11 @@ void settings_load() {
     s_vib_peak = prefs.getFloat("vibpeak", 4.0f);
     s_vib_jerk = prefs.getFloat("vibjerk", 50.0f);
     s_scroff   = prefs.getUChar("scroff", 0);
-    prefs.getString("upd_ssid", s_ssid, sizeof(s_ssid));
-    prefs.getString("upd_pass", s_pass, sizeof(s_pass));
-    prefs.getString("upd_url",  s_url,  sizeof(s_url));
+    // An empty or absent NVS key must never shadow the baked defaults.
+    char tmp[161];
+    if (prefs.getString("upd_ssid", tmp, sizeof(tmp)) && tmp[0]) strncpy(s_ssid, tmp, sizeof(s_ssid) - 1);
+    if (prefs.getString("upd_pass", tmp, sizeof(tmp)) && tmp[0]) strncpy(s_pass, tmp, sizeof(s_pass) - 1);
+    if (prefs.getString("upd_url",  tmp, sizeof(tmp)) && tmp[0]) strncpy(s_url,  tmp, sizeof(s_url)  - 1);
     prefs.end();
 }
 

@@ -2,6 +2,7 @@
 #include "hw/sdcard.h"
 #include "hw/display_hw.h"
 #include "hw/stc8.h"
+#include "hw/touch.h"
 #include "ui/theme.h"
 #include "model/console_log.h"
 #include "model/settings.h"
@@ -26,35 +27,46 @@
 
 // ---------------- progress modal ----------------
 static lv_obj_t *s_m, *s_bar, *s_lbl, *s_note, *s_spin, *s_tool;
+static volatile bool s_cancel = false;
 
-// The update paths are blocking, so animations only move if we pump the LVGL
-// timer loop ourselves. Called at every progress step AND in every wait loop:
-// a spinner that keeps turning while the network stalls is the difference
-// between "working on it" and "it's frozen, pull the plug" — which is exactly
-// how updates get bricked.
+// The updates run INSIDE an LVGL event callback, i.e. inside lv_timer_handler
+// — which refuses re-entrant calls, silently. So nothing here may lean on the
+// timer loop: painting is lv_refr_now (re-entrant safe), touch is read from
+// the GT911 driver directly, and the animations are driven by hand from
+// millis(). This is why the modal was once completely invisible.
 static void ui_pump() {
     // WiFi activity and OTA flash writes blank the flash cache; the RGB ISR is
-    // not IRAM-safe, so the panel DMA desyncs and the screen turns to garbage.
-    // Restart the DMA on a frame boundary a few times a second — it desyncs
-    // again immediately during heavy writes, but this keeps the modal readable
-    // instead of leaving the user staring at static and reaching for the plug.
+    // not IRAM-safe, so the DMA desyncs and the screen turns to garbage.
+    // Restart it on a frame boundary a few times a second to stay readable.
     static uint32_t s_last_resync = 0;
     uint32_t now = millis();
     if (now - s_last_resync > 300) {
         s_last_resync = now;
         display_resync();
     }
-    lv_timer_handler();
+    touch_poll();                              // its timer is frozen with us
+    // spinner: a manually rotated 80-degree arc
+    if (s_spin) {
+        int a = (int)((now / 3) % 360);
+        lv_arc_set_angles(s_spin, a, a + 80);
+    }
+    // carriage bob: integer triangle wave, no lv_anim (timer-bound)
+    if (s_tool) {
+        int ph = (int)((now / 40) % 24);
+        lv_obj_set_y(s_tool, (ph < 12 ? ph : 24 - ph) - 4);
+    }
+    lv_refr_now(NULL);
 }
 
-static void tool_bob_cb(void* obj, int32_t v) { lv_obj_set_y((lv_obj_t*)obj, v); }
-
 static void ui_open(const char* title) {
+    s_cancel = false;
     s_m = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(s_m);
     lv_obj_set_size(s_m, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_style_bg_color(s_m, C_BG, 0);
     lv_obj_set_style_bg_opa(s_m, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_m, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_m, [](lv_event_t*) { s_cancel = true; }, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t* t = lv_label_create(s_m);
     lv_label_set_text(t, title);
@@ -81,16 +93,19 @@ static void ui_open(const char* title) {
     lv_obj_set_style_text_color(s_lbl, C_DIM, 0);
     lv_obj_align(s_lbl, LV_ALIGN_CENTER, 0, U * 6);
 
-    // Alive-indicator: keeps spinning through stalls (see ui_pump).
-    s_spin = lv_spinner_create(s_m, 1200, 60);
+    // Alive-indicator arc, rotated by hand in ui_pump.
+    s_spin = lv_arc_create(s_m);
     lv_obj_set_size(s_spin, U * 8, U * 8);
     lv_obj_align(s_spin, LV_ALIGN_CENTER, 0, -U * 16);
+    lv_arc_set_bg_angles(s_spin, 0, 360);
+    lv_obj_remove_style(s_spin, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(s_spin, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_arc_color(s_spin, C_RAISE, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_spin, C_ACCENT, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(s_spin, 4, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_spin, 4, LV_PART_INDICATOR);
 
-    // The carriage rides the fill edge of the bar, bobbing like it's cutting.
+    // The carriage rides the fill edge of the bar; bobbed by hand in ui_pump.
     s_tool = lv_obj_create(s_bar);
     lv_obj_remove_style_all(s_tool);
     lv_obj_set_size(s_tool, 12, 12);
@@ -98,16 +113,6 @@ static void ui_open(const char* title) {
     lv_obj_set_style_bg_opa(s_tool, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_tool, 2, 0);
     lv_obj_set_pos(s_tool, 0, 2);
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, s_tool);
-    lv_anim_set_exec_cb(&a, tool_bob_cb);
-    lv_anim_set_values(&a, -4, 8);
-    lv_anim_set_time(&a, 260);
-    lv_anim_set_playback_time(&a, 260);
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-    lv_anim_start(&a);
     ui_pump();
 }
 
@@ -136,6 +141,33 @@ static void ui_close() {
     if (s_m) { lv_obj_del(s_m); s_m = nullptr; }
 }
 
+// Armed-with-escape: buttons fire on a plain tap (long-press proved flaky on
+// the glass), so the modal counts down and any tap during it cancels.
+static bool ui_countdown() {
+    uint32_t start = millis();
+    for (int sec = 3; sec > 0; sec--) {
+        char b[48];
+        snprintf(b, sizeof(b), "starting in %d — touch to cancel", sec);
+        ui_note_set(b, C_ACCENT);
+        uint32_t t0 = millis();
+        while (millis() - t0 < 1000) {
+            ui_pump();
+            delay(20);
+            // Direct read: LVGL's input timer is frozen while we block. The
+            // 400ms grace lets the launching tap's finger clear the glass.
+            if ((s_cancel || touch_is_down()) && millis() - start > 400) return false;
+        }
+    }
+    return true;
+}
+
+static bool cancelled() {
+    clog_add("[MSG:UPDATE: cancelled]");
+    ui_close();
+    display_resync();
+    return false;
+}
+
 static void fail(const char* what) {
     char e[96];
     snprintf(e, sizeof(e), "[MSG:UPDATE: %s]", what);
@@ -160,6 +192,7 @@ bool fwupd_run() {
         return false;
     }
     ui_open("UPDATING FIRMWARE");
+    if (!ui_countdown()) return cancelled();
     ui_note_set("updating — do not power off — reboots itself when done", C_WARN);
     bool ok = Update.begin(total);
     if (ok) {
@@ -216,11 +249,17 @@ static bool creds_from_sd() {
 }
 
 bool fwupd_net() {
+    // The modal opens FIRST: every failure after this point is on-screen.
+    // "Held the button and nothing happened" must not be a reachable state.
+    ui_open("NETWORK UPDATE");
+    if (!ui_countdown()) return cancelled();
     if (!*settings_wifi_ssid() && !creds_from_sd()) {
-        clog_add("[MSG:UPDATE: no wifi creds - put wifi.txt (ssid/pass) on the SD]");
+        ui_note_set("no wifi creds — put wifi.txt (ssid/pass) on the SD", C_CRIT);
+        uint32_t t0 = millis();
+        while (millis() - t0 < 2500) { ui_pump(); delay(30); }
+        fail("no wifi creds - put wifi.txt (ssid/pass) on the SD");
         return false;
     }
-    ui_open("NETWORK UPDATE");
     ui_note_set("joining wifi...", C_DIM);
 
     WiFi.mode(WIFI_STA);
