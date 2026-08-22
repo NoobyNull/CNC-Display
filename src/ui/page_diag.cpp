@@ -48,8 +48,10 @@ static const char* PIN_NAMES[NLAMPS] = { "X", "Y", "Z", "A", "B", "C",
                                          "X2", "Y2", "Z2", "A2", "B2", "C2", "P" };
 static uint16_t  s_cfg_mask  = 0;      // which lamps exist; bit 12 = probe
 static uint16_t  s_live_mask = 0;      // which switches read active now
-static bool      s_mon       = false;  // $Limits/Show believed running
-static uint32_t  s_mon_seen  = 0;      // last sample (or request) time, ms
+static bool      s_alive     = false;  // $Limits/Show sent, no ! sent since
+static bool      s_got_sample = false; // this attempt produced any sample
+static int       s_dry       = 0;      // consecutive sampleless attempts
+static uint32_t  s_last      = 0;      // last request or sample time, ms
 
 // Motor lamp index for one letter out of a limit_set() string, -1 for
 // anything else (spaces, the probe/toolsetter markers).
@@ -60,14 +62,21 @@ static int lamp_bit(char c) {
 }
 
 // The documented exit is !. Safe to send blind from here: the monitor only
-// runs while the machine sits in Idle, so there is no motion to hold.
+// runs while the machine sits in Idle/Alarm, so there is no motion to hold.
+// s_alive tracks "a monitor may be running on the controller" and is cleared
+// ONLY here — never by the watchdog alone. Forgetting a live monitor without
+// stopping it leaves the controller ignoring every line command (settings
+// writes silently hung: that bug shipped once).
 static void mon_stop() {
-    if (!s_mon) return;
-    s_mon = false;
+    if (!s_alive) return;
+    s_alive = false;
     fnc_realtime(FeedHold);
 }
 
-void page_diag_hidden() { mon_stop(); }
+void page_diag_hidden() {
+    mon_stop();
+    s_dry = 0;    // a fresh page visit earns fresh attempts
+}
 
 // Swallows the monitor's stream so 2 lines a second do not bury the console.
 // Returns true when the line belonged to the monitor.
@@ -93,8 +102,10 @@ bool page_diag_limits_feed(const char* line) {
             int b = lamp_bit(*p);
             if (b >= 0) m |= (uint16_t)(1u << b);
         }
-        s_live_mask = m;
-        s_mon_seen  = (uint32_t)milliseconds();
+        s_live_mask  = m;
+        s_last       = (uint32_t)milliseconds();
+        s_got_sample = true;
+        s_dry        = 0;
         return true;
     }
     return false;
@@ -337,14 +348,20 @@ void page_diag_tick() {
     // not in motion; leaving the page stops it (page_diag_hidden). Alarm is
     // deliberately included: a hard-limit trip is exactly when someone stands
     // here watching these lamps (FluidNC refuses the command only in
-    // Cycle/Hold). A monitor gone quiet for 10s is forgotten and retried —
-    // the grace must outlast a full $S dump, which can be queued ahead of the
-    // monitor request; 3s was not enough and re-queued $Limits/Show behind it.
+    // Cycle/Hold). 10s of silence = dead, refused or unparseable: STOP it
+    // (never just forget it — see mon_stop) and retry; two sampleless
+    // attempts in a row and we give up until the page is next opened, rather
+    // than start/stop the controller forever. The 10s grace must outlast a
+    // full $S dump, which can be queued ahead of the monitor request.
     uint32_t now = (uint32_t)milliseconds();
-    if (s_mon && (int32_t)(now - s_mon_seen) > 10000) s_mon = false;
-    if (!s_mon && (state == Idle || state == Alarm)) {
-        s_mon      = true;
-        s_mon_seen = now;
+    if (s_alive && (int32_t)(now - s_last) > 10000) {
+        if (!s_got_sample) s_dry++;
+        mon_stop();
+    }
+    if (!s_alive && s_dry < 2 && (state == Idle || state == Alarm)) {
+        s_alive      = true;
+        s_got_sample = false;
+        s_last       = now;
         send_line("$Limits/Show");
     }
 
