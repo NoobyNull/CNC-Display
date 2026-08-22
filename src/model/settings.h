@@ -24,6 +24,14 @@ void  settings_set_vib_thresholds(float hold_g, float peak_g, float jerk_gps);
 uint8_t settings_brightness();
 void    settings_set_brightness(uint8_t b);
 
+// WiFi exists ONLY for the network firmware update (see fw_update.cpp);
+// nothing else may use these.
+const char* settings_wifi_ssid();
+const char* settings_wifi_pass();
+const char* settings_update_url();
+void settings_set_wifi(const char* ssid, const char* pass);
+void settings_set_update_url(const char* url);
+
 // Minutes of no touch before the backlight goes off, 0..60. 0 = never blank,
 // and that is the default: a panel that goes dark unasked next to a running
 // spindle is the wrong surprise, so this is opt-in.

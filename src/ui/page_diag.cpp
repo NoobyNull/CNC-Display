@@ -22,6 +22,16 @@ static lv_obj_t* s_kb;
 static int s_scroll = 0;
 static int s_sel = -1;
 
+// Live pin lamps: X..C limits plus Probe, driven from the Pn: field of the
+// status reports (75ms with the pendant channel's report interval). FluidNC
+// only lists a pin while it is ACTIVE, so: lamp dark with the switch held =
+// wiring or config; lamp stuck lit with nothing pressed = inverted logic.
+static lv_obj_t* s_pin_box[7];
+static lv_obj_t* s_pin_lbl[7];
+static bool      s_pin_shown[7] = { false };
+static int       s_pin_state[7] = { -1, -1, -1, -1, -1, -1, -1 };
+static const char* PIN_NAMES[7] = { "X", "Y", "Z", "A", "B", "C", "P" };
+
 static void refresh();
 
 static void row_cb(lv_event_t* e) {
@@ -67,6 +77,10 @@ static void kb_done_cb(lv_event_t* e) {
     const fnc_setting_t* st = fncset_at((size_t)s_sel);
     if (st) {
         fncset_write(st->name, lv_textarea_get_text(s_edit_ta));
+        // The reply is the only evidence the write landed — error:N or ok
+        // arrives as a console line, so show the console rather than letting
+        // a rejected write look identical to a successful one.
+        expanded_open(EXPANDED_CONSOLE);
         return;
     }
     // No selection: the box is a command line. Replies are plain lines, so
@@ -199,6 +213,26 @@ void page_diag_build(lv_obj_t* p) {
         expanded_open(EXPANDED_CONSOLE);
     }, LV_EVENT_LONG_PRESSED, nullptr);
 
+    // --- live limit/probe lamps ---
+    lv_obj_t* pins = lv_obj_create(right);
+    w_flatten(pins);
+    lv_obj_set_size(pins, LV_PCT(100), U * 5);
+    lv_obj_set_flex_flow(pins, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pins, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(pins, U / 2, 0);
+    lv_obj_t* pt = w_label(pins, "PINS", &lv_font_montserrat_10, C_DIM);
+    lv_obj_set_width(pt, U * 5);
+    for (int i = 0; i < 7; i++) {
+        s_pin_box[i] = w_panel(pins, C_RAISE);
+        lv_obj_set_flex_grow(s_pin_box[i], 1);
+        lv_obj_set_height(s_pin_box[i], LV_PCT(100));
+        s_pin_lbl[i] = w_label(s_pin_box[i], PIN_NAMES[i], &lv_font_montserrat_14, C_DIM);
+        lv_obj_center(s_pin_lbl[i]);
+        if (i < 6) lv_obj_add_flag(s_pin_box[i], LV_OBJ_FLAG_HIDDEN);   // shown per n_axes
+        s_pin_shown[i] = (i == 6);
+        s_pin_state[i] = -1;
+    }
+
     s_kb = w_keyboard();
     lv_obj_add_event_cb(s_kb, kb_done_cb, LV_EVENT_READY, nullptr);
     lv_obj_add_event_cb(s_kb, kb_done_cb, LV_EVENT_CANCEL, nullptr);
@@ -206,4 +240,19 @@ void page_diag_build(lv_obj_t* p) {
 
 void page_diag_tick() {
     if (fncset_dirty_take()) refresh();
+
+    for (int i = 0; i < 7; i++) {
+        bool show = (i == 6) ? true : (i < n_axes);
+        if (show != s_pin_shown[i]) {
+            s_pin_shown[i] = show;
+            if (show) lv_obj_clear_flag(s_pin_box[i], LV_OBJ_FLAG_HIDDEN);
+            else      lv_obj_add_flag(s_pin_box[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        if (!show) continue;
+        int on = (i == 6) ? (myProbeSwitch ? 1 : 0) : (myLimitSwitches[i] ? 1 : 0);
+        if (on == s_pin_state[i]) continue;
+        s_pin_state[i] = on;
+        lv_obj_set_style_bg_color(s_pin_box[i], on ? C_CRIT : C_RAISE, 0);
+        lv_obj_set_style_text_color(s_pin_lbl[i], on ? C_TEXT : C_DIM, 0);
+    }
 }

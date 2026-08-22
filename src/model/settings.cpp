@@ -13,9 +13,16 @@ static float    s_vib_peak = 4.0f;    // CNC-TW THRESHOLD_ESTOP_PEAK_G
 static float    s_vib_jerk = 50.0f;   // CNC-TW THRESHOLD_ESTOP_JERK_GPS
 static uint8_t  s_scroff   = 0;       // minutes; 0 = never blank
 
-// The wifi_en / ssid / pass / host / port keys are deliberately not read back.
-// The WiFi transport is gone, and any values left in NVS from an older build are
-// dead weight rather than something to migrate.
+// WiFi creds exist ONLY for the network firmware update (fw_update.cpp): the
+// radio never runs alongside the live display. The old WiFi-transport keys
+// (wifi_en / host / port) stay dead.
+// Defaults are THIS machine's shop network and the repo's tokenized
+// latest-firmware URL (read-only token, revocable in Gitea as "cnc-panel-fw").
+// A wifi.txt on the SD card overrides all three — see fw_update.cpp.
+static char s_ssid[33] = "YAX-Net";
+static char s_pass[65] = "REDACTED-WIFI";
+static char s_url[161] = "https://git.yax.family/api/v1/repos/matthew/CNC-Disply/raw/update.bin?ref=fw&token=REDACTEDREDACTEDREDACTEDREDACTEDREDACTED";
+
 void settings_load() {
     prefs.begin("cncdisp", /*readOnly=*/true);
     s_uart_en = prefs.getBool("uart_en", true);
@@ -25,6 +32,9 @@ void settings_load() {
     s_vib_peak = prefs.getFloat("vibpeak", 4.0f);
     s_vib_jerk = prefs.getFloat("vibjerk", 50.0f);
     s_scroff   = prefs.getUChar("scroff", 0);
+    prefs.getString("upd_ssid", s_ssid, sizeof(s_ssid));
+    prefs.getString("upd_pass", s_pass, sizeof(s_pass));
+    prefs.getString("upd_url",  s_url,  sizeof(s_url));
     prefs.end();
 }
 
@@ -41,6 +51,29 @@ static void nvs_put_bool(const char* k, bool v) {
 static void nvs_put_uchar(const char* k, uint8_t v) {
     prefs.begin("cncdisp", false); prefs.putUChar(k, v); prefs.end();
     display_resync();
+}
+
+static void nvs_put_str(const char* k, const char* v) {
+    prefs.begin("cncdisp", false); prefs.putString(k, v); prefs.end();
+    display_resync();
+}
+
+const char* settings_wifi_ssid()  { return s_ssid; }
+const char* settings_wifi_pass()  { return s_pass; }
+const char* settings_update_url() { return s_url; }
+
+void settings_set_wifi(const char* ssid, const char* pass) {
+    if (!ssid || !pass) return;
+    strncpy(s_ssid, ssid, sizeof(s_ssid) - 1); s_ssid[sizeof(s_ssid) - 1] = 0;
+    strncpy(s_pass, pass, sizeof(s_pass) - 1); s_pass[sizeof(s_pass) - 1] = 0;
+    nvs_put_str("upd_ssid", s_ssid);
+    nvs_put_str("upd_pass", s_pass);
+}
+
+void settings_set_update_url(const char* url) {
+    if (!url || !*url) return;
+    strncpy(s_url, url, sizeof(s_url) - 1); s_url[sizeof(s_url) - 1] = 0;
+    nvs_put_str("upd_url", s_url);
 }
 
 bool settings_uart_enabled() { return s_uart_en; }
