@@ -167,15 +167,30 @@ static bool cancelled() {
     return false;
 }
 
+// True from the moment WiFi.begin runs. Once the radio has been up, the only
+// reliable way back to a clean screen is a reboot: the radio leaves the RGB
+// scanout desynced in ways display_resync cannot always undo (seen live —
+// persistent scanline glitches after a failed update, unfixable by resync).
+static bool s_radio_used = false;
+
 static void fail(const char* what) {
     char e[96];
     snprintf(e, sizeof(e), "[MSG:UPDATE: %s]", what);
     clog_add(e);
     Update.abort();
     WiFi.mode(WIFI_OFF);
+    // The reason goes on the glass: after a radio failure the panel reboots,
+    // and the console log dies with it.
+    char n[120];
+    snprintf(n, sizeof(n), "FAILED: %s%s", what,
+             s_radio_used ? " — rebooting" : "");
+    ui_note_set(n, C_CRIT);
+    uint32_t t0 = millis();
+    while (millis() - t0 < 4000) { ui_pump(); delay(30); }
+    if (s_radio_used) ESP.restart();
     ui_close();
     delay(50);
-    display_resync();      // leave the screen synced, not glitching
+    display_resync();      // radio never ran; a resync is enough
 }
 
 // ---------------- network update ----------------
@@ -215,14 +230,12 @@ bool fwupd_net() {
     ui_open("NETWORK UPDATE");
     if (!ui_countdown()) return cancelled();
     if (!*settings_wifi_ssid() && !creds_from_sd()) {
-        ui_note_set("no wifi creds — put wifi.txt (ssid/pass) on the SD", C_CRIT);
-        uint32_t t0 = millis();
-        while (millis() - t0 < 2500) { ui_pump(); delay(30); }
         fail("no wifi creds - put wifi.txt (ssid/pass) on the SD");
         return false;
     }
     ui_note_set("joining wifi...", C_DIM);
 
+    s_radio_used = true;
     WiFi.mode(WIFI_STA);
     WiFi.begin(settings_wifi_ssid(), settings_wifi_pass());
     uint32_t t0 = millis();
