@@ -312,6 +312,11 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_size(st, LV_PCT(100), U * 7);
     lv_obj_t* stk = w_label(st, "LINK", &lv_font_montserrat_10, C_DIM);
     lv_obj_align(stk, LV_ALIGN_TOP_LEFT, U + 4, 5);
+#ifndef FW_TAG
+#define FW_TAG "dev"    // set from git by platformio.ini
+#endif
+    lv_obj_t* fw = w_label(st, "fw " FW_TAG, &lv_font_montserrat_10, C_DIM);
+    lv_obj_align(fw, LV_ALIGN_TOP_RIGHT, -(U + 4), 5);
     s_status_lbl = w_label(st, "no link", &lv_font_montserrat_14, C_TEXT);
     lv_obj_align(s_status_lbl, LV_ALIGN_BOTTOM_LEFT, U + 4, -6);
 
