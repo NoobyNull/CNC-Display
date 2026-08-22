@@ -149,8 +149,7 @@ static void vib_guard() {
     }
 }
 
-// Link hunting lives in transport.cpp, which cycles the two candidate UART baud
-// rates until FluidNC answers.
+// transport_poll() keeps poking the controller until FluidNC answers.
 static void link_watchdog() {
     static uint32_t next_log = 0;
     uint32_t now = millis();

@@ -299,14 +299,14 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(p, U, 0);
 
-    // --- left: transports ---
+    // --- left: transport ---
     lv_obj_t* left = lv_obj_create(p);
     w_flatten(left);
     lv_obj_set_size(left, U * 44, LV_PCT(100));
     lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(left, U, 0);
 
-    toggle_row(left, "Wired UART", "UART terminal, auto 1M or 115K",
+    toggle_row(left, "Wired UART", "off frees the USB debug console",
                settings_uart_enabled(), uart_sw_cb, &s_uart_sw);
     lv_obj_t* st = w_panel(left, C_RAISE);
     lv_obj_set_size(st, LV_PCT(100), U * 7);
@@ -340,16 +340,10 @@ void page_setup_build(lv_obj_t* p) {
                              restart_ctrl_cb, nullptr);
     lv_obj_set_flex_grow(rst, 1);
     lv_obj_set_height(rst, LV_PCT(100));
-    // Firmware from the card: put the build's firmware.bin on the SD as
-    // /update.bin and hold this. No cable, no unplugging the link.
-    // Plain taps: long-press proved unreliable on the glass, and the update
-    // modal itself now arms with a tap-to-cancel countdown.
-    lv_obj_t* upd = w_button(sys, "UPDATE SD", "/update.bin", C_RAISE, C_WARN,
-                             [](lv_event_t*) { fwupd_run(); }, nullptr);
-    lv_obj_set_flex_grow(upd, 1);
-    lv_obj_set_height(upd, LV_PCT(100));
     // Firmware from the repo: WiFi up, fetch, flash, WiFi off, reboot.
     // Creds bootstrap once from wifi.txt on the SD (ssid / pass / [url]).
+    // Plain tap: long-press proved unreliable on the glass, and the update
+    // modal itself arms with a tap-to-cancel countdown.
     lv_obj_t* net = w_button(sys, "UPDATE NET", "wifi", C_RAISE, C_WARN,
                              [](lv_event_t*) { fwupd_net(); }, nullptr);
     lv_obj_set_flex_grow(net, 1);

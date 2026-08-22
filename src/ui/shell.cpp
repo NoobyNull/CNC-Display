@@ -60,6 +60,8 @@ static lv_obj_t* s_flip_btn;
 static lv_obj_t* s_close_btn;
 static lv_obj_t* s_ovr_box;
 static lv_obj_t* s_ovr_val[3];
+static lv_obj_t* s_hold_btn;
+static lv_obj_t* s_hold_lbl;
 
 static int       s_nav_start = 0;
 static page_id_t s_page = PAGE_JOG;
@@ -132,9 +134,22 @@ static void nav_pick_cb(lv_event_t* e) {
     shell_show_page((page_id_t)(s_nav_start + slot));
 }
 
+// Setup and Diag are the two pages with no business near a moving machine, so
+// they alone trade the DRO's strip for content height. The safety bar stays on
+// every page regardless.
+static bool page_wants_dro(page_id_t id) {
+    return id != PAGE_SETUP && id != PAGE_DIAG;
+}
+
 void shell_show_page(page_id_t id) {
     if (id < 0 || id >= PAGE_COUNT) return;
     s_page = id;
+    const bool dro = page_wants_dro(id);
+    if (dro) lv_obj_clear_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
+    else     lv_obj_add_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
+    const lv_coord_t ch = dro ? CONTENT_H : CONTENT_H + DRO_H;
+    lv_obj_set_height(s_content, ch);
+    lv_obj_set_height(s_pages[id], ch - U * 2);
     for (int i = 0; i < PAGE_COUNT; i++) {
         if (i == (int)id) lv_obj_clear_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
         else              lv_obj_add_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
@@ -146,11 +161,30 @@ void shell_show_page(page_id_t id) {
 }
 
 // ---- safety bar: on every screen, always the same place ---------------------
-static void hold_cb(lv_event_t*)   { fnc_realtime(FeedHold); }
-static void resume_cb(lv_event_t*) { fnc_realtime(CycleStart); }
+// One button for hold/resume: you cannot resume a machine that is not held,
+// so the two are one control that reads whichever action is real right now.
+static bool paused(state_t s) {
+    return s == Hold || s == DoorOpen || s == DoorClosed;
+}
+
+static void hold_resume_cb(lv_event_t*) {
+    fnc_realtime(paused(state) ? CycleStart : FeedHold);
+}
 static void reset_cb(lv_event_t*)  { fnc_realtime(Reset); }
 static void flip_cb(lv_event_t*)   { expanded_flip(); }
 static void close_cb(lv_event_t*)  { expanded_close(); }
+
+// Three looks: RESUME green while paused, HOLD amber while there is motion to
+// hold, HOLD dimmed when the machine is sitting still and the button is moot.
+static void hold_resume_paint() {
+    const bool r = paused(state);
+    const bool live = r || state == Cycle || state == Jog || state == Homing;
+    const lv_color_t bg = r ? C_OK : live ? C_WARN : C_RAISE;
+    lv_label_set_text(s_hold_lbl, r ? "RESUME" : "HOLD");
+    lv_obj_set_style_text_color(s_hold_lbl, live ? C_BG : C_DIM, 0);
+    lv_obj_set_style_bg_color(s_hold_btn, bg, 0);
+    lv_obj_set_style_bg_color(s_hold_btn, lv_color_lighten(bg, 40), LV_STATE_PRESSED);
+}
 
 static void build_safety(lv_obj_t* parent) {
     s_safety = lv_obj_create(parent);
@@ -164,15 +198,13 @@ static void build_safety(lv_obj_t* parent) {
     lv_obj_set_style_pad_column(s_safety, U, 0);
     lv_obj_set_flex_flow(s_safety, LV_FLEX_FLOW_ROW);
 
-    struct { const char* t; lv_color_t bg; lv_event_cb_t cb; } B[3] = {
-        { "HOLD",   C_WARN, hold_cb   },
-        { "RESUME", C_OK,   resume_cb },
-        { "RESET",  C_CRIT, reset_cb  },
-    };
-    for (int i = 0; i < 3; i++) {
-        lv_obj_t* o = w_button(s_safety, B[i].t, nullptr, B[i].bg, C_BG, B[i].cb, nullptr);
-        lv_obj_set_size(o, U * 19, LV_PCT(100));   // 152 x 64
-    }
+    s_hold_btn = w_button(s_safety, "HOLD", nullptr, C_RAISE, C_DIM,
+                          hold_resume_cb, nullptr);
+    lv_obj_set_size(s_hold_btn, U * 19, LV_PCT(100));   // 152 x 64
+    s_hold_lbl = lv_obj_get_child(lv_obj_get_child(s_hold_btn, 0), 0);
+
+    lv_obj_t* rst = w_button(s_safety, "RESET", nullptr, C_CRIT, C_BG, reset_cb, nullptr);
+    lv_obj_set_size(rst, U * 19, LV_PCT(100));
 
     // Overrides fill the remainder in normal mode; FLIP/CLOSE replace them when
     // the expanded view is open.
@@ -390,7 +422,7 @@ void shell_set_expanded(bool on) {
         lv_obj_move_foreground(s_safety);
     } else {
         lv_obj_clear_flag(s_rail, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
+        if (page_wants_dro(s_page)) lv_obj_clear_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_content, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_flip_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_close_btn, LV_OBJ_FLAG_HIDDEN);
@@ -422,6 +454,7 @@ void shell_tick() {
         lv_label_set_text(s_state_lbl, state_word(state));
         lv_obj_set_style_bg_color(s_state_chip, state_colour(state), 0);
         lv_obj_set_style_text_color(s_state_lbl, state == Disconnected ? C_DIM : C_BG, 0);
+        hold_resume_paint();
     }
     if (model_take_dro()) {
         char b[32];

@@ -31,10 +31,8 @@ void reinit_fnc_uart();
 unsigned long fnc_rx_count();
 unsigned long fnc_tx_count();
 
-// Change the link speed without tearing the driver down. Used by the baud hunt
-// in main.cpp: the same two pins carry a 1 Mbaud pendant or a 115200 FTDI
-// depending on what is plugged in, and the firmware should not care which.
-void     fnc_set_baud(uint32_t baud);
+// Fixed at FNC_BAUD; exposed so the UI can say what speed the link runs at
+// instead of hardcoding the number in labels.
 uint32_t fnc_get_baud();
 
 // Raw UART access. fnc_putchar/fnc_getchar live in transport.cpp, for which

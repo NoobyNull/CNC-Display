@@ -16,13 +16,12 @@
 #include <stdio.h>
 #include <string.h>
 
-// Two ways in, one flash path out: /update.bin from the SD card, or the same
-// file fetched over WiFi from the repo. WiFi exists ONLY inside the network
-// update: the RGB panel ISR is not IRAM-safe, so the radio (and the OTA
-// writes themselves) glitch the scanout — which is fine, because the whole
-// affair ends in a reboot. The radio is forced off on every exit path.
-//
-// Both updates are blocking, and a power loss mid-write is safe — the boot
+// Firmware fetched over WiFi from the repo. (An SD-card /update.bin path used
+// to sit alongside this one; it went once network OTA proved out.) WiFi exists
+// ONLY inside the update: the RGB panel ISR is not IRAM-safe, so the radio
+// (and the OTA writes themselves) glitch the scanout — which is fine, because
+// the whole affair ends in a reboot. The radio is forced off on every exit
+// path. The update is blocking, and a power loss mid-write is safe — the boot
 // selector keeps pointing at the running slot until Update.end() commits.
 
 // ---------------- progress modal ----------------
@@ -177,44 +176,6 @@ static void fail(const char* what) {
     ui_close();
     delay(50);
     display_resync();      // leave the screen synced, not glitching
-}
-
-// ---------------- SD card update ----------------
-bool fwupd_run() {
-    if (!sd_open("/update.bin")) {
-        clog_add("[MSG:UPDATE: no /update.bin on the SD card]");
-        return false;
-    }
-    size_t total = sd_size();
-    if (total < 0x40000) {
-        sd_close();
-        clog_add("[MSG:UPDATE: /update.bin too small to be firmware]");
-        return false;
-    }
-    ui_open("UPDATING FIRMWARE");
-    if (!ui_countdown()) return cancelled();
-    ui_note_set("updating — do not power off — reboots itself when done", C_WARN);
-    bool ok = Update.begin(total);
-    if (ok) {
-        static uint8_t buf[4096];
-        size_t done = 0, n;
-        while ((n = sd_read(buf, sizeof(buf))) > 0) {
-            if (Update.write(buf, n) != n) { ok = false; break; }
-            done += n;
-            if ((done % 0x10000) < sizeof(buf)) ui_progress(done, total);
-            else ui_pump();
-        }
-        ok = ok && done == total && Update.end(true);
-    }
-    sd_close();
-    if (ok) {
-        ui_progress(total, total);
-        ui_note_set("done — rebooting", C_OK);
-        delay(800);
-        ESP.restart();
-    }
-    fail(Update.errorString());
-    return false;
 }
 
 // ---------------- network update ----------------

@@ -12,12 +12,6 @@ static uint32_t      s_baud = FNC_BAUD;
 static unsigned long s_rx_count = 0;
 static unsigned long s_tx_count = 0;
 
-void fnc_set_baud(uint32_t baud) {
-    s_baud = baud;
-    uart_set_baudrate(fnc_uart_port, baud);
-    uart_flush_input(fnc_uart_port);   // whatever arrived at the old rate is noise
-}
-
 uint32_t fnc_get_baud() { return s_baud; }
 
 unsigned long fnc_rx_count() { return s_rx_count; }
