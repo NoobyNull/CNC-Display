@@ -335,9 +335,11 @@ void page_diag_tick() {
     // not in motion; leaving the page stops it (page_diag_hidden). Alarm is
     // deliberately included: a hard-limit trip is exactly when someone stands
     // here watching these lamps (FluidNC refuses the command only in
-    // Cycle/Hold). A monitor gone quiet for 3s is forgotten and retried.
+    // Cycle/Hold). A monitor gone quiet for 10s is forgotten and retried —
+    // the grace must outlast a full $S dump, which can be queued ahead of the
+    // monitor request; 3s was not enough and re-queued $Limits/Show behind it.
     uint32_t now = (uint32_t)milliseconds();
-    if (s_mon && (int32_t)(now - s_mon_seen) > 3000) s_mon = false;
+    if (s_mon && (int32_t)(now - s_mon_seen) > 10000) s_mon = false;
     if (!s_mon && (state == Idle || state == Alarm)) {
         s_mon      = true;
         s_mon_seen = now;
