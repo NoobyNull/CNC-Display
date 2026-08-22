@@ -7,6 +7,7 @@
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 
 // Settings rows that fit the list, derived from the panel. Fixed at 5 before,
 // which is what the CrowPanel's 240px page held; the 7B fits 8. There are ~150
@@ -22,15 +23,92 @@ static lv_obj_t* s_kb;
 static int s_scroll = 0;
 static int s_sel = -1;
 
-// Live pin lamps: X..C limits plus Probe, driven from the Pn: field of the
-// status reports (75ms with the pendant channel's report interval). FluidNC
-// only lists a pin while it is ACTIVE, so: lamp dark with the switch held =
-// wiring or config; lamp stuck lit with nothing pressed = inverted logic.
-static lv_obj_t* s_pin_box[7];
-static lv_obj_t* s_pin_lbl[7];
-static bool      s_pin_shown[7] = { false };
-static int       s_pin_state[7] = { -1, -1, -1, -1, -1, -1, -1 };
-static const char* PIN_NAMES[7] = { "X", "Y", "Z", "A", "B", "C", "P" };
+// Live limit lamps, one per configured SWITCH, green while it reads active.
+// Existence and state both come from $Limits/Show, FluidNC's own limit
+// monitor: its preamble ("Limit Axes : ...") lists exactly the motors with
+// limit pins, then a sample line arrives every 500ms until a ! stops it — so
+// the controller only does monitor work while this page is on screen.
+// Lowercase letters are motor0, uppercase motor1 (labelled X2 etc), "P" the
+// probe. While the monitor runs, ! only stops it (protocol_do_feedhold
+// returns early) — no feed hold happens.
+//
+// Lamp dark with the switch held = wiring or config; lamp stuck green with
+// nothing pressed = inverted logic.
+//
+// The probe lamp's existence comes from the $S dump (/probe/pin assigned);
+// its live state from the Pn: field, which keeps flowing during the monitor.
+#define NLAMPS 13   // 6 motor0 + 6 motor1 + probe
+static lv_obj_t* s_pin_box[NLAMPS];
+static lv_obj_t* s_pin_lbl[NLAMPS];
+static bool      s_pin_shown[NLAMPS];
+static int       s_pin_state[NLAMPS];
+static const char* PIN_NAMES[NLAMPS] = { "X", "Y", "Z", "A", "B", "C",
+                                         "X2", "Y2", "Z2", "A2", "B2", "C2", "P" };
+static uint16_t  s_cfg_mask  = 0;      // which lamps exist; bit 12 = probe
+static uint16_t  s_live_mask = 0;      // which switches read active now
+static bool      s_mon       = false;  // $Limits/Show believed running
+static uint32_t  s_mon_seen  = 0;      // last sample (or request) time, ms
+
+// Motor lamp index for one letter out of a limit_set() string, -1 for
+// anything else (spaces, the probe/toolsetter markers).
+static int lamp_bit(char c) {
+    const char* ax = strchr("XYZABC", toupper((unsigned char)c));
+    if (!ax || !c) return -1;
+    return (int)(ax - "XYZABC") + (isupper((unsigned char)c) ? 6 : 0);
+}
+
+// The documented exit is !. Safe to send blind from here: the monitor only
+// runs while the machine sits in Idle, so there is no motion to hold.
+static void mon_stop() {
+    if (!s_mon) return;
+    s_mon = false;
+    fnc_realtime(FeedHold);
+}
+
+void page_diag_hidden() { mon_stop(); }
+
+// Swallows the monitor's stream so 2 lines a second do not bury the console.
+// Returns true when the line belonged to the monitor.
+bool page_diag_limits_feed(const char* line) {
+    if (!line || !*line) return false;
+    if (strncmp(line, "Limit Axes :", 12) == 0) {
+        uint16_t m = s_cfg_mask & (uint16_t)(1u << 12);   // keep the probe bit
+        for (const char* p = line + 12; *p; p++) {
+            int b = lamp_bit(*p);
+            if (b >= 0) m |= (uint16_t)(1u << b);
+        }
+        s_cfg_mask = m;
+        return true;
+    }
+    if (strcmp(line, "Send ! to exit") == 0 ||
+        strncmp(line, "Homing Axes :", 13) == 0 ||
+        strstr(line, "LimitPins")) {
+        return true;   // preamble
+    }
+    if (line[0] == ':') {          // ": <pos set> <neg set> P T" every 500ms
+        uint16_t m = 0;
+        for (const char* p = line + 1; *p; p++) {
+            int b = lamp_bit(*p);
+            if (b >= 0) m |= (uint16_t)(1u << b);
+        }
+        s_live_mask = m;
+        s_mon_seen  = (uint32_t)milliseconds();
+        return true;
+    }
+    return false;
+}
+
+static void scan_probe_config() {
+    uint16_t m = s_cfg_mask & (uint16_t)~(1u << 12);
+    for (size_t i = 0; i < fncset_count(); i++) {
+        const fnc_setting_t* st = fncset_at(i);
+        if (st && strcmp(st->name, "/probe/pin") == 0 &&
+            strcmp(st->value, "NO_PIN") != 0) {
+            m |= (uint16_t)(1u << 12);
+        }
+    }
+    s_cfg_mask = m;
+}
 
 static void refresh();
 
@@ -53,8 +131,13 @@ static void scroll_cb(lv_event_t* e) {
     refresh();
 }
 
-static void all_cb(lv_event_t*)     { s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_all(); }
-static void changed_cb(lv_event_t*) { s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_changed(); }
+// Every deliberate send from this page stops the limit monitor first: while
+// it runs the controller processes no line commands, so anything queued would
+// sit until the monitor exits. The tick re-arms it right behind the command.
+static void mon_stop();
+
+static void all_cb(lv_event_t*)     { mon_stop(); s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_all(); }
+static void changed_cb(lv_event_t*) { mon_stop(); s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_changed(); }
 
 static void edit_focus_cb(lv_event_t*) {
     // With a setting selected this edits its value; with nothing selected it is
@@ -74,6 +157,7 @@ static void kb_done_cb(lv_event_t* e) {
     lv_keyboard_set_textarea(s_kb, nullptr);
     if (code != LV_EVENT_READY) return;
 
+    mon_stop();
     const fnc_setting_t* st = fncset_at((size_t)s_sel);
     if (st) {
         fncset_write(st->name, lv_textarea_get_text(s_edit_ta));
@@ -93,6 +177,7 @@ static void kb_done_cb(lv_event_t* e) {
 }
 
 static void diag_cmd_cb(lv_event_t* e) {
+    mon_stop();
     send_line((const char*)lv_event_get_user_data(e));
     expanded_open(EXPANDED_CONSOLE);      // replies are plain lines; show them
 }
@@ -193,9 +278,10 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_set_flex_grow(diag, 1);
     lv_obj_set_flex_flow(diag, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(diag, U, 0);
-    static const char* CMDS[3]  = { "$Limits/Show", "$CI", "$GD" };
-    static const char* LABEL[3] = { "LIMITS", "CHANNELS", "GPIO" };
-    for (int i = 0; i < 3; i++) {
+    // The LIMITS button is gone: the lamp row below is the live limit view.
+    static const char* CMDS[2]  = { "$CI", "$GD" };
+    static const char* LABEL[2] = { "CHANNELS", "GPIO" };
+    for (int i = 0; i < 2; i++) {
         lv_obj_t* b = w_button(diag, LABEL[i], nullptr, C_RAISE, C_TEXT,
                                diag_cmd_cb, (void*)CMDS[i]);
         lv_obj_set_flex_grow(b, 1);
@@ -209,6 +295,7 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_set_flex_grow(sv, 1);
     lv_obj_set_height(sv, LV_PCT(100));
     lv_obj_add_event_cb(sv, [](lv_event_t*) {
+        mon_stop();
         send_line("$CD=config.yaml");
         expanded_open(EXPANDED_CONSOLE);
     }, LV_EVENT_LONG_PRESSED, nullptr);
@@ -220,16 +307,16 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(pins, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(pins, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(pins, U / 2, 0);
-    lv_obj_t* pt = w_label(pins, "PINS", &lv_font_montserrat_10, C_DIM);
-    lv_obj_set_width(pt, U * 5);
-    for (int i = 0; i < 7; i++) {
+    lv_obj_t* pt = w_label(pins, "LIMITS", &lv_font_montserrat_10, C_DIM);
+    lv_obj_set_width(pt, U * 6);
+    for (int i = 0; i < NLAMPS; i++) {
         s_pin_box[i] = w_panel(pins, C_RAISE);
         lv_obj_set_flex_grow(s_pin_box[i], 1);
         lv_obj_set_height(s_pin_box[i], LV_PCT(100));
         s_pin_lbl[i] = w_label(s_pin_box[i], PIN_NAMES[i], &lv_font_montserrat_14, C_DIM);
         lv_obj_center(s_pin_lbl[i]);
-        if (i < 6) lv_obj_add_flag(s_pin_box[i], LV_OBJ_FLAG_HIDDEN);   // shown per n_axes
-        s_pin_shown[i] = (i == 6);
+        lv_obj_add_flag(s_pin_box[i], LV_OBJ_FLAG_HIDDEN);   // shown per config scan
+        s_pin_shown[i] = false;
         s_pin_state[i] = -1;
     }
 
@@ -239,20 +326,36 @@ void page_diag_build(lv_obj_t* p) {
 }
 
 void page_diag_tick() {
-    if (fncset_dirty_take()) refresh();
+    if (fncset_dirty_take()) {
+        refresh();
+        scan_probe_config();
+    }
 
-    for (int i = 0; i < 7; i++) {
-        bool show = (i == 6) ? true : (i < n_axes);
+    // Run the monitor only while this page is on screen and the machine is
+    // not in motion; leaving the page stops it (page_diag_hidden). Alarm is
+    // deliberately included: a hard-limit trip is exactly when someone stands
+    // here watching these lamps (FluidNC refuses the command only in
+    // Cycle/Hold). A monitor gone quiet for 3s is forgotten and retried.
+    uint32_t now = (uint32_t)milliseconds();
+    if (s_mon && (int32_t)(now - s_mon_seen) > 3000) s_mon = false;
+    if (!s_mon && (state == Idle || state == Alarm)) {
+        s_mon      = true;
+        s_mon_seen = now;
+        send_line("$Limits/Show");
+    }
+
+    for (int i = 0; i < NLAMPS; i++) {
+        bool show = (s_cfg_mask >> i) & 1;
         if (show != s_pin_shown[i]) {
             s_pin_shown[i] = show;
             if (show) lv_obj_clear_flag(s_pin_box[i], LV_OBJ_FLAG_HIDDEN);
             else      lv_obj_add_flag(s_pin_box[i], LV_OBJ_FLAG_HIDDEN);
         }
         if (!show) continue;
-        int on = (i == 6) ? (myProbeSwitch ? 1 : 0) : (myLimitSwitches[i] ? 1 : 0);
+        int on = (i == 12) ? (myProbeSwitch ? 1 : 0) : ((s_live_mask >> i) & 1);
         if (on == s_pin_state[i]) continue;
         s_pin_state[i] = on;
-        lv_obj_set_style_bg_color(s_pin_box[i], on ? C_CRIT : C_RAISE, 0);
-        lv_obj_set_style_text_color(s_pin_lbl[i], on ? C_TEXT : C_DIM, 0);
+        lv_obj_set_style_bg_color(s_pin_box[i], on ? C_OK : C_RAISE, 0);
+        lv_obj_set_style_text_color(s_pin_lbl[i], on ? C_BG : C_DIM, 0);
     }
 }

@@ -9,7 +9,10 @@
 // Editing these beats rewriting config.yaml: most take effect immediately, and
 // a bad value is rejected with an error instead of leaving the machine with a
 // config file it cannot parse.
-#define FS_MAX      160
+// Sized above a real dump (~150 lines on the 4-axis config) with headroom:
+// the Diag limit lamps are derived from this list, so a silently dropped tail
+// would read as "no limit switches configured".
+#define FS_MAX      200
 #define FS_NAME_MAX 48
 #define FS_VAL_MAX  32
 

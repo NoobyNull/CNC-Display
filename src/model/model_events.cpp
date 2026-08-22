@@ -41,11 +41,16 @@ const char* model_take_error() {
     return s_error;
 }
 
-// Three consumers, none of which should know about the others: the work-offset
-// table ($# replies), the file list (JSON directory replies) and the console.
-// Each ignores what is not addressed to it.
+// ui/page_diag.cpp — declared here bare to keep lvgl out of the model layer.
+bool page_diag_limits_feed(const char* line);
+
+// Consumers, none of which should know about the others: the Diag limit
+// monitor (which swallows its 2-lines-a-second stream), the work-offset table
+// ($# replies), the file list (JSON directory replies) and the console. Each
+// ignores what is not addressed to it.
 extern "C" void handle_other_line(char* line) {
     if (!line) return;
+    if (page_diag_limits_feed(line)) return;
     offsets_feed_line(line);
     fncset_feed_line(line);
     filelist_feed_line(line);

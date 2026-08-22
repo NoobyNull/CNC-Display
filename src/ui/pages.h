@@ -28,3 +28,10 @@ void page_run_tick();
 void page_setup_tick();
 void page_diag_tick();
 void page_cal_tick();
+
+// Diag runs $Limits/Show only while it is on screen; the shell calls this on
+// navigating away so the controller stops monitoring.
+void page_diag_hidden();
+// Consumes the monitor's stream (existence preamble + 500ms samples).
+// Returns true when the line belonged to the monitor and not the console.
+bool page_diag_limits_feed(const char* line);

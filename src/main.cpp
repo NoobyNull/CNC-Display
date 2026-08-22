@@ -26,6 +26,7 @@
 #include "model/model_compat.h"
 #include "model/console_log.h"
 #include "model/offsets.h"
+#include "model/fnc_settings.h"
 #include "model/filelist.h"
 #include "model/path_loader.h"
 #include "ui/shell.h"
@@ -177,7 +178,10 @@ static void prime_link_if_up() {
     s_primed = true;
     send_line("$#");
     filelist_request();
-    Serial.println("link up: primed offsets and file list");
+    // The full settings dump also feeds the Diag limit lamps: which lamps
+    // exist is read from the controller's configured limit/probe pins.
+    fncset_request_all();
+    Serial.println("link up: primed offsets, file list and settings");
 }
 
 void loop() {

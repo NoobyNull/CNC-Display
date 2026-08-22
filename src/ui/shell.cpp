@@ -143,6 +143,7 @@ static bool page_wants_dro(page_id_t id) {
 
 void shell_show_page(page_id_t id) {
     if (id < 0 || id >= PAGE_COUNT) return;
+    if (s_page == PAGE_DIAG && id != PAGE_DIAG) page_diag_hidden();
     s_page = id;
     const bool dro = page_wants_dro(id);
     if (dro) lv_obj_clear_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
