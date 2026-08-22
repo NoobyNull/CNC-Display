@@ -229,7 +229,11 @@ bool fwupd_net() {
     // "Held the button and nothing happened" must not be a reachable state.
     ui_open("NETWORK UPDATE");
     if (!ui_countdown()) return cancelled();
-    if (!*settings_wifi_ssid() && !creds_from_sd()) {
+    // wifi.txt on the SD overrides stored creds whenever it is present — not
+    // only when none are stored, or a baked-in default with a bad password
+    // could never be corrected without a cable.
+    creds_from_sd();
+    if (!*settings_wifi_ssid()) {
         fail("no wifi creds - put wifi.txt (ssid/pass) on the SD");
         return false;
     }
@@ -240,7 +244,31 @@ bool fwupd_net() {
     WiFi.begin(settings_wifi_ssid(), settings_wifi_pass());
     uint32_t t0 = millis();
     while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - t0 > 20000) { fail("wifi join timed out"); return false; }
+        if (millis() - t0 > 20000) {
+            // A bare timeout is undiagnosable. Scan and say whether the SSID
+            // is even visible from here (ESP32 = 2.4GHz only) and how loud:
+            // not visible = wrong band / out of range; visible = bad password
+            // (or an AP mode the S3 cannot join, e.g. WPA3-only).
+            ui_note_set("join failed — scanning...", C_DIM);
+            WiFi.disconnect();
+            int n = WiFi.scanNetworks();
+            char e[96];
+            bool found = false;
+            int  rssi  = 0;
+            for (int i = 0; i < n; i++) {
+                if (WiFi.SSID(i) == settings_wifi_ssid()) {
+                    found = true;
+                    rssi  = (int)WiFi.RSSI(i);
+                    break;
+                }
+            }
+            if (found) snprintf(e, sizeof(e), "join timeout - '%s' visible at %ddBm - check password",
+                                settings_wifi_ssid(), rssi);
+            else       snprintf(e, sizeof(e), "join timeout - '%s' not in scan (%d nets) - 2.4GHz? range?",
+                                settings_wifi_ssid(), n);
+            fail(e);
+            return false;
+        }
         ui_pump();
         delay(50);
     }
