@@ -33,7 +33,10 @@ void init_fnc_uart() {
     esp_err_t e_cfg = uart_param_config(fnc_uart_port, &conf);
     esp_err_t e_pin = uart_set_pin(fnc_uart_port, (gpio_num_t)FNC_TX_PIN, (gpio_num_t)FNC_RX_PIN,
                                    UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    esp_err_t e_drv = uart_driver_install(fnc_uart_port, 4096, 0, 0, NULL, 0);
+    // 16K RX: a $S dump streams ~150 lines at 1 Mbaud (~100 bytes/ms) and the
+    // main loop drains between LVGL frames — 4K overflowed mid-dump and the
+    // shredded lines made the settings list come up with a random subset.
+    esp_err_t e_drv = uart_driver_install(fnc_uart_port, 16384, 0, 0, NULL, 0);
     Serial.printf("[uart] num=%d tx=%d rx=%d baud=%lu cfg=%d pin=%d drv=%d\n",
                   FNC_UART_NUM, FNC_TX_PIN, FNC_RX_PIN, (unsigned long)s_baud,
                   (int)e_cfg, (int)e_pin, (int)e_drv);

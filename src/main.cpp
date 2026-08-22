@@ -206,7 +206,9 @@ void loop() {
         // fnc_poll() drains one byte. The link delivers far more per tick than
         // that, so drain a chunk and stop as soon as RX is empty — draining
         // blindly adds idle-loop jitter that makes small jog moves choppy.
-        for (int i = 0; i < 64; i++) {
+        // 512 matches the XModem paths: at 64 a $S dump outran the drain and
+        // overflowed the RX buffer.
+        for (int i = 0; i < 512; i++) {
             fnc_poll();
             if (!fnc_rx_waiting()) break;
         }

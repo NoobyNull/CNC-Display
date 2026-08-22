@@ -9,10 +9,12 @@
 #include <string.h>
 #include <ctype.h>
 
-// Settings rows that fit the list, derived from the panel. Fixed at 5 before,
-// which is what the CrowPanel's 240px page held; the 7B fits 8. There are ~150
-// settings to page through, so every extra row is one less scroll.
-static const int ROWS = (CONTENT_H - U * 2 + 2) / (U * 5 + 2);
+// Settings rows that fit the list, derived from the panel. Diag runs
+// full-height — the shell hides the DRO strip here — so the budget is the
+// content area PLUS the strip's height, not CONTENT_H alone (that undersold
+// the page by 4 rows). There are ~150 settings to page through, so every
+// extra row is one less scroll.
+static const int ROWS = (CONTENT_H + DRO_H - U * 2 + 2) / (U * 5 + 2);
 
 static lv_obj_t* s_row[ROWS];
 static lv_obj_t* s_name[ROWS];
