@@ -193,15 +193,19 @@ def _vert(e):
     return bb.XLength < 0.01 and bb.YLength < 0.01 and bb.ZLength > 5
 
 
-corner_edges = [e for e in shape.Edges if _vert(e)
-                and (e.BoundBox.XMin < 0.05 or e.BoundBox.XMax > BOX_W - 0.05)
-                and (e.BoundBox.YMin < 0.05 or e.BoundBox.YMax > BOX_D - 0.05)]
-shape = try_round(shape, corner_edges, 2.0, "outer corners")
+# Fillets are stress relief, not decoration: concave inside corners only.
 int_vert = [e for e in shape.Edges if _vert(e)
             and (abs(e.BoundBox.XMin - WALL_T) < 0.05
                  or abs(e.BoundBox.XMax - (BOX_W - WALL_T)) < 0.05)
             and abs(e.BoundBox.YMin - FACE_T) < 0.15]
 shape = try_round(shape, int_vert, 2.0, "face-wall inner corners")
+int_base = [e for e in shape.Edges
+            if e.BoundBox.XLength < 0.01 and e.BoundBox.ZLength < 0.01
+            and e.BoundBox.YLength > 10
+            and abs(e.BoundBox.ZMin - BASE_T) < 0.05
+            and (abs(e.BoundBox.XMin - WALL_T) < 0.05
+                 or abs(e.BoundBox.XMax - (BOX_W - WALL_T)) < 0.05)]
+shape = try_round(shape, int_base, 2.0, "wall-floor inner corners")
 shape = shape.removeSplitter()
 
 obj = doc.addObject("Part::Feature", "estop_box")
