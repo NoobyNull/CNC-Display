@@ -141,13 +141,17 @@ cap_ow = CAP_IN_W + 2 * CAP_WALL
 cx0 = TOG_CX - cap_ow / 2
 lug_y = slot_y1 + 8.0
 lug_xs = (cx0 - LUG_T - 0.4, cx0 + cap_ow + 0.4)
+pin_drop = LUG_DROP - 4.0          # pin axis depth below the floor
 for lx in lug_xs:
-    solids.append(Part.makeBox(LUG_T, 8.0, LUG_DROP,
-                               App.Vector(lx, lug_y, -LUG_DROP)))
+    solids.append(Part.makeBox(LUG_T, 8.0, pin_drop,
+                               App.Vector(lx, lug_y, -pin_drop)))
+    # Rounded knuckle about the pin axis instead of a square block end.
+    solids.append(Part.makeCylinder(4.5, LUG_T,
+                                    App.Vector(lx, lug_y + 4.0, -pin_drop),
+                                    App.Vector(1, 0, 0)))
 for lx in lug_xs:
     holes.append(Part.makeCylinder(HINGE_D / 2, LUG_T + 2,
-                                   App.Vector(lx - 1, lug_y + 4.0,
-                                              -LUG_DROP + 4.0),
+                                   App.Vector(lx - 1, lug_y + 4.0, -pin_drop),
                                    App.Vector(1, 0, 0)))
 
 # Catch nub on the floor's underside at the cap's front lip line.
@@ -211,11 +215,16 @@ cap = cap.cut(Part.makeBox(CAP_IN_W, cap_len - 2 * CAP_WALL,
                            CAP_CLEAR_D - CAP_WALL,
                            App.Vector(cx0 + CAP_WALL, cap_front + CAP_WALL,
                                       CAP_WALL)))
-# Ears: thick rear-corner extensions of the side walls, rising to pin height.
-pin_z = CAP_CLEAR_D + LUG_DROP - 4.0
+# Ears: rear-corner extensions of the side walls with rounded knuckle tops.
+# Pin sits pin_drop BELOW the cap's rim, so closed (rim against the floor)
+# the ear holes land exactly on the lug holes.
+pin_z = CAP_CLEAR_D - (LUG_DROP - 4.0)
 for ex in (cx0, cx0 + cap_ow - LUG_T):
-    cap = cap.fuse(Part.makeBox(LUG_T, 12.0, pin_z + 3.0,
+    cap = cap.fuse(Part.makeBox(LUG_T, 12.0, pin_z,
                                 App.Vector(ex, lug_y - 2.0, 0)))
+    cap = cap.fuse(Part.makeCylinder(4.5, LUG_T,
+                                     App.Vector(ex, lug_y + 4.0, pin_z),
+                                     App.Vector(1, 0, 0)))
 cap = cap.cut(Part.makeCylinder(HINGE_D / 2, cap_ow + 2,
                                 App.Vector(cx0 - 1, lug_y + 4.0, pin_z),
                                 App.Vector(1, 0, 0)))
@@ -247,6 +256,11 @@ for sx, x0 in ((1, -1.0), (-1, bw + 1.0)):
 for fx in (0.3, 0.7):
     brace = brace.cut(Part.makeCylinder(BRACE_DESK_D / 2, BRACE_T + 2,
                                         App.Vector(bw * fx, bd - 20.0, -1)))
+# Back lip: hooks down over the walls' rear ends, so the brace registers
+# its depth against the box instead of free-floating at the open back.
+# Print the brace LIP-UP (flip 180°) so it still lies flat on the bed.
+brace = brace.fuse(Part.makeBox(bw, 4.0, BRACE_T + 10.0,
+                                App.Vector(0, bd, -10.0)))
 bobj = doc.addObject("Part::Feature", "estop_brace")
 bobj.Shape = brace.removeSplitter()
 doc.recompute()
