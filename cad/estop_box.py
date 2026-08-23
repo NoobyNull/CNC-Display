@@ -283,6 +283,27 @@ for sx, x0 in ((1, bp_x0 - 1.0), (-1, bp_x1 + 1.0)):
         back = back.cut(Part.makeCylinder(BACK_PILOT_D / 2, 13.0,
                                           App.Vector(x0, BOX_D - 3.0, hz),
                                           App.Vector(sx, 0, 0)))
+# Drill-guide grid on the INSIDE face only: 0.4-wide, 0.3-deep grooves at
+# 5mm pitch both ways, centred on the plug — a ruled reference for any
+# future hole. The inside face is the print's top surface, so the grooves
+# come out crisp, and a bit self-centres in the crossings.
+gy = BOX_D - BACK_T
+gx0, gx1 = bp_x0 + 2.0, bp_x1 - 2.0
+gz0, gz1 = bp_z0 + 2.0, BOX_H - 2.2
+cxc, czc = (bp_x0 + bp_x1) / 2.0, (bp_z0 + BOX_H - 0.2) / 2.0
+grid = []
+i = -int((cxc - gx0) / 5.0)
+while cxc + i * 5.0 <= gx1:
+    grid.append(Part.makeBox(0.4, 1.3, gz1 - gz0,
+                             App.Vector(cxc + i * 5.0 - 0.2, gy - 1.0, gz0)))
+    i += 1
+i = -int((czc - gz0) / 5.0)
+while czc + i * 5.0 <= gz1:
+    grid.append(Part.makeBox(gx1 - gx0, 1.3, 0.4,
+                             App.Vector(gx0, gy - 1.0, czc + i * 5.0 - 0.2)))
+    i += 1
+back = back.cut(Part.makeCompound(grid))
+
 # Panel prints lip-down: chamfer the lip's outer-face bed plane.
 back = try_chamfer(back,
                    [e for e in back.Edges
