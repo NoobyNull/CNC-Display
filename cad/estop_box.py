@@ -100,6 +100,30 @@ slot_y1 = TOG_PIV_Y + SLOT_REACH
 
 doc = App.newDocument("estop_box")
 
+# Drill-guide dots: Ø0.4 x 0.3-deep divots at 5mm pitch, centred per face,
+# on every INSIDE surface — any future hole starts on a self-centring dot.
+# Dots that land over cutouts just cut air.
+DOT_D, DOT_DEEP, DOT_PITCH = 0.4, 0.3, 5.0
+
+
+def dot_field(u0, u1, v0, v1, make):
+    out = []
+    um, vm = (u0 + u1) / 2.0, (v0 + v1) / 2.0
+    i = -int((um - u0) / DOT_PITCH)
+    while um + i * DOT_PITCH <= u1:
+        j = -int((vm - v0) / DOT_PITCH)
+        while vm + j * DOT_PITCH <= v1:
+            out.append(make(um + i * DOT_PITCH, vm + j * DOT_PITCH))
+            j += 1
+        i += 1
+    return out
+
+
+def _dot(px, py, pz, axis):
+    return Part.makeCylinder(DOT_D / 2, 2 * DOT_DEEP,
+                             App.Vector(px, py, pz), axis)
+
+
 solids = []
 holes = []
 
@@ -166,6 +190,20 @@ for x0 in (-1.0, BOX_W - WALL_T - 1.0):
         holes.append(Part.makeCylinder(3.4 / 2, WALL_T + 2,
                                        App.Vector(x0, BOX_D - 3.0, hz),
                                        App.Vector(1, 0, 0)))
+
+# Interior dot fields: face back, both wall insides, floor top.
+m = 2.5
+dots = []
+dots += dot_field(WALL_T + m, BOX_W - WALL_T - m, BASE_T + m, BOX_H - m,
+                  lambda u, v: _dot(u, FACE_T - DOT_DEEP, v, App.Vector(0, 1, 0)))
+dots += dot_field(FACE_T + m, BOX_D - m, BASE_T + m, BOX_H - m,
+                  lambda u, v: _dot(WALL_T - DOT_DEEP, u, v, App.Vector(1, 0, 0)))
+dots += dot_field(FACE_T + m, BOX_D - m, BASE_T + m, BOX_H - m,
+                  lambda u, v: _dot(BOX_W - WALL_T + DOT_DEEP, u, v,
+                                    App.Vector(-1, 0, 0)))
+dots += dot_field(WALL_T + m, BOX_W - WALL_T - m, FACE_T + m, BOX_D - m,
+                  lambda u, v: _dot(u, v, BASE_T - DOT_DEEP, App.Vector(0, 0, 1)))
+holes.append(Part.makeCompound(dots))
 
 shape = solids[0]
 for s in solids[1:]:
@@ -256,6 +294,12 @@ cap = cap.cut(Part.makeCylinder(HINGE_D / 2, cap_ow + 2,
 cap = cap.cut(Part.makeBox(10.0 + 0.6, CAP_WALL + 2, CATCH_ENGAGE + 2.0,
                            App.Vector(TOG_CX - 5.3, cap_front - 1,
                                       CAP_CLEAR_D - CATCH_ENGAGE - 0.5)))
+# Dots on the cap's tray floor (its inside surface).
+cap = cap.cut(Part.makeCompound(dot_field(
+    cx0 + CAP_WALL + 2.5, cx0 + cap_ow - CAP_WALL - 2.5,
+    cap_front + CAP_WALL + 2.5, cap_front + cap_len - CAP_WALL - 2.5,
+    lambda u, v: _dot(u, v, CAP_WALL - DOT_DEEP, App.Vector(0, 0, 1)))))
+
 # Cap prints opening-up: chamfer its z=0 bed plane.
 cap = try_chamfer(cap, [e for e in cap.Edges if e.BoundBox.ZMax < 0.05],
                   CHAMFER_BED, "cap bed edges")
@@ -283,26 +327,10 @@ for sx, x0 in ((1, bp_x0 - 1.0), (-1, bp_x1 + 1.0)):
         back = back.cut(Part.makeCylinder(BACK_PILOT_D / 2, 13.0,
                                           App.Vector(x0, BOX_D - 3.0, hz),
                                           App.Vector(sx, 0, 0)))
-# Drill-guide grid on the INSIDE face only: 0.4-wide, 0.3-deep grooves at
-# 5mm pitch both ways, centred on the plug — a ruled reference for any
-# future hole. The inside face is the print's top surface, so the grooves
-# come out crisp, and a bit self-centres in the crossings.
-gy = BOX_D - BACK_T
-gx0, gx1 = bp_x0 + 2.0, bp_x1 - 2.0
-gz0, gz1 = bp_z0 + 2.0, BOX_H - 2.2
-cxc, czc = (bp_x0 + bp_x1) / 2.0, (bp_z0 + BOX_H - 0.2) / 2.0
-grid = []
-i = -int((cxc - gx0) / 5.0)
-while cxc + i * 5.0 <= gx1:
-    grid.append(Part.makeBox(0.4, 1.3, gz1 - gz0,
-                             App.Vector(cxc + i * 5.0 - 0.2, gy - 1.0, gz0)))
-    i += 1
-i = -int((czc - gz0) / 5.0)
-while czc + i * 5.0 <= gz1:
-    grid.append(Part.makeBox(gx1 - gx0, 1.3, 0.4,
-                             App.Vector(gx0, gy - 1.0, czc + i * 5.0 - 0.2)))
-    i += 1
-back = back.cut(Part.makeCompound(grid))
+# Dots on the panel's inside face.
+back = back.cut(Part.makeCompound(dot_field(
+    bp_x0 + 2.5, bp_x1 - 2.5, bp_z0 + 2.5, BOX_H - 2.7,
+    lambda u, v: _dot(u, BOX_D - BACK_T - DOT_DEEP, v, App.Vector(0, 1, 0)))))
 
 # Panel prints lip-down: chamfer the lip's outer-face bed plane.
 back = try_chamfer(back,
