@@ -62,17 +62,18 @@ SLOT_W     = TOG_C + 3.0
 SLOT_REACH = TOG_H / 2 - TOG_SCREW_D / 2 - 2.0
 TOG_PIV_Y  = 35.0      # pivot's y (depth) position on the floor
 
-# ---- internal brace ----
-# A separately printed shelf for the top dead zone: snug wall-to-wall and
-# against the face's back. The box prints face-down (layers stack along
-# depth); the brace prints FLAT (layers stack along height) — installed,
-# the laminations cross at 90°, so wall screws bite the brace ACROSS its
-# layers and desk screws hang the box from cross-grain material.
-BRACE_T   = 6.0
-BRACE_CLR = 0.15       # per side; snug slide-in fit — the accuracy knob
-BRACE_SCREW_Y = (15.0, 46.0)   # wall-screw stations along the depth
-BRACE_PILOT_D = 2.9    # in the brace edges; walls get 3.4 clearance
-BRACE_DESK_D  = 4.5    # vertical wood screws up into the desk
+# ---- back panel ----
+# Separately printed plug for the back opening: the body fits snugly INSIDE
+# the box; a small lip runs the full OUTER circumference and seats on the
+# box's rear edges, so the panel cannot be pushed inward — it stiffens the
+# open back and closes it against dust. Four screws through the walls bite
+# its edges. Wires leave through the bottom slot.
+BACK_T   = 6.0
+BACK_CLR = 0.2         # per side; snug plug fit — the accuracy knob
+BACK_LIP = 3.0         # proud rim on the outer perimeter
+BACK_SCREW_Z = (25.0, 65.0)
+BACK_PILOT_D = 2.9     # in the panel edges; walls get 3.4 clearance
+WIRE_W, WIRE_H = 20.0, 12.0
 
 # ---- safety cap ----
 CAP_WALL   = 2.5
@@ -159,35 +160,11 @@ catch_y = slot_y0 - 12.0
 solids.append(Part.makeBox(10.0, 2.0, 1.5,
                            App.Vector(TOG_CX - 5.0, catch_y, -1.5)))
 
-# Stiffening rim around the back opening: inward flanges along both walls'
-# rear edges and up from the floor's rear edge, each backed by a 45° wedge
-# (printable face-down). A shove on the box's back now loads a frame, not
-# free plate edges. The brace installs from the open TOP because of this.
-RIM_W, RIM_T = 8.0, 3.0
-for x0, sx in ((WALL_T, 1), (BOX_W - WALL_T, -1)):
-    solids.append(Part.makeBox(RIM_W, RIM_T, BOX_H - BASE_T,
-                               App.Vector(min(x0, x0 + sx * RIM_W),
-                                          BOX_D - RIM_T, BASE_T)))
-    w = Part.makePolygon([
-        App.Vector(x0, BOX_D - RIM_T, BASE_T),
-        App.Vector(x0 + sx * RIM_W, BOX_D - RIM_T, BASE_T),
-        App.Vector(x0, BOX_D - RIM_T - RIM_W, BASE_T),
-        App.Vector(x0, BOX_D - RIM_T, BASE_T)])
-    solids.append(Part.Face(w).extrude(App.Vector(0, 0, BOX_H - BASE_T)))
-solids.append(Part.makeBox(BOX_W - 2 * WALL_T, RIM_T, RIM_W,
-                           App.Vector(WALL_T, BOX_D - RIM_T, BASE_T)))
-wf = Part.makePolygon([
-    App.Vector(WALL_T, BOX_D - RIM_T, BASE_T + RIM_W),
-    App.Vector(WALL_T, BOX_D - RIM_T, BASE_T),
-    App.Vector(WALL_T, BOX_D - RIM_T - RIM_W, BASE_T),
-    App.Vector(WALL_T, BOX_D - RIM_T, BASE_T + RIM_W)])
-solids.append(Part.Face(wf).extrude(App.Vector(BOX_W - 2 * WALL_T, 0, 0)))
-
-# Wall clearance holes for the brace screws, at brace mid-thickness.
+# Wall clearance holes for the back-panel screws, at plug mid-thickness.
 for x0 in (-1.0, BOX_W - WALL_T - 1.0):
-    for by in BRACE_SCREW_Y:
+    for hz in BACK_SCREW_Z:
         holes.append(Part.makeCylinder(3.4 / 2, WALL_T + 2,
-                                       App.Vector(x0, by, BOX_H - BRACE_T / 2),
+                                       App.Vector(x0, BOX_D - 3.0, hz),
                                        App.Vector(1, 0, 0)))
 
 shape = solids[0]
@@ -260,37 +237,32 @@ cobj = doc.addObject("Part::Feature", "estop_cap")
 cobj.Shape = cap.removeSplitter()
 doc.recompute()
 
-# ---- internal brace (modeled flat, in its own print orientation) ----------
-bw = BOX_W - 2 * WALL_T - 2 * BRACE_CLR
-bd = BOX_D - FACE_T - BRACE_CLR
-brace = Part.makeBox(bw, bd, BRACE_T)
-# Front corners rounded to seat into the box's filleted face-wall corners.
-fc = [e for e in brace.Edges
-      if e.BoundBox.XLength < 0.01 and e.BoundBox.YLength < 0.01
-      and e.BoundBox.YMin < 0.05]
-brace = brace.makeFillet(2.5, fc)
-# Edge pilots for the wall screws (brace local y = box y - FACE_T).
-for sx, x0 in ((1, -1.0), (-1, bw + 1.0)):
-    for by in BRACE_SCREW_Y:
-        brace = brace.cut(Part.makeCylinder(
-            BRACE_PILOT_D / 2, 13.0,
-            App.Vector(x0, by - FACE_T, BRACE_T / 2),
-            App.Vector(sx, 0, 0)))
-# Vertical desk-screw holes, back half for driver access via the open back.
-for fx in (0.3, 0.7):
-    brace = brace.cut(Part.makeCylinder(BRACE_DESK_D / 2, BRACE_T + 2,
-                                        App.Vector(bw * fx, bd - 20.0, -1)))
-# Back lip: hooks down over the walls' rear ends, so the brace registers
-# its depth against the box instead of free-floating at the open back.
-# Print the brace LIP-UP (flip 180°) so it still lies flat on the bed.
-brace = brace.fuse(Part.makeBox(bw, 4.0, BRACE_T + 10.0,
-                                App.Vector(0, bd, -10.0)))
-bobj = doc.addObject("Part::Feature", "estop_brace")
-bobj.Shape = brace.removeSplitter()
+# ---- back panel (modeled in place; prints flat, lip on the bed) -----------
+bp_x0, bp_x1 = WALL_T + BACK_CLR, BOX_W - WALL_T - BACK_CLR
+bp_z0 = BASE_T + BACK_CLR
+back = Part.makeBox(bp_x1 - bp_x0, BACK_T, BOX_H - 0.2 - bp_z0,
+                    App.Vector(bp_x0, BOX_D - BACK_T, bp_z0))
+back = back.fuse(Part.makeBox(BOX_W, BACK_LIP, BOX_H,
+                              App.Vector(0, BOX_D, 0)))
+# Wire slot, open at the bottom, corners rounded on the cutter.
+ws = Part.makeBox(WIRE_W, BACK_T + BACK_LIP + 2, WIRE_H + 1,
+                  App.Vector(BOX_W / 2 - WIRE_W / 2, BOX_D - BACK_T - 1, -1))
+wse = [e for e in ws.Edges
+       if e.BoundBox.XLength < 0.01 and e.BoundBox.ZLength < 0.01
+       and e.BoundBox.ZMin > 0]
+back = back.cut(ws.makeFillet(3.0, wse))
+# Edge pilots matching the wall clearance holes.
+for sx, x0 in ((1, bp_x0 - 1.0), (-1, bp_x1 + 1.0)):
+    for hz in BACK_SCREW_Z:
+        back = back.cut(Part.makeCylinder(BACK_PILOT_D / 2, 13.0,
+                                          App.Vector(x0, BOX_D - 3.0, hz),
+                                          App.Vector(sx, 0, 0)))
+bobj = doc.addObject("Part::Feature", "estop_back")
+bobj.Shape = back.removeSplitter()
 doc.recompute()
 
 here = os.path.dirname(os.path.abspath(__file__))
-Mesh.export([bobj], os.path.join(here, "estop_brace.stl"))
+Mesh.export([bobj], os.path.join(here, "estop_back.stl"))
 obj.Shape.exportStep(os.path.join(here, "estop_box.step"))
 Mesh.export([obj], os.path.join(here, "estop_box.stl"))
 Mesh.export([cobj], os.path.join(here, "estop_cap.stl"))
