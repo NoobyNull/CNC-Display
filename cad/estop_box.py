@@ -188,6 +188,22 @@ def try_round(shp, edges, r, what):
     return shp
 
 
+def try_chamfer(shp, edges, c, what):
+    if not edges:
+        return shp
+    try:
+        out = shp.makeChamfer(c, edges)
+        if out.isValid():
+            return out
+        print("estop_box: chamfer on %s invalid, skipped" % what)
+    except Exception as ex:
+        print("estop_box: chamfer on %s failed (%s), skipped" % (what, ex))
+    return shp
+
+
+CHAMFER_BED = 0.8      # elephant-foot relief on every bed-contact edge
+
+
 def _vert(e):
     bb = e.BoundBox
     return bb.XLength < 0.01 and bb.YLength < 0.01 and bb.ZLength > 5
@@ -206,6 +222,9 @@ int_base = [e for e in shape.Edges
             and (abs(e.BoundBox.XMin - WALL_T) < 0.05
                  or abs(e.BoundBox.XMax - (BOX_W - WALL_T)) < 0.05)]
 shape = try_round(shape, int_base, 2.0, "wall-floor inner corners")
+# Box prints face-down: chamfer everything in the y=0 bed plane.
+bed = [e for e in shape.Edges if e.BoundBox.YMax < 0.05]
+shape = try_chamfer(shape, bed, CHAMFER_BED, "box bed edges")
 shape = shape.removeSplitter()
 
 obj = doc.addObject("Part::Feature", "estop_box")
@@ -237,6 +256,9 @@ cap = cap.cut(Part.makeCylinder(HINGE_D / 2, cap_ow + 2,
 cap = cap.cut(Part.makeBox(10.0 + 0.6, CAP_WALL + 2, CATCH_ENGAGE + 2.0,
                            App.Vector(TOG_CX - 5.3, cap_front - 1,
                                       CAP_CLEAR_D - CATCH_ENGAGE - 0.5)))
+# Cap prints opening-up: chamfer its z=0 bed plane.
+cap = try_chamfer(cap, [e for e in cap.Edges if e.BoundBox.ZMax < 0.05],
+                  CHAMFER_BED, "cap bed edges")
 cobj = doc.addObject("Part::Feature", "estop_cap")
 cobj.Shape = cap.removeSplitter()
 doc.recompute()
@@ -261,6 +283,11 @@ for sx, x0 in ((1, bp_x0 - 1.0), (-1, bp_x1 + 1.0)):
         back = back.cut(Part.makeCylinder(BACK_PILOT_D / 2, 13.0,
                                           App.Vector(x0, BOX_D - 3.0, hz),
                                           App.Vector(sx, 0, 0)))
+# Panel prints lip-down: chamfer the lip's outer-face bed plane.
+back = try_chamfer(back,
+                   [e for e in back.Edges
+                    if e.BoundBox.YMin > BOX_D + BACK_LIP - 0.05],
+                   CHAMFER_BED, "panel bed edges")
 bobj = doc.addObject("Part::Feature", "estop_back")
 bobj.Shape = back.removeSplitter()
 doc.recompute()
