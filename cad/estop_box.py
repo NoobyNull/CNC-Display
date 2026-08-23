@@ -294,6 +294,18 @@ cap = cap.cut(Part.makeCylinder(HINGE_D / 2, cap_ow + 2,
 cap = cap.cut(Part.makeBox(10.0 + 0.6, CAP_WALL + 2, CATCH_ENGAGE + 2.0,
                            App.Vector(TOG_CX - 5.3, cap_front - 1,
                                       CAP_CLEAR_D - CATCH_ENGAGE - 0.5)))
+# Pivot relief: a door cannot swing on a square corner. Everything rear of
+# and above the pin is trimmed to a cylinder about the pin axis, radius a
+# half-millimetre inside the pin's depth below the floor — the rounded
+# corner becomes the pivot surface and clears the floor through the swing.
+rel_r = (LUG_DROP - 4.0) - 0.5
+quad = Part.makeBox(cap_ow + 4, cap_len, CAP_CLEAR_D,
+                    App.Vector(cx0 - 2, lug_y + 4.0, pin_z))
+quad = quad.cut(Part.makeCylinder(rel_r, cap_ow + 8,
+                                  App.Vector(cx0 - 4, lug_y + 4.0, pin_z),
+                                  App.Vector(1, 0, 0)))
+cap = cap.cut(quad)
+
 # Dots on the cap's tray floor (its inside surface).
 cap = cap.cut(Part.makeCompound(dot_field(
     cx0 + CAP_WALL + 2.5, cx0 + cap_ow - CAP_WALL - 2.5,
