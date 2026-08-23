@@ -159,6 +159,30 @@ catch_y = slot_y0 - 12.0
 solids.append(Part.makeBox(10.0, 2.0, 1.5,
                            App.Vector(TOG_CX - 5.0, catch_y, -1.5)))
 
+# Stiffening rim around the back opening: inward flanges along both walls'
+# rear edges and up from the floor's rear edge, each backed by a 45° wedge
+# (printable face-down). A shove on the box's back now loads a frame, not
+# free plate edges. The brace installs from the open TOP because of this.
+RIM_W, RIM_T = 8.0, 3.0
+for x0, sx in ((WALL_T, 1), (BOX_W - WALL_T, -1)):
+    solids.append(Part.makeBox(RIM_W, RIM_T, BOX_H - BASE_T,
+                               App.Vector(min(x0, x0 + sx * RIM_W),
+                                          BOX_D - RIM_T, BASE_T)))
+    w = Part.makePolygon([
+        App.Vector(x0, BOX_D - RIM_T, BASE_T),
+        App.Vector(x0 + sx * RIM_W, BOX_D - RIM_T, BASE_T),
+        App.Vector(x0, BOX_D - RIM_T - RIM_W, BASE_T),
+        App.Vector(x0, BOX_D - RIM_T, BASE_T)])
+    solids.append(Part.Face(w).extrude(App.Vector(0, 0, BOX_H - BASE_T)))
+solids.append(Part.makeBox(BOX_W - 2 * WALL_T, RIM_T, RIM_W,
+                           App.Vector(WALL_T, BOX_D - RIM_T, BASE_T)))
+wf = Part.makePolygon([
+    App.Vector(WALL_T, BOX_D - RIM_T, BASE_T + RIM_W),
+    App.Vector(WALL_T, BOX_D - RIM_T, BASE_T),
+    App.Vector(WALL_T, BOX_D - RIM_T - RIM_W, BASE_T),
+    App.Vector(WALL_T, BOX_D - RIM_T, BASE_T + RIM_W)])
+solids.append(Part.Face(wf).extrude(App.Vector(BOX_W - 2 * WALL_T, 0, 0)))
+
 # Wall clearance holes for the brace screws, at brace mid-thickness.
 for x0 in (-1.0, BOX_W - WALL_T - 1.0):
     for by in BRACE_SCREW_Y:
