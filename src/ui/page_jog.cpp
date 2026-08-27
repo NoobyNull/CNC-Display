@@ -210,9 +210,12 @@ static void diag_arrow(lv_obj_t* parent, const dir_t* d) {
     if (s_diag_n >= 4) return;
     const int k = s_diag_n++;
 
-    // Square drawing box, centred; sized off the grid quantum like everything
-    // else so it scales with the panel rather than being pinned to pixels.
-    const lv_coord_t S = U * 4;
+    // Sized off the caption font the cardinal chevrons are drawn in, so the two
+    // stay matched if that font ever changes. Not the grid quantum: at U*4 these
+    // came out roughly double the weight of the glyphs beside them, because an
+    // arrow spans its box corner to corner — 1.41x the box edge — while a glyph
+    // sits inside its own. Scaling by ~2/3 cancels that out.
+    const lv_coord_t S = (lv_coord_t)(lv_font_montserrat_14.line_height * 2 / 3);
     const lv_coord_t b = S / 2;
 
     // dy is +1 for "up the table", and screen y grows downward, so it inverts.
@@ -239,7 +242,7 @@ static void diag_arrow(lv_obj_t* parent, const dir_t* d) {
     for (int j = 0; j < 2; j++) {
         lv_obj_t* ln = lv_line_create(box);
         lv_line_set_points(ln, j ? s_diag_head[k] : s_diag_shaft[k], j ? 3 : 2);
-        lv_obj_set_style_line_width(ln, 3, 0);
+        lv_obj_set_style_line_width(ln, 2, 0);   // matches the glyph stroke
         lv_obj_set_style_line_color(ln, C_TEXT, 0);
         lv_obj_set_style_line_rounded(ln, true, 0);
     }
