@@ -27,6 +27,7 @@
 #include "model/console_log.h"
 #include "model/offsets.h"
 #include "model/fnc_settings.h"
+#include "model/caps.h"
 #include "model/filelist.h"
 #include "model/path_loader.h"
 #include "ui/shell.h"
@@ -181,7 +182,10 @@ static void prime_link_if_up() {
     // The full settings dump also feeds the Diag limit lamps: which lamps
     // exist is read from the controller's configured limit/probe pins.
     fncset_request_all();
-    Serial.println("link up: primed offsets, file list and settings");
+    // $S carries no config tree on FluidNC v4, so probe/macros/homing come from
+    // the config dump instead. This decides which pages exist — see caps.h.
+    caps_request();
+    Serial.println("link up: primed offsets, file list, settings and config");
 }
 
 void loop() {
@@ -218,6 +222,7 @@ void loop() {
     vib_guard();
     upload_poll();
     prime_link_if_up();
+    caps_tick();
     link_watchdog();
     service_action();
     lv_timer_handler();
