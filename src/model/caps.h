@@ -13,12 +13,10 @@
 // config tree at all, so anything deciding "is there a probe" from `$S` reads
 // "no" for ever on v4. That is what left the Diag probe lamp dead.
 //
-// Three-valued on purpose, and the three are NOT collapsed by callers into
-// two the same way everywhere. UNKNOWN means the controller has not been heard
-// from or the dump never arrived — it is an absence of knowledge, not of
-// hardware. The UI treats UNKNOWN as "do not offer this" for pages (see
-// page_available) and as "warn anyway" for the limits banner: for a control,
-// unknown means do not tempt; for a hazard, unknown means do not reassure.
+// Three-valued on purpose. UNKNOWN is not NO: if the controller has not been
+// heard from, or the dump did not arrive, the honest move is to leave a page
+// enabled rather than hide a control the machine may well have. Only positive
+// evidence of absence removes anything.
 enum cap_state_t { CAP_UNKNOWN = 0, CAP_NO, CAP_YES };
 
 // FluidNC v4 defines Macro0..Macro3. Not six, which is what the console drew.

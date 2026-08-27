@@ -122,23 +122,20 @@ static const char* state_word(state_t s) {
 }
 
 // ---- nav -------------------------------------------------------------------
-// Nothing optional exists until the controller says it does. A page appears
-// ONLY on CAP_YES — a positive statement in the config dump that this machine
-// has a probe pin, a homing cycle with a switch to seek, or a macro defined.
+// A page whose hardware the controller says is absent is not a page. A PROBE
+// tab on a machine with no probe pin, or a MACRO tab on a firmware with no
+// macros defined, is a control that can only ever report an error — and an
+// operator taught that some buttons always error stops reading errors.
 //
-// CAP_UNKNOWN hides. With no controller, or a dump that never arrived, the
-// panel knows nothing about this machine and offers nothing that depends on
-// it: an unlinked panel shows JOG and RUN and no more. A control that errors
-// on first use is worse than one that was never offered.
-//
-// This costs nothing in reachability: SETUP and DIAG are not capability-gated
-// and are reached by the two-finger gesture, so recovery never depends on the
-// link being up.
+// Only CAP_NO hides anything. CAP_UNKNOWN — no link, or a config dump that
+// never arrived — leaves the page in place: hiding a control the machine may
+// actually have is the worse mistake, and it is the one that cannot be
+// discovered by looking at the panel.
 static bool page_available(page_id_t id) {
     switch (id) {
-        case PAGE_PROBE: return caps_probe()  == CAP_YES;
-        case PAGE_MACRO: return caps_macros() == CAP_YES;
-        case PAGE_HOME:  return caps_homing() == CAP_YES;
+        case PAGE_PROBE: return caps_probe()  != CAP_NO;
+        case PAGE_MACRO: return caps_macros() != CAP_NO;
+        case PAGE_HOME:  return caps_homing() != CAP_NO;
         default:         return true;
     }
 }
@@ -313,11 +310,10 @@ static void gesture_tick() {
 // Capabilities arrive after the link comes up, so the page set can change while
 // the console is running. Called from the tick; cheap when nothing moved.
 static void banner_sync() {
-    // A warning inverts the same way, but toward caution rather than silence:
-    // limits are assumed absent until the config proves otherwise, so this
-    // shows on CAP_UNKNOWN as well as CAP_NO. "We could not confirm this
-    // machine can stop itself" and "it cannot" call for the same care.
-    const bool want = (caps_limits() != CAP_YES);
+    // Only a completed config dump that showed no protection anywhere counts.
+    // Warning while the answer is still unknown would put a red bar on every
+    // boot, and a warning that is always there is furniture.
+    const bool want = (caps_limits() == CAP_NO);
     if (want == s_banner_on) return;
     s_banner_on = want;
 
