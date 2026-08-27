@@ -400,8 +400,8 @@ void page_setup_tick() {
 
     if (!imu_present()) {
         lv_label_set_text(s_vib_lbl,
-            settings_vib_mode() == 0 ? "no sensor — press SEARCH"
-                                     : "NO SENSOR — guard not active");
+            settings_vib_mode() == 0 ? "no sensor - press SEARCH"
+                                     : "NO SENSOR - guard not active");
         lv_obj_set_style_text_color(s_vib_lbl,
             settings_vib_mode() == 0 ? C_DIM : C_WARN, 0);
         vt_bars_update(false);   // grey and dashed, not a confident zero
