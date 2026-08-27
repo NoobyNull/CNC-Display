@@ -1,6 +1,13 @@
 #include "model/caps.h"
-#include "model/FluidNCModel.h"
 
+// Declared rather than included: pulling in FluidNCModel.h drags GrblParserC
+// with it, and caps needs exactly two symbols from the whole chain. Keeping
+// the dependency this narrow is what lets the parser be unit-tested on the
+// host against synthetic dumps, which is where its negative cases live.
+void send_line(const char* s, int timeout);
+extern "C" int milliseconds();
+
+#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -86,7 +93,7 @@ void caps_request() {
     s_req_ms = (uint32_t)milliseconds();
     // Bare $CD dumps to the channel. `$CD=<file>` would WRITE the live tree
     // over the boot config — never send the assignment form from here.
-    send_line("$CD");
+    send_line("$CD", 2000);
 }
 
 cap_state_t caps_probe()  { return s_probe; }
