@@ -195,6 +195,56 @@ static void attach_jog(lv_obj_t* btn, const dir_t* d) {
     }
 }
 
+// LVGL's symbol font has no diagonal arrow, and the montserrat subset carries
+// no Unicode one either — U+2196 would render as a missing-glyph box, the same
+// way the em dashes did. So the four corners draw their own: a shaft along the
+// travel direction and a two-barb head at the tip.
+//
+// Points must outlive the call: lv_line_set_points() keeps the pointer rather
+// than copying, so these are static per corner and never rebuilt.
+static lv_point_t s_diag_head[4][3];
+static lv_point_t s_diag_shaft[4][2];
+static int        s_diag_n = 0;
+
+static void diag_arrow(lv_obj_t* parent, const dir_t* d) {
+    if (s_diag_n >= 4) return;
+    const int k = s_diag_n++;
+
+    // Square drawing box, centred; sized off the grid quantum like everything
+    // else so it scales with the panel rather than being pinned to pixels.
+    const lv_coord_t S = U * 4;
+    const lv_coord_t b = S / 2;
+
+    // dy is +1 for "up the table", and screen y grows downward, so it inverts.
+    const lv_coord_t tipx  = d->dx > 0 ? S : 0;
+    const lv_coord_t tipy  = d->dy > 0 ? 0 : S;
+    const lv_coord_t tailx = S - tipx;
+    const lv_coord_t taily = S - tipy;
+
+    s_diag_shaft[k][0] = { tailx, taily };
+    s_diag_shaft[k][1] = { tipx,  tipy  };
+
+    // Barbs run back from the tip along each axis, giving a corner-style head
+    // that stays legible at this size where a narrow V does not.
+    s_diag_head[k][0] = { (lv_coord_t)(tipx + (tailx > tipx ? b : -b)), tipy };
+    s_diag_head[k][1] = { tipx, tipy };
+    s_diag_head[k][2] = { tipx, (lv_coord_t)(tipy + (taily > tipy ? b : -b)) };
+
+    lv_obj_t* box = lv_obj_create(parent);
+    w_flatten(box);
+    lv_obj_set_size(box, S, S);
+    lv_obj_center(box);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);   // the press belongs to the button
+
+    for (int j = 0; j < 2; j++) {
+        lv_obj_t* ln = lv_line_create(box);
+        lv_line_set_points(ln, j ? s_diag_head[k] : s_diag_shaft[k], j ? 3 : 2);
+        lv_obj_set_style_line_width(ln, 3, 0);
+        lv_obj_set_style_line_color(ln, C_TEXT, 0);
+        lv_obj_set_style_line_rounded(ln, true, 0);
+    }
+}
+
 static void step_apply(float mm) {
     if (mm < STEPS[0])            mm = STEPS[0];
     if (mm > STEPS[STEPS_N - 1])  mm = STEPS[STEPS_N - 1];
@@ -271,10 +321,13 @@ void page_jog_build(lv_obj_t* p) {
     lv_obj_set_grid_dsc_array(pad, pc, pr);
     lv_obj_set_layout(pad, LV_LAYOUT_GRID);
 
+    // Corners are diagonals and are left blank here — they get a drawn arrow
+    // below. They used to wear the same vertical chevron as the cardinals,
+    // which made a diagonal move indistinguishable from a straight one.
     static const char* GLYPH[9] = {
-        LV_SYMBOL_UP,   LV_SYMBOL_UP,   LV_SYMBOL_UP,
+        "",             LV_SYMBOL_UP,   "",
         LV_SYMBOL_LEFT, "",             LV_SYMBOL_RIGHT,
-        LV_SYMBOL_DOWN, LV_SYMBOL_DOWN, LV_SYMBOL_DOWN
+        "",             LV_SYMBOL_DOWN, ""
     };
     for (int i = 0; i < 9; i++) {
         if (i == 4) {
@@ -297,6 +350,7 @@ void page_jog_build(lv_obj_t* p) {
         }
         lv_obj_t* b = w_button(pad, GLYPH[i], nullptr, C_RAISE, C_TEXT, nullptr, nullptr);
         lv_obj_set_grid_cell(b, LV_GRID_ALIGN_STRETCH, i % 3, 1, LV_GRID_ALIGN_STRETCH, i / 3, 1);
+        if (!GLYPH[i][0]) diag_arrow(b, &PADDIR[i]);
         attach_jog(b, &PADDIR[i]);
     }
 
