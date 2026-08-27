@@ -1,5 +1,61 @@
 # Handoff — CNC Console, 2026-08-11
 
+## Next — jog rework (decided, not built)
+
+Agreed design, with the constraints that shaped it. Nothing here is
+implemented; `page_jog.cpp` is untouched.
+
+**Continuous jog speed comes from a panel-side percentage**, not from the step
+size. Today `continuous_feed()` is `STEPS[s_step] * 300` — FluidDial's "5x the
+step per second" — so 1mm crawls at 300mm/min and the step selector is secretly
+a speed selector. Replace with `axis maxrate * jog%`, reading
+`$Grbl/MaxRate/<axis>` the way `goto_popup.cpp` already does, and keep `jog%` in
+NVS with a -/+ control.
+
+Panel-side rather than the controller's own overrides, and that was a real
+fork:
+- **RAPID has no +/-.** `Realtime.h` offers only Reset(100%), Medium(50%),
+  Low(25%); ExtraLow is marked NOT SUPPORTED. It is a three-position selector,
+  not a dial.
+- **FEED has fine/coarse +/-** but governs cutting moves. Borrowing it for jog
+  means the number set while jogging also scales the next G1 — a nasty surprise
+  mid-job.
+- Panel-side costs one piece of state the controller does not have, and buys
+  full range with no semantic collision and nothing to verify about how FluidNC
+  applies overrides to `$J=` (untested, do not assume).
+
+**Step selector becomes `-` / number / `+`**, tap the number for a custom size
+via the keypad already built for the goto popup. Step by decade. Keep
+`CONTINUOUS_MAX_MM` as a DISTANCE test — it currently reads `STEPS[s_step]`,
+and a custom 250mm step must still disable hold-to-jog.
+
+**The coast on release is bounded in TIME, not distance**, and this is why
+raising the feed is acceptable. Chunks are sized to `JOG_TICK_MS` (150ms), so
+releasing a key completes at most one chunk: 0.15s of motion at any feed. The
+distance scales with speed, the exposure does not, and no stop command is
+needed — motion ends when chunks stop arriving. That is why JogCancel being
+broken on v4.0.4 has never actually bitten. `JOG_TICK_MS` is the single safety
+knob; shortening it presses directly on the still-open blocking-send bug, so
+change it only after that is fixed.
+
+**Backstops if a jog runs past travel**, checked against the config the
+simulator runs (confirm against what is actually in the Corgi's flash, which
+HANDOFF records as different):
+- `fault_pin: 'gpio.35:low'` and `estop_pin: gpio.36` ARE configured, so a
+  closed-loop driver stall raises an alarm — but only if the HB808C `ALM`
+  outputs are physically wired. Continuity check at the cabinet, not something
+  the panel can report.
+- `soft_limits: false` everywhere, and meaningless until the machine homes.
+- `hard_limits: false`, even where a `limit_neg_pin` is assigned.
+
+So exactly one of the three is armed, and it depends on unverified wiring.
+Endstops are planned; this note is precautionary.
+
+Also worth doing while in here: surface `fault_pin` state on the panel, so a
+driver fault reads as "driver fault" rather than an unexplained alarm.
+
+---
+
 ## Session 2026-08-20 — CrowPanel Advance 7.0 V1.4 — read this first
 
 The Waveshare 7B went back on warranty (U13 mux dead, section below), and the
