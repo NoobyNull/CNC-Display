@@ -22,7 +22,13 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <termios.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -42,7 +48,54 @@ bool sim_link_is_live() { return s_fd >= 0; }
 // Returns true if the pty was opened. Non-blocking throughout: a read that
 // would block must return "no byte" rather than stalling the UI thread, which
 // is the same contract the real UART driver has.
+// host:port opens a TCP link instead of a device. FluidNC's telnet channel is
+// the same byte stream as the UART one — GrblParserC cannot tell them apart —
+// so this reaches a real controller on the network with no other changes.
+//
+// Everything downstream is fd-based and works unmodified on a socket.
+static int connect_tcp(const char* host, int port) {
+    struct addrinfo hints = {}, *res = nullptr;
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    char portstr[8];
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return -1;
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd >= 0) {
+        // Connect blocking, then go non-blocking: a half-open connect would
+        // otherwise look like an empty link and read as "controller silent".
+        if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) { close(fd); fd = -1; }
+        else {
+            int one = 1;
+            // Jog chunks are tiny and latency-critical; Nagle would coalesce
+            // them into bursts and make motion stutter.
+            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+            fcntl(fd, F_SETFL, O_NONBLOCK);
+        }
+    }
+    freeaddrinfo(res);
+    return fd;
+}
+
 bool sim_link_open(const char* path) {
+    // "host:port" -> TCP, anything else -> device path.
+    const char* colon = strrchr(path, ':');
+    if (colon && colon[1] && strspn(colon + 1, "0123456789") == strlen(colon + 1)) {
+        char host[128];
+        size_t n = (size_t)(colon - path);
+        if (n >= sizeof(host)) n = sizeof(host) - 1;
+        memcpy(host, path, n);
+        host[n] = 0;
+        s_fd = connect_tcp(host, atoi(colon + 1));
+        if (s_fd < 0) {
+            snprintf(s_detail, sizeof(s_detail), "canned fake - %s unreachable", path);
+            return false;
+        }
+        snprintf(s_detail, sizeof(s_detail), "live FluidNC on %s", path);
+        return true;
+    }
+
     s_fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (s_fd < 0) {
         snprintf(s_detail, sizeof(s_detail), "canned fake - %s absent", path);
