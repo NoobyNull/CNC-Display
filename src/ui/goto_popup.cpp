@@ -133,26 +133,24 @@ static void refresh() {
         else            snprintf(note, sizeof(note), "RELATIVE - move BY this much from here");
         lv_obj_set_style_text_color(s_note, C_DIM, 0);
     } else {
-        // Show the MACHINE coordinate the move implies, and flag it against the
-        // configured travel. This machine has no endstops fitted and soft
-        // limits off, so nothing downstream will catch a mistyped digit — this
-        // label is the only thing standing between a typo and the end stop.
+        // Reports the coordinates the move resolves to, and stops there.
+        //
+        // This used to compare the result against $Grbl/MaxTravel and colour a
+        // warning. That went: the comparison is only meaningful once the machine
+        // has homed, because until then machine coordinates have an arbitrary
+        // origin — so it could warn when nothing was wrong and stay silent when
+        // something was. And travel limits are the controller's business. The
+        // panel states where the move goes; deciding whether that is allowed
+        // has exactly one owner.
         // In relative mode the typed value is a delta, so the destination is
         // current work position plus it. Both modes then resolve to the same
-        // machine coordinate, which is what actually gets checked.
+        // machine coordinate, which is what is reported.
         const float here   = (float)atof(e4_to_cstr(myAxes[s_axis], 4));
         const float target = s_absolute ? (float)atof(s_buf) : here + (float)atof(s_buf);
         const float mach   = target + (float)atof(e4_to_cstr(myWco[s_axis], 4));
-        const float travel = axis_setting("Grbl/MaxTravel/", s_axis, 0.0f);
-        if (travel > 0.0f && (mach < -travel || mach > travel)) {
-            snprintf(note, sizeof(note), "%s -> work %.2f / machine %.2f - BEYOND %.0fmm travel",
-                     s_absolute ? "ABS" : "REL", (double)target, (double)mach, (double)travel);
-            lv_obj_set_style_text_color(s_note, C_CRIT, 0);
-        } else {
-            snprintf(note, sizeof(note), "%s -> work %.2f / machine %.2f",
-                     s_absolute ? "ABS" : "REL", (double)target, (double)mach);
-            lv_obj_set_style_text_color(s_note, C_DIM, 0);
-        }
+        snprintf(note, sizeof(note), "%s -> work %.2f / machine %.2f",
+                 s_absolute ? "ABS" : "REL", (double)target, (double)mach);
+        lv_obj_set_style_text_color(s_note, C_DIM, 0);
     }
     lv_label_set_text(s_note, note);
 

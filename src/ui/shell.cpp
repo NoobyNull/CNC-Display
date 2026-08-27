@@ -47,18 +47,6 @@ static lv_obj_t* s_dro;
 static lv_obj_t* s_right;
 static lv_obj_t* s_content;
 static lv_obj_t* s_safety;
-static lv_obj_t* s_banner;
-static lv_obj_t* s_banner_lbl;
-
-// A machine with neither soft nor hard limits will not stop itself at the end
-// of an axis. That is a standing property of the configuration, not an event,
-// so it gets a standing banner rather than a toast that scrolls away — and it
-// takes real height from the content instead of floating over it, because a
-// warning you can cover with a dialog is a warning you can miss.
-static const lv_coord_t BANNER_H = U * 4;
-static bool s_banner_on = false;
-
-static lv_coord_t banner_h() { return s_banner_on ? BANNER_H : 0; }
 static lv_obj_t* s_pages[PAGE_COUNT];
 
 static lv_obj_t* s_state_chip;
@@ -130,8 +118,8 @@ static const char* state_word(state_t s) {
 // it made the rail change shape for reasons that were invisible from the
 // panel: a page vanishing because a dump arrived slightly differently is not
 // something anyone can debug standing at a machine. A checkbox is a thing you
-// can look at. caps still drives the macro names and the limits banner, where
-// the controller genuinely is the authority.
+// can look at. caps still drives the macro names, where the config genuinely
+// is the only source.
 static bool page_available(page_id_t id) {
     switch (id) {
         case PAGE_PROBE:
@@ -259,11 +247,7 @@ void shell_show_page(page_id_t id) {
     const bool dro = page_wants_dro(id);
     if (dro) lv_obj_clear_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
     else     lv_obj_add_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
-    // The banner's height is taken from the DRO strip, never from the page:
-    // pages size their internals against the compile-time CONTENT_H and do not
-    // reflow, so stealing from them clipped a jog key clean off the bottom.
-    const lv_coord_t ch = dro ? CONTENT_H : (CONTENT_H + DRO_H - banner_h());
-    if (dro) lv_obj_set_height(s_dro, DRO_H - banner_h());
+    const lv_coord_t ch = dro ? CONTENT_H : CONTENT_H + DRO_H;
     lv_obj_set_height(s_content, ch);
     lv_obj_set_height(s_pages[id], ch - U * 2);
     for (int i = 0; i < PAGE_COUNT; i++) {
@@ -314,23 +298,6 @@ static void gesture_tick() {
 
 // Capabilities arrive after the link comes up, so the page set can change while
 // the console is running. Called from the tick; cheap when nothing moved.
-static void banner_sync() {
-    // Only a completed config dump that showed no protection anywhere counts.
-    // Warning while the answer is still unknown would put a red bar on every
-    // boot, and a warning that is always there is furniture.
-    const bool want = (caps_limits() == CAP_NO);
-    if (want == s_banner_on) return;
-    s_banner_on = want;
-
-    if (want) {
-        lv_label_set_text(s_banner_lbl, "WARNING: no limits defined - may cause axis crash");
-        lv_obj_clear_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
-    }
-    shell_show_page(s_page);   // re-run the height maths with the new banner state
-}
-
 static void nav_sync_caps() {
     static int s_sig = -1;
     // Tracks the user's page settings, not the capability flags.
@@ -570,14 +537,6 @@ void shell_build() {
     lv_obj_set_size(s_right, CONTENT_W, SCREEN_H);
     lv_obj_set_flex_flow(s_right, LV_FLEX_FLOW_COLUMN);
 
-    s_banner = w_panel(s_right, C_CRIT);
-    lv_obj_set_size(s_banner, CONTENT_W, BANNER_H);
-    lv_obj_set_style_radius(s_banner, 0, 0);
-    lv_obj_set_style_border_width(s_banner, 0, 0);
-    s_banner_lbl = w_label(s_banner, "", &lv_font_montserrat_14, C_BG);
-    lv_obj_center(s_banner_lbl);
-    lv_obj_add_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
-
     build_dro(s_right);
     lv_obj_set_size(s_dro, CONTENT_W, DRO_H);
 
@@ -653,7 +612,6 @@ static void fmt_pos(char* out, size_t n, pos_t v) {
 
 void shell_tick() {
     gesture_tick();
-    banner_sync();
     nav_sync_caps();
     if (model_take_state() || take_redisplay()) {
         lv_label_set_text(s_state_lbl, state_word(state));
