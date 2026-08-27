@@ -13,6 +13,11 @@ static float    s_vib_peak = 4.0f;    // CNC-TW THRESHOLD_ESTOP_PEAK_G
 static float    s_vib_jerk = 50.0f;   // CNC-TW THRESHOLD_ESTOP_JERK_GPS
 static uint8_t  s_scroff   = 0;       // minutes; 0 = never blank
 
+// Rail page visibility. The controller is asked what hardware exists, but it
+// does not get the last word: an operator who never probes can put the page
+// away, and one whose config under-reports can put it back. All on by default.
+static uint16_t s_pages = 0xFFFF;
+
 // WiFi creds exist ONLY for the network firmware update (fw_update.cpp): the
 // radio never runs alongside the live display. The old WiFi-transport keys
 // (wifi_en / host / port) stay dead.
@@ -32,6 +37,7 @@ void settings_load() {
     s_vib_peak = prefs.getFloat("vibpeak", 4.0f);
     s_vib_jerk = prefs.getFloat("vibjerk", 50.0f);
     s_scroff   = prefs.getUChar("scroff", 0);
+    s_pages    = (uint16_t)prefs.getUShort("pages", 0xFFFF);
     // An empty or absent NVS key must never shadow the baked defaults.
     char tmp[161];
     if (prefs.getString("upd_ssid", tmp, sizeof(tmp)) && tmp[0]) strncpy(s_ssid, tmp, sizeof(s_ssid) - 1);
@@ -119,6 +125,21 @@ void settings_set_brightness(uint8_t b) {
     if (b == s_bright) return;      // the +/- buttons clamp, so this repeats at the ends
     s_bright = b;
     nvs_put_uchar("bright", b);
+}
+
+bool settings_page_enabled(int page_id) {
+    if (page_id < 0 || page_id > 15) return true;
+    return (s_pages >> page_id) & 1u;
+}
+
+void settings_set_page_enabled(int page_id, bool on) {
+    if (page_id < 0 || page_id > 15) return;
+    const uint16_t bit = (uint16_t)(1u << page_id);
+    const uint16_t next = on ? (uint16_t)(s_pages | bit) : (uint16_t)(s_pages & ~bit);
+    if (next == s_pages) return;
+    s_pages = next;
+    prefs.begin("cncdisp", false); prefs.putUShort("pages", s_pages); prefs.end();
+    display_resync();
 }
 
 uint8_t settings_screen_off_min() { return s_scroff; }

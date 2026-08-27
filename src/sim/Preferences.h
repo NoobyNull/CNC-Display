@@ -26,10 +26,12 @@ public:
 
     bool    getBool(const char* k, bool d)       { return get(k, d); }
     uint8_t getUChar(const char* k, uint8_t d)   { return get(k, d); }
+    uint16_t getUShort(const char* k, uint16_t d) { return get(k, d); }
     float   getFloat(const char* k, float d)     { return get(k, d); }
 
     void putBool(const char* k, bool v)     { put(k, v); }
     void putUChar(const char* k, uint8_t v) { put(k, v); }
+    void putUShort(const char* k, uint16_t v) { put(k, v); }
     void putFloat(const char* k, float v)   { put(k, v); }
 
     // Returns bytes copied, 0 if absent — the contract settings.cpp checks.

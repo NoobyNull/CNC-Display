@@ -8,6 +8,7 @@
 #include "model/caps.h"
 #include "model/model_compat.h"
 #include "model/offsets.h"
+#include "model/settings.h"
 #include "transport/transport.h"
 #include "hw/touch.h"
 #include "GrblParserC.h"
@@ -122,20 +123,24 @@ static const char* state_word(state_t s) {
 }
 
 // ---- nav -------------------------------------------------------------------
-// A page whose hardware the controller says is absent is not a page. A PROBE
-// tab on a machine with no probe pin, or a MACRO tab on a firmware with no
-// macros defined, is a control that can only ever report an error — and an
-// operator taught that some buttons always error stops reading errors.
+// Which optional pages the rail shows is the operator's choice, set in
+// Setup, not a deduction from the controller's config.
 //
-// Only CAP_NO hides anything. CAP_UNKNOWN — no link, or a config dump that
-// never arrived — leaves the page in place: hiding a control the machine may
-// actually have is the worse mistake, and it is the one that cannot be
-// discovered by looking at the panel.
+// This used to hide pages automatically from the config dump. It worked, but
+// it made the rail change shape for reasons that were invisible from the
+// panel: a page vanishing because a dump arrived slightly differently is not
+// something anyone can debug standing at a machine. A checkbox is a thing you
+// can look at. caps still drives the macro names and the limits banner, where
+// the controller genuinely is the authority.
 static bool page_available(page_id_t id) {
     switch (id) {
-        case PAGE_PROBE: return caps_probe()  != CAP_NO;
-        case PAGE_MACRO: return caps_macros() != CAP_NO;
-        case PAGE_HOME:  return caps_homing() != CAP_NO;
+        case PAGE_PROBE:
+        case PAGE_MACRO:
+        case PAGE_HOME:
+        case PAGE_OFFSETS:
+        case PAGE_CAL:   return settings_page_enabled((int)id);
+        // JOG, RUN, SETUP and DIAG are not optional: jogging and running are
+        // the job, and the other two are how a panel gets diagnosed.
         default:         return true;
     }
 }
@@ -328,7 +333,9 @@ static void banner_sync() {
 
 static void nav_sync_caps() {
     static int s_sig = -1;
-    int sig = (int)caps_probe() | ((int)caps_homing() << 2) | ((int)caps_macros() << 4);
+    // Tracks the user's page settings, not the capability flags.
+    int sig = 0;
+    for (int i = 0; i < PAGE_COUNT; i++) sig |= (page_available((page_id_t)i) ? 1 : 0) << i;
     if (sig == s_sig) return;
     s_sig = sig;
 

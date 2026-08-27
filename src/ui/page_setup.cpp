@@ -241,6 +241,19 @@ static void imu_search_cb(lv_event_t*) {
 
 static void restart_ctrl_cb(lv_event_t*) { send_line("$Bye"); }
 
+// The pages an operator can turn off. JOG and RUN are the job; SETUP and DIAG
+// are how the panel gets fixed. Neither set is negotiable.
+static const int   PAGE_OPT_ID[]    = { PAGE_HOME, PAGE_PROBE, PAGE_MACRO, PAGE_OFFSETS, PAGE_CAL };
+static const char* PAGE_OPT_LABEL[] = { "Home",    "Probe",    "Macro",    "Offsets",    "Calibrate" };
+static const int   PAGE_OPT_N = (int)(sizeof(PAGE_OPT_ID) / sizeof(PAGE_OPT_ID[0]));
+
+static void page_cb(lv_event_t* e) {
+    lv_obj_t* cb = lv_event_get_target(e);
+    const int id = (int)(intptr_t)lv_event_get_user_data(e);
+    settings_set_page_enabled(id, lv_obj_has_state(cb, LV_STATE_CHECKED));
+    // shell_tick() notices the change on its next pass and rebuilds the rail.
+}
+
 static lv_obj_t* toggle_row(lv_obj_t* parent, const char* name, const char* sub,
                             bool on, lv_event_cb_t cb, lv_obj_t** sw_out) {
     // Grows with the column. Fixed at 56px these stacked at the top of the
@@ -308,6 +321,33 @@ void page_setup_build(lv_obj_t* p) {
 
     toggle_row(left, "Wired UART", "off frees the USB debug console",
                settings_uart_enabled(), uart_sw_cb, &s_uart_sw);
+
+    // Rail contents. One switch per optional page, because which pages a
+    // machine needs is a property of how it is used, not something the panel
+    // should be guessing from a config dump.
+    lv_obj_t* pages = w_panel(left, C_SURFACE);
+    lv_obj_set_width(pages, LV_PCT(100));
+    lv_obj_set_flex_grow(pages, 1);
+    lv_obj_set_flex_flow(pages, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(pages, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_all(pages, U / 2, 0);
+    lv_obj_set_style_pad_column(pages, U / 2, 0);
+    lv_obj_set_style_pad_row(pages, U / 2, 0);
+    lv_obj_t* ptitle = w_label(pages, "PAGES", &lv_font_montserrat_10, C_DIM);
+    lv_obj_set_width(ptitle, LV_PCT(100));
+
+    for (int i = 0; i < PAGE_OPT_N; i++) {
+        lv_obj_t* cb = lv_checkbox_create(pages);
+        lv_checkbox_set_text(cb, PAGE_OPT_LABEL[i]);
+        lv_obj_set_style_text_font(cb, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(cb, C_TEXT, 0);
+        lv_obj_set_style_bg_color(cb, C_RAISE, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(cb, C_ACCENT, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        lv_obj_set_style_border_color(cb, C_LINE, LV_PART_INDICATOR);
+        lv_obj_set_style_pad_all(cb, U / 2, 0);
+        if (settings_page_enabled(PAGE_OPT_ID[i])) lv_obj_add_state(cb, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(cb, page_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)PAGE_OPT_ID[i]);
+    }
     lv_obj_t* st = w_panel(left, C_RAISE);
     lv_obj_set_size(st, LV_PCT(100), U * 7);
     lv_obj_t* stk = w_label(st, "LINK", &lv_font_montserrat_10, C_DIM);
