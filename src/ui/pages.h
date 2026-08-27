@@ -28,6 +28,7 @@ void page_run_tick();
 void page_setup_tick();
 void page_diag_tick();
 void page_cal_tick();
+void page_macro_tick();
 
 // Diag runs $Limits/Show only while it is on screen; the shell calls this on
 // navigating away so the controller stops monitoring.

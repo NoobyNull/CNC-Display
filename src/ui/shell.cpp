@@ -2,11 +2,14 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "ui/view_expanded.h"
+#include "ui/goto_popup.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
+#include "model/caps.h"
 #include "model/model_compat.h"
 #include "model/offsets.h"
 #include "transport/transport.h"
+#include "hw/touch.h"
 #include "GrblParserC.h"
 #include "e4math.h"
 #include <stdio.h>
@@ -30,6 +33,8 @@ static_assert(NAV_VISIBLE >= 1, "rail is too short for a single nav slot");
 static const char* NAV_LABEL[NAV_COUNT] = {
     "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "CAL", "DIAG", "SETUP"
 };
+static_assert(sizeof(NAV_LABEL) / sizeof(NAV_LABEL[0]) == PAGE_COUNT,
+              "every page needs a rail label");
 
 static lv_obj_t* s_scr;
 static lv_obj_t* s_rail;
@@ -41,6 +46,18 @@ static lv_obj_t* s_dro;
 static lv_obj_t* s_right;
 static lv_obj_t* s_content;
 static lv_obj_t* s_safety;
+static lv_obj_t* s_banner;
+static lv_obj_t* s_banner_lbl;
+
+// A machine with neither soft nor hard limits will not stop itself at the end
+// of an axis. That is a standing property of the configuration, not an event,
+// so it gets a standing banner rather than a toast that scrolls away — and it
+// takes real height from the content instead of floating over it, because a
+// warning you can cover with a dialog is a warning you can miss.
+static const lv_coord_t BANNER_H = U * 4;
+static bool s_banner_on = false;
+
+static lv_coord_t banner_h() { return s_banner_on ? BANNER_H : 0; }
 static lv_obj_t* s_pages[PAGE_COUNT];
 
 static lv_obj_t* s_state_chip;
@@ -105,11 +122,97 @@ static const char* state_word(state_t s) {
 }
 
 // ---- nav -------------------------------------------------------------------
+// A page whose hardware the controller says is absent is not a page. A PROBE
+// tab on a machine with no probe pin, or a MACRO tab on a firmware with no
+// macros defined, is a control that can only ever report an error — and an
+// operator taught that some buttons always error stops reading errors.
+//
+// Only CAP_NO hides anything. CAP_UNKNOWN — no link, or a config dump that
+// never arrived — leaves the page in place: hiding a control the machine may
+// actually have is the worse mistake, and it is the one that cannot be
+// discovered by looking at the panel.
+static bool page_available(page_id_t id) {
+    switch (id) {
+        case PAGE_PROBE: return caps_probe()  != CAP_NO;
+        case PAGE_MACRO: return caps_macros() != CAP_NO;
+        case PAGE_HOME:  return caps_homing() != CAP_NO;
+        default:         return true;
+    }
+}
+
+// Two rails, not one list.
+//
+// RUN mode is what an operator standing at a moving machine needs, and nothing
+// else: jog, home, probe, run a file, fire a macro — each present only if this
+// machine actually has it. CONFIG mode holds everything you set up once and
+// then stop looking at: panel settings, work offsets, calibration, diagnostics.
+//
+// Mixing them cost rail slots that operation needed and put a settings screen
+// one mistaken tap from a running job.
+enum ui_mode_t { MODE_RUN = 0, MODE_CONFIG };
+
+// -1 is the EXIT affordance rather than a page. Config mode must always show a
+// way out on the glass: the gesture toggles both ways, but a gesture nobody
+// remembers on a touch controller with a known stall is not an escape route.
+#define NAV_EXIT (-1)
+
+static const int RUN_PAGES[]    = { PAGE_JOG, PAGE_HOME, PAGE_PROBE, PAGE_RUN, PAGE_MACRO };
+static const int CONFIG_PAGES[] = { PAGE_SETUP, PAGE_OFFSETS, PAGE_CAL, PAGE_DIAG, NAV_EXIT };
+
+static const int RUN_N    = (int)(sizeof(RUN_PAGES) / sizeof(RUN_PAGES[0]));
+static const int CONFIG_N = (int)(sizeof(CONFIG_PAGES) / sizeof(CONFIG_PAGES[0]));
+
+static ui_mode_t s_mode = MODE_RUN;
+
+// Rail slot -> page, rebuilt whenever the mode or capabilities change. Without
+// this indirection the rail indexes pages directly and a hidden page leaves a
+// hole in the middle of the strip.
+static int s_visible[PAGE_COUNT + 1];
+static int s_visible_n = 0;
+
+static void nav_rebuild() {
+    const int* src = s_mode == MODE_RUN ? RUN_PAGES : CONFIG_PAGES;
+    const int  n   = s_mode == MODE_RUN ? RUN_N     : CONFIG_N;
+    s_visible_n = 0;
+    for (int i = 0; i < n; i++) {
+        if (src[i] == NAV_EXIT || page_available((page_id_t)src[i]))
+            s_visible[s_visible_n++] = src[i];
+    }
+}
+
+static int nav_slot_of(page_id_t id) {
+    for (int i = 0; i < s_visible_n; i++) if (s_visible[i] == (int)id) return i;
+    return -1;
+}
+
+static void shell_set_mode(ui_mode_t m);
+
+static int nav_max_start() {
+    int m = s_visible_n - NAV_VISIBLE;
+    return m > 0 ? m : 0;
+}
+
 static void nav_refresh() {
+    if (s_nav_start > nav_max_start()) s_nav_start = nav_max_start();
+
     for (int i = 0; i < NAV_VISIBLE; i++) {
         int idx = s_nav_start + i;
-        lv_label_set_text(s_nav_lbl[i], NAV_LABEL[idx]);
-        bool on = (idx == (int)s_page);
+        if (idx >= s_visible_n) {
+            // Fewer pages than rail slots: blank the leftovers rather than
+            // repeating the last label.
+            lv_label_set_text(s_nav_lbl[i], "");
+            lv_obj_set_style_bg_color(s_nav_btn[i], C_BG, 0);
+            continue;
+        }
+        int pg = s_visible[idx];
+        if (pg == NAV_EXIT) {
+            lv_label_set_text(s_nav_lbl[i], "EXIT");
+            lv_obj_set_style_bg_color(s_nav_btn[i], C_RAISE, 0);
+            lv_obj_set_style_text_color(s_nav_lbl[i], C_WARN, 0);
+            continue;
+        }
+        lv_label_set_text(s_nav_lbl[i], NAV_LABEL[pg]);
+        bool on = (pg == (int)s_page);
         lv_obj_set_style_bg_color(s_nav_btn[i], on ? C_ACCENT : C_SURFACE, 0);
         lv_obj_set_style_text_color(s_nav_lbl[i], on ? C_BG : C_DIM, 0);
     }
@@ -117,21 +220,24 @@ static void nav_refresh() {
     lv_obj_set_style_text_color(s_rail_up,
         s_nav_start > 0 ? C_DIM : C_LINE, 0);
     lv_obj_set_style_text_color(s_rail_down,
-        s_nav_start < NAV_COUNT - NAV_VISIBLE ? C_DIM : C_LINE, 0);
+        s_nav_start < nav_max_start() ? C_DIM : C_LINE, 0);
 }
 
 static void nav_scroll_cb(lv_event_t* e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
     int n = s_nav_start + dir;
     if (n < 0) n = 0;
-    if (n > NAV_COUNT - NAV_VISIBLE) n = NAV_COUNT - NAV_VISIBLE;
+    if (n > nav_max_start()) n = nav_max_start();
     s_nav_start = n;
     nav_refresh();
 }
 
 static void nav_pick_cb(lv_event_t* e) {
     int slot = (int)(intptr_t)lv_event_get_user_data(e);
-    shell_show_page((page_id_t)(s_nav_start + slot));
+    int idx  = s_nav_start + slot;
+    if (idx < 0 || idx >= s_visible_n) return;   // blank slot
+    if (s_visible[idx] == NAV_EXIT) { shell_set_mode(MODE_RUN); return; }
+    shell_show_page((page_id_t)s_visible[idx]);
 }
 
 // Setup and Diag are the two pages with no business near a moving machine, so
@@ -148,17 +254,89 @@ void shell_show_page(page_id_t id) {
     const bool dro = page_wants_dro(id);
     if (dro) lv_obj_clear_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
     else     lv_obj_add_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
-    const lv_coord_t ch = dro ? CONTENT_H : CONTENT_H + DRO_H;
+    // The banner's height is taken from the DRO strip, never from the page:
+    // pages size their internals against the compile-time CONTENT_H and do not
+    // reflow, so stealing from them clipped a jog key clean off the bottom.
+    const lv_coord_t ch = dro ? CONTENT_H : (CONTENT_H + DRO_H - banner_h());
+    if (dro) lv_obj_set_height(s_dro, DRO_H - banner_h());
     lv_obj_set_height(s_content, ch);
     lv_obj_set_height(s_pages[id], ch - U * 2);
     for (int i = 0; i < PAGE_COUNT; i++) {
         if (i == (int)id) lv_obj_clear_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
         else              lv_obj_add_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
     }
-    // Keep the active item on screen when navigated to programmatically.
-    if ((int)id < s_nav_start)                   s_nav_start = (int)id;
-    if ((int)id > s_nav_start + NAV_VISIBLE - 1) s_nav_start = (int)id - NAV_VISIBLE + 1;
+    // Keep the active item on screen when navigated to programmatically. The
+    // rail scrolls in slot space, not page space, so the page has to be looked
+    // up in the visible list first.
+    int slot = nav_slot_of(id);
+    if (slot >= 0) {
+        if (slot < s_nav_start)                   s_nav_start = slot;
+        if (slot > s_nav_start + NAV_VISIBLE - 1) s_nav_start = slot - NAV_VISIBLE + 1;
+    }
     nav_refresh();
+}
+
+// Entering config mode lands on its first page; leaving returns to JOG, which
+// is the page an operator wants when they put the panel back to work.
+static void shell_set_mode(ui_mode_t m) {
+    if (m == s_mode) return;
+    s_mode = m;
+    s_nav_start = 0;
+    nav_rebuild();
+    shell_show_page(m == MODE_CONFIG ? PAGE_SETUP : PAGE_JOG);
+}
+
+// Two fingers held anywhere opens or closes config mode. Held, not tapped: a
+// palm or a knuckle brushing the glass registers two points for a moment, and
+// that must not drop a running job's operator into a settings screen.
+static const uint32_t GESTURE_MS = 600;
+
+static void gesture_tick() {
+    static uint32_t down_since = 0;
+    static bool     fired = false;
+
+    if (touch_points() >= 2) {
+        uint32_t now = lv_tick_get();
+        if (!down_since) { down_since = now; fired = false; }
+        else if (!fired && lv_tick_elaps(down_since) > GESTURE_MS) {
+            fired = true;    // one action per gesture, not one per tick
+            shell_set_mode(s_mode == MODE_RUN ? MODE_CONFIG : MODE_RUN);
+        }
+    } else {
+        down_since = 0;
+    }
+}
+
+// Capabilities arrive after the link comes up, so the page set can change while
+// the console is running. Called from the tick; cheap when nothing moved.
+static void banner_sync() {
+    // Only a completed config dump that showed no protection anywhere counts.
+    // Warning while the answer is still unknown would put a red bar on every
+    // boot, and a warning that is always there is furniture.
+    const bool want = (caps_limits() == CAP_NO);
+    if (want == s_banner_on) return;
+    s_banner_on = want;
+
+    if (want) {
+        lv_label_set_text(s_banner_lbl, "WARNING: no limits defined - may cause axis crash");
+        lv_obj_clear_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
+    }
+    shell_show_page(s_page);   // re-run the height maths with the new banner state
+}
+
+static void nav_sync_caps() {
+    static int s_sig = -1;
+    int sig = (int)caps_probe() | ((int)caps_homing() << 2) | ((int)caps_macros() << 4);
+    if (sig == s_sig) return;
+    s_sig = sig;
+
+    nav_rebuild();
+    // If the open page just went away, do not leave the operator staring at a
+    // page with no rail entry.
+    if (nav_slot_of(s_page) < 0) shell_show_page(PAGE_JOG);
+    else                         nav_refresh();
 }
 
 // ---- safety bar: on every screen, always the same place ---------------------
@@ -316,6 +494,13 @@ static void build_dro(lv_obj_t* parent) {
         w_label(c, nm, &lv_font_montserrat_12, C_DIM);
         s_axis_work[i] = w_label(c, "0.000", &lv_font_montserrat_40, C_TEXT);
         s_axis_mach[i] = w_label(c, "M 0.000", &lv_font_montserrat_12, C_DIM);
+        // The readout doubles as the target picker: tap an axis to type an
+        // absolute coordinate and jog there. The step selector caps at 10mm,
+        // which made a long traverse dozens of presses.
+        lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(c, [](lv_event_t* e) {
+            goto_open((int)(intptr_t)lv_event_get_user_data(e));
+        }, LV_EVENT_CLICKED, (void*)(intptr_t)i);
         s_axis_cell[i] = c;
     }
     dro_layout(3);   // until FluidNC says otherwise
@@ -378,6 +563,14 @@ void shell_build() {
     lv_obj_set_size(s_right, CONTENT_W, SCREEN_H);
     lv_obj_set_flex_flow(s_right, LV_FLEX_FLOW_COLUMN);
 
+    s_banner = w_panel(s_right, C_CRIT);
+    lv_obj_set_size(s_banner, CONTENT_W, BANNER_H);
+    lv_obj_set_style_radius(s_banner, 0, 0);
+    lv_obj_set_style_border_width(s_banner, 0, 0);
+    s_banner_lbl = w_label(s_banner, "", &lv_font_montserrat_14, C_BG);
+    lv_obj_center(s_banner_lbl);
+    lv_obj_add_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
+
     build_dro(s_right);
     lv_obj_set_size(s_dro, CONTENT_W, DRO_H);
 
@@ -403,6 +596,7 @@ void shell_build() {
     }
 
     expanded_build();
+    nav_rebuild();
     shell_show_page(PAGE_JOG);
     nav_refresh();
 }
@@ -451,6 +645,9 @@ static void fmt_pos(char* out, size_t n, pos_t v) {
 }
 
 void shell_tick() {
+    gesture_tick();
+    banner_sync();
+    nav_sync_caps();
     if (model_take_state() || take_redisplay()) {
         lv_label_set_text(s_state_lbl, state_word(state));
         lv_obj_set_style_bg_color(s_state_chip, state_colour(state), 0);
@@ -497,6 +694,7 @@ void shell_tick() {
         case PAGE_SETUP:   page_setup_tick();   break;
         case PAGE_DIAG:    page_diag_tick();    break;
         case PAGE_CAL:     page_cal_tick();     break;
+        case PAGE_MACRO:   page_macro_tick();   break;
         default: break;
     }
     expanded_tick();

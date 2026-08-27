@@ -23,6 +23,13 @@ bool stc8_cmd(uint8_t cmd) {
 // loops until it acks; so does this, bounded. If it never answers, the panel
 // still lights (the STC8 defaults the backlight on by itself) — brightness and
 // blanking just won't work, which the log line makes visible.
+// Latched from init so the HW page can report it. The probe loop below is a
+// boot-time affair — re-running it to answer "is it there?" would cost up to
+// two seconds of blocked UI.
+static bool s_present = false;
+
+bool stc8_present() { return s_present; }
+
 bool stc8_init() {
     for (int attempt = 0; attempt < 20; attempt++) {
         if (!i2c_take(50)) { delay(10); continue; }
@@ -31,6 +38,7 @@ bool stc8_init() {
         i2c_give();
         if (ok) {
             Serial.printf("[stc8] ready at 0x%02X (attempt %d)\n", STC8_ADDR, attempt);
+            s_present = true;
             return true;
         }
         delay(100);

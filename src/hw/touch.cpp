@@ -55,6 +55,12 @@ static uint32_t touch_err_timer = 0;   // rate-limit error logging
 static uint16_t s_err_run = 0;         // consecutive I2C failures
 static uint8_t  s_last_status = 0;     // last 0x814E byte, for the stall log
 
+// How many fingers the last fresh scan reported. The chip tracks up to five
+// and always reported this in the status low nibble; only point 0's
+// coordinates were ever read. Exposed so the shell can use a two-finger press
+// as a gesture without the driver having to track a second point's position.
+static uint8_t  s_points = 0;
+
 // THIS CHIP REPORTS ONLY WHEN SOMETHING HAPPENS. Idle silence is normal: no
 // finger, no frames, indefinitely. Measured on this panel — untouched it emits
 // three frames after reset and then nothing at all, while a finger on the glass
@@ -121,6 +127,7 @@ static void gt911_int_detach() {
 
 bool     touch_is_down()      { return touch_down; }
 uint32_t touch_fresh_count()  { return s_fresh_count; }
+uint8_t  touch_points()       { return s_points; }
 uint32_t touch_poll_count()   { return s_poll_count; }
 uint32_t touch_lock_fails()   { return s_lock_fail; }
 uint32_t touch_stat_errs()    { return s_stat_err; }
@@ -303,6 +310,7 @@ void touch_poll() {
         return;
     }
     ++s_fresh_count;
+    s_points = touches;
     if (s_frame_log) {
         --s_frame_log;
         Serial.printf("[touch] frame %lu t=%lu status=0x%02X\n",
