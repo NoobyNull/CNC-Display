@@ -2,6 +2,7 @@
 #include "model/FluidNCModel.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>   // strtol; the ESP toolchain leaks it via stdio.h, gcc does not
 
 static fnc_setting_t s_list[FS_MAX];
 static size_t        s_count = 0;

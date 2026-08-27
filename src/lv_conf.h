@@ -12,12 +12,24 @@
 #define LV_COLOR_DEPTH 16
 #define LV_COLOR_16_SWAP 0
 
-/* Memory — use PSRAM via heap_caps so LVGL has plenty of room for images */
+/* Memory — use PSRAM via heap_caps so LVGL has plenty of room for images.
+ * The desktop simulator ([env:sim]) has no heap_caps and no PSRAM; it is the
+ * ONLY thing that differs between the two builds. Everything below this block
+ * — fonts, widgets, draw options — is deliberately shared, because a simulator
+ * that renders with different fonts or a different draw engine is not showing
+ * you the panel. */
 #define LV_MEM_CUSTOM 1
+#ifdef SIMULATOR
+#define LV_MEM_CUSTOM_INCLUDE <stdlib.h>
+#define LV_MEM_CUSTOM_ALLOC malloc
+#define LV_MEM_CUSTOM_FREE free
+#define LV_MEM_CUSTOM_REALLOC realloc
+#else
 #define LV_MEM_CUSTOM_INCLUDE <esp_heap_caps.h>
 #define LV_MEM_CUSTOM_ALLOC(size) heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 #define LV_MEM_CUSTOM_FREE(ptr) heap_caps_free(ptr)
 #define LV_MEM_CUSTOM_REALLOC(ptr, size) heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#endif
 #define LV_MEM_BUF_MAX_NUM 16
 
 /* HAL */
