@@ -18,6 +18,10 @@ static uint8_t  s_scroff   = 0;       // minutes; 0 = never blank
 // away, and one whose config under-reports can put it back. All on by default.
 static uint16_t s_pages = 0xFFFF;
 
+// Half speed by default: fast enough to be useful, slow enough that the
+// one-tick release coast stays small on an unfamiliar machine.
+static uint8_t s_jogpct = 50;
+
 // WiFi creds exist ONLY for the network firmware update (fw_update.cpp): the
 // radio never runs alongside the live display. The old WiFi-transport keys
 // (wifi_en / host / port) stay dead.
@@ -38,6 +42,7 @@ void settings_load() {
     s_vib_jerk = prefs.getFloat("vibjerk", 50.0f);
     s_scroff   = prefs.getUChar("scroff", 0);
     s_pages    = (uint16_t)prefs.getUShort("pages", 0xFFFF);
+    s_jogpct   = prefs.getUChar("jogpct", 50);
     // An empty or absent NVS key must never shadow the baked defaults.
     char tmp[161];
     if (prefs.getString("upd_ssid", tmp, sizeof(tmp)) && tmp[0]) strncpy(s_ssid, tmp, sizeof(s_ssid) - 1);
@@ -140,6 +145,19 @@ void settings_set_page_enabled(int page_id, bool on) {
     s_pages = next;
     prefs.begin("cncdisp", false); prefs.putUShort("pages", s_pages); prefs.end();
     display_resync();
+}
+
+uint8_t settings_jog_pct() { return s_jogpct; }
+
+// Clamped, not trusted. 0% would make a held jog key do nothing at all, which
+// reads as a dead panel; above 100% would ask for more than the axis can do
+// and the controller would clip it anyway.
+void settings_set_jog_pct(uint8_t pct) {
+    if (pct < 5)   pct = 5;
+    if (pct > 100) pct = 100;
+    if (pct == s_jogpct) return;
+    s_jogpct = pct;
+    nvs_put_uchar("jogpct", pct);
 }
 
 uint8_t settings_screen_off_min() { return s_scroff; }

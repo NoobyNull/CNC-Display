@@ -42,5 +42,12 @@ void settings_set_update_url(const char* url);
 bool settings_page_enabled(int page_id);
 void settings_set_page_enabled(int page_id, bool on);
 
+// Continuous-jog speed as a percentage of each axis's configured max rate.
+// Panel-side rather than the controller's overrides: RAPID has no +/- (three
+// fixed positions) and FEED governs cutting moves, so borrowing it would scale
+// the next G1 as a side effect of jogging. See docs/HANDOFF.md.
+uint8_t settings_jog_pct();
+void    settings_set_jog_pct(uint8_t pct);
+
 uint8_t settings_screen_off_min();
 void    settings_set_screen_off_min(uint8_t m);

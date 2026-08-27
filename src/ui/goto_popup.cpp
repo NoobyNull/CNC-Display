@@ -44,6 +44,12 @@ static lv_obj_t* s_mode_rel;
 // further" with no visible difference is how a gantry meets its end stop.
 static bool s_absolute = true;
 
+// When set, the card is a plain number pad: no axis, no modes, no travel check,
+// and GO hands the value to this instead of jogging.
+static void (*s_numcb)(float) = nullptr;
+static char s_num_title[24];
+static char s_num_note[48];
+
 // Feed comes from the axis's own configured maximum, not a constant: a rotary
 // and a Z ballscrew do not traverse at the same rate, and the controller
 // already knows both. Only if the settings dump has not arrived does this fall
@@ -96,6 +102,14 @@ static void mode_paint() {
 }
 
 static void refresh() {
+    if (s_numcb) {
+        lv_label_set_text(s_entry, s_buf[0] ? s_buf : "0");
+        lv_label_set_text(s_note, s_num_note);
+        lv_obj_set_style_text_color(s_note, C_DIM, 0);
+        if (s_buf[0]) lv_obj_clear_state(s_go, LV_STATE_DISABLED);
+        else          lv_obj_add_state(s_go, LV_STATE_DISABLED);
+        return;
+    }
     mode_paint();
     // The entry itself carries the sign convention: a relative move reads as
     // an explicit delta, so "+400" and "400" cannot be confused at a glance.
@@ -171,6 +185,14 @@ static void key_cb(lv_event_t* e) {
 }
 
 static void go_cb(lv_event_t*) {
+    if (s_numcb) {
+        if (!s_buf[0]) return;
+        void (*cb)(float) = s_numcb;
+        const float v = (float)atof(s_buf);
+        goto_close();
+        cb(v);            // after close: the callback may open something else
+        return;
+    }
     if (state != Idle || !s_buf[0]) return;
     const float feed = axis_setting("Grbl/MaxRate/", s_axis, GOTO_FALLBACK_FEED);
     char line[64];
@@ -187,15 +209,33 @@ bool goto_is_open() { return s_root != nullptr; }
 
 void goto_close() {
     if (!s_root) return;
+    s_numcb = nullptr;
     lv_obj_del(s_root);
     s_root = nullptr;
 }
 
+// Opens the same card as a plain number pad. The axis/mode row is skipped and
+// GO reports the value instead of moving anything.
+void numpad_open(const char* title, const char* note, float initial,
+                 void (*cb)(float)) {
+    if (s_root || !cb) return;
+    s_numcb = cb;
+    snprintf(s_num_title, sizeof(s_num_title), "%s", title ? title : "VALUE");
+    snprintf(s_num_note,  sizeof(s_num_note),  "%s", note  ? note  : "");
+    if (initial > 0.0f) snprintf(s_buf, sizeof(s_buf), "%g", (double)initial);
+    else                s_buf[0] = 0;
+    goto_open(-2);          // -2: build the card, skip the axis machinery
+}
+
 void goto_open(int axis) {
-    if (s_root || axis < 0 || axis >= n_axes) return;
-    s_axis = axis;
-    s_buf[0] = 0;
-    s_absolute = true;   // every open starts in the safer of the two
+    // -2 is the numpad path, which has no axis to validate.
+    if (axis != -2 && (s_root || axis < 0 || axis >= n_axes)) return;
+    if (axis == -2 && s_root) return;
+    if (axis != -2) {
+        s_axis = axis;
+        s_buf[0] = 0;
+        s_absolute = true;   // every open starts in the safer of the two
+    }
 
     // Full-screen scrim on the top layer: the popup must sit above the rail and
     // the DRO, and tapping off it is the same as cancelling.
@@ -220,10 +260,12 @@ void goto_open(int axis) {
                         LV_EVENT_CLICKED, nullptr);
 
     char title[24];
-    snprintf(title, sizeof(title), "GO TO  %c", axisNumToChar(axis));
+    if (s_numcb) snprintf(title, sizeof(title), "%s", s_num_title);
+    else         snprintf(title, sizeof(title), "GO TO  %c", axisNumToChar(axis));
     w_label(card, title, &lv_font_montserrat_20, C_ACCENT);
 
     lv_obj_t* modes = lv_obj_create(card);
+    if (s_numcb) lv_obj_add_flag(modes, LV_OBJ_FLAG_HIDDEN);
     w_flatten(modes);
     lv_obj_set_size(modes, LV_PCT(100), TOUCH_TAP);
     lv_obj_set_flex_flow(modes, LV_FLEX_FLOW_ROW);
@@ -259,7 +301,7 @@ void goto_open(int axis) {
         const bool  is_cancel = !strcmp(k, "X");
         lv_obj_t* b = w_button(pad,
                                is_cancel ? "CANCEL" : k,
-                               is_go ? (s_absolute ? "G90 abs" : "G91 rel") : nullptr,
+                               is_go ? (s_numcb ? "set" : (s_absolute ? "G90 abs" : "G91 rel")) : nullptr,
                                is_go ? C_OK : is_cancel ? C_RAISE : C_RAISE,
                                is_go ? C_BG : is_cancel ? C_WARN : C_TEXT,
                                is_go ? go_cb : is_cancel ? close_cb : key_cb,
