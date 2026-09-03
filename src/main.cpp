@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <esp_system.h>
 
 // There is no native-USB console on the Advance 7.0: the Type-C is a CH340K on
 // UART0 (GPIO 43/44) — the SAME pins the UART0-IN/OUT connectors expose, which
@@ -33,6 +34,10 @@
 #include "ui/splash.h"
 #include "GrblParserC.h"
 
+// Backlight level (0..255) known to survive on the weakest supply the panel
+// sees in practice — the 5V pin of the UART link cable. ~50%.
+static const uint8_t BL_BROWNOUT_SAFE = 128;
+
 static void ui_tick_cb(lv_timer_t*) { shell_tick(); }
 
 // Touch is polled on its own timer so the GT911 I2C transaction is not tied to
@@ -58,7 +63,18 @@ void setup() {
     gt911_discover();
     gt911_dump_config();   // read-only; the stall lead lives at 0x804D and 0x8055
     lvgl_init();
-    set_backlight(settings_brightness());
+    // A high saved brightness can sag a thin 5V feed (UART-connector power)
+    // below the brownout threshold the instant it's restored, and the panel
+    // boot-loops forever. If the last reset WAS a brownout, come up dim for
+    // this boot instead of re-slamming the saved level; NVS is untouched, so
+    // a healthy supply gets the user's setting back on the next power cycle.
+    uint8_t bl = settings_brightness();
+    if (esp_reset_reason() == ESP_RST_BROWNOUT && bl > BL_BROWNOUT_SAFE) {
+        Serial.printf("[power] brownout reset — backlight %u -> %u for this boot\n",
+                      bl, BL_BROWNOUT_SAFE);
+        bl = BL_BROWNOUT_SAFE;
+    }
+    set_backlight(bl);
 
     // Splash first, painted now: the rest of boot (SD probe, IMU, shell build)
     // happens behind it instead of behind a black screen.
