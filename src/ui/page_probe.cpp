@@ -2,8 +2,10 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "model/caps.h"
 #include "GrblParserC.h"
 #include <stdio.h>
+#include <string.h>
 
 struct param_t {
     const char* name;
@@ -20,6 +22,9 @@ static param_t s_params[4] = {
 };
 
 static lv_obj_t* s_gcode_lbl;
+static lv_obj_t* s_go;
+static lv_obj_t* s_state_key;
+static lv_obj_t* s_state_val;
 
 static void refresh_param(int i) {
     char b[24];
@@ -28,6 +33,10 @@ static void refresh_param(int i) {
 }
 
 static void refresh_gcode() {
+    // No probe pin: the label is busy explaining WHY the button is grey.
+    // Painting G-code over that (a +/- tap lands here) loses the reason for
+    // good, since the caps generation never moves again on a probe-less rig.
+    if (!cap_ok(caps_probe())) return;
     char b[64];
     snprintf(b, sizeof(b), "G38.2 G91 F%d Z-%d",
              (int)s_params[2].value, (int)s_params[1].value);
@@ -103,21 +112,55 @@ void page_probe_build(lv_obj_t* p) {
     lv_obj_t* st = w_panel(right, C_SURFACE);
     lv_obj_set_width(st, LV_PCT(100));
     lv_obj_set_flex_grow(st, 1);
-    lv_obj_t* stk = w_label(st, "PROBE INPUT", &lv_font_montserrat_10, C_DIM);
-    lv_obj_align(stk, LV_ALIGN_CENTER, 0, -12);
-    lv_obj_t* stv = w_label(st, "OPEN", &lv_font_montserrat_20, C_OK);
-    lv_obj_align(stv, LV_ALIGN_CENTER, 0, 10);
+    s_state_key = w_label(st, "PROBE INPUT", &lv_font_montserrat_10, C_DIM);
+    lv_obj_align(s_state_key, LV_ALIGN_CENTER, 0, -12);
+    s_state_val = w_label(st, "OPEN", &lv_font_montserrat_20, C_OK);
+    lv_obj_align(s_state_val, LV_ALIGN_CENTER, 0, 10);
 
-    lv_obj_t* go = lv_btn_create(right);
-    lv_obj_set_width(go, LV_PCT(100));
-    lv_obj_set_flex_grow(go, 1);
-    lv_obj_set_style_bg_color(go, C_WARN, 0);
-    lv_obj_set_style_radius(go, 3, 0);
-    lv_obj_set_style_shadow_width(go, 0, 0);
-    lv_obj_add_event_cb(go, probe_cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t* gl = w_label(go, "PROBE Z", &lv_font_montserrat_20, C_BG);
+    s_go = lv_btn_create(right);
+    lv_obj_set_width(s_go, LV_PCT(100));
+    lv_obj_set_flex_grow(s_go, 1);
+    lv_obj_set_style_bg_color(s_go, C_WARN, 0);
+    lv_obj_set_style_radius(s_go, 3, 0);
+    lv_obj_set_style_shadow_width(s_go, 0, 0);
+    lv_obj_set_style_opa(s_go, OPA_DISABLED, LV_STATE_DISABLED);
+    lv_obj_add_event_cb(s_go, probe_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* gl = w_label(s_go, "PROBE Z", &lv_font_montserrat_20, C_BG);
     lv_obj_align(gl, LV_ALIGN_CENTER, 0, -10);
-    s_gcode_lbl = w_label(go, "", &lv_font_montserrat_12, C_BG);
+    s_gcode_lbl = w_label(s_go, "", &lv_font_montserrat_12, C_BG);
     lv_obj_align(s_gcode_lbl, LV_ALIGN_CENTER, 0, 14);
     refresh_gcode();
+
+    page_probe_tick();
+}
+
+// G38.2 against a machine with /probe/pin NO_PIN runs the full travel and then
+// alarms, having moved the tool the whole way down. Refusing to send it is the
+// difference between a greyed button and a crashed cutter.
+void page_probe_tick() {
+    const bool ok = cap_ok(caps_probe());
+
+    static uint32_t seen = (uint32_t)-1;
+    if (seen != caps_generation()) {
+        seen = caps_generation();
+        if (ok) {
+            lv_obj_clear_state(s_go, LV_STATE_DISABLED);
+            lv_obj_add_flag(s_go, LV_OBJ_FLAG_CLICKABLE);
+            lv_label_set_text(s_state_key, "PROBE INPUT");
+            refresh_gcode();
+        } else {
+            lv_obj_add_state(s_go, LV_STATE_DISABLED);
+            lv_obj_clear_flag(s_go, LV_OBJ_FLAG_CLICKABLE);
+            lv_label_set_text(s_state_key, "NO PROBE PIN");
+            lv_label_set_text(s_gcode_lbl, "probe: pin is NO_PIN");
+        }
+        lv_obj_set_style_text_color(s_state_val, ok ? C_OK : C_DIM, 0);
+    }
+
+    // Live, every tick, NOT gated on caps: the whole point of this readout is
+    // touching the probe to the tool and watching it flip before trusting
+    // G38.2, and caps go quiet long before anyone picks the probe up.
+    const char* txt = ok ? (myProbeSwitch ? "CLOSED" : "OPEN") : "--";
+    if (strcmp(lv_label_get_text(s_state_val), txt) != 0)
+        lv_label_set_text(s_state_val, txt);
 }

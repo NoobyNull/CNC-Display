@@ -6,6 +6,7 @@
 #include "model/model_events.h"
 #include "model/model_compat.h"
 #include "model/offsets.h"
+#include "model/caps.h"
 #include "transport/transport.h"
 #include "GrblParserC.h"
 #include "e4math.h"
@@ -15,7 +16,7 @@
 // panel height, with every target at the full 10U. Fitting all eight at once
 // would mean 7.5U items and a broken grid; a nested menu would cost a tap on
 // things used constantly.
-#define NAV_COUNT   9
+#define NAV_COUNT   10
 
 // How many nav slots fit in the rail between the two scroll arrows. Derived from
 // the panel rather than fixed: this was hardcoded to 5, which exactly filled the
@@ -28,7 +29,7 @@ static const int NAV_VISIBLE = NAV_FIT > NAV_COUNT ? NAV_COUNT : NAV_FIT;
 static_assert(NAV_VISIBLE >= 1, "rail is too short for a single nav slot");
 
 static const char* NAV_LABEL[NAV_COUNT] = {
-    "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "CAL", "DIAG", "SETUP"
+    "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "MOTION", "CAL", "DIAG", "SETUP"
 };
 
 static lv_obj_t* s_scr;
@@ -105,13 +106,29 @@ static const char* state_word(state_t s) {
 }
 
 // ---- nav -------------------------------------------------------------------
+
+// Whether this machine has the hardware a page is about.
+//
+// Unavailable pages stay REACHABLE, just visibly inert. Removing them would
+// only move the question — "where did PROBE go?" is worse than a greyed PROBE
+// that explains itself when opened.
+static bool page_available(int idx) {
+    switch (idx) {
+        case PAGE_HOME:  return cap_ok(caps_homing());
+        case PAGE_PROBE: return cap_ok(caps_probe());
+        default:         return true;
+    }
+}
+
 static void nav_refresh() {
     for (int i = 0; i < NAV_VISIBLE; i++) {
         int idx = s_nav_start + i;
         lv_label_set_text(s_nav_lbl[i], NAV_LABEL[idx]);
         bool on = (idx == (int)s_page);
+        bool have = page_available(idx);
         lv_obj_set_style_bg_color(s_nav_btn[i], on ? C_ACCENT : C_SURFACE, 0);
-        lv_obj_set_style_text_color(s_nav_lbl[i], on ? C_BG : C_DIM, 0);
+        lv_obj_set_style_text_color(s_nav_lbl[i],
+                                    on ? C_BG : (have ? C_DIM : C_LINE), 0);
     }
     // Grey out at each end so the rail never lies about whether there is more.
     lv_obj_set_style_text_color(s_rail_up,
@@ -391,7 +408,7 @@ void shell_build() {
 
     page_build_fn BUILD[PAGE_COUNT] = {
         page_jog_build, page_home_build, page_probe_build, page_offsets_build,
-        page_run_build, page_macro_build, page_cal_build,
+        page_run_build, page_macro_build, page_motion_build, page_cal_build,
         page_diag_build, page_setup_build
     };
     for (int i = 0; i < PAGE_COUNT; i++) {
@@ -451,6 +468,20 @@ static void fmt_pos(char* out, size_t n, pos_t v) {
 }
 
 void shell_tick() {
+    // Recompute what the machine can do before anything paints, so a settings
+    // or config dump that just landed is reflected on this frame.
+    caps_poll();
+    static uint32_t caps_seen = (uint32_t)-1;
+    if (caps_seen != caps_generation()) {
+        caps_seen = caps_generation();
+        nav_refresh();
+    }
+    // Both re-gate their own controls and are cheap no-ops until the
+    // capability model actually changes, so they run regardless of which page
+    // is on screen — a page must be right the moment it is shown.
+    page_home_tick();
+    page_probe_tick();
+
     if (model_take_state() || take_redisplay()) {
         lv_label_set_text(s_state_lbl, state_word(state));
         lv_obj_set_style_bg_color(s_state_chip, state_colour(state), 0);
@@ -497,6 +528,7 @@ void shell_tick() {
         case PAGE_SETUP:   page_setup_tick();   break;
         case PAGE_DIAG:    page_diag_tick();    break;
         case PAGE_CAL:     page_cal_tick();     break;
+        case PAGE_MOTION:  page_motion_tick();  break;
         default: break;
     }
     expanded_tick();

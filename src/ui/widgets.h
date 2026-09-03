@@ -13,6 +13,18 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
 
 lv_obj_t* w_label(lv_obj_t* parent, const char* text, const lv_font_t* font, lv_color_t col);
 
+// Enable or disable a w_button(), and say why.
+//
+// A control the machine cannot honour must not look like one it can: pressing
+// HOME on a machine with no endstops earns an error:5 and no motion, which
+// reads as a broken pendant rather than an unconfigured machine. Disabled
+// buttons keep their place in the layout — the reason is the point, so hiding
+// them would just raise the same question later.
+//
+// `reason` replaces the button's sub-label while disabled and is restored on
+// re-enable; it needs the button to have been given a `sub` at build time.
+void w_gate(lv_obj_t* btn, bool enabled, const char* reason);
+
 // One on-screen keyboard shared by every page that needs text entry. Created on
 // the screen rather than inside a page so it can cover the whole panel.
 lv_obj_t* w_keyboard();

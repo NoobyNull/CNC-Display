@@ -1,6 +1,50 @@
 # Handoff — CNC Console, 2026-08-11
 
-## Session 2026-08-20 — CrowPanel Advance 7.0 V1.4 — read this first
+## Session 2026-08-25 — the Corgi runs FluidNC **v4**, and $S changed — read this first
+
+The controller is **FluidNC v4.0.3**, not v3. This invalidates an assumption
+the panel was built on, and it is the root of several things that looked like
+UI bugs. Captured live off 192.168.0.5 over the telnet channel (port 23):
+
+- **`$S` on v4 returns the Grbl-compat settings ONLY** — `$Grbl/MaxRate/X`,
+  `$Grbl/Acceleration/X`, `$Grbl/HomingCycleEnable` and the network keys. 55
+  lines. It does **not** expose the config tree the way v3 did. There is no
+  `/probe/pin`, no `/axes/x/motor0/limit_neg_pin`.
+  - Consequence: `page_diag.cpp` scanned `$S` for `"/probe/pin"` to decide
+    whether the probe lamp exists. On v4 that string never appears, so the
+    lamp could never light. Fixed — it now asks `caps.cpp`.
+  - The `fnc_settings.h` comment about "~150 lines on the 4-axis config" is a
+    v3-era number.
+- **Pins live in `$CD`** (the config dump, i.e. config.yaml). That is the only
+  way to find out on v4 whether a probe, coolant or door input is configured.
+- **`$RI=200` is rejected** (`error:3`). Auto-reporting is configured in the
+  YAML instead — the Corgi's `uart_channel2` sets `report_interval_ms: 75`.
+- `$Files/ListGCode=/sd` works and is correctly formed. `$Files/List` does not
+  exist on v4; `$SD/List` and `$LocalFS/List` do.
+
+**New: `src/model/caps.h`** — one place that answers "what can this machine
+do", fed by `$S` and `$CD`. Capabilities are tri-state; anything not reported
+stays `CAP_UNKNOWN` and leaves the control **enabled**, because a query that
+failed is not evidence the hardware is missing. The Home and Probe pages and
+the nav rail all gate off it.
+
+**New: `sim/`** — the desktop bench. Runs the real `src/ui` and `src/model`
+against a fake FluidNC v4.0.3 that has the actual Corgi config behind it, so
+config-driven UI can be developed without the machine. See `sim/README.md`.
+
+Two bugs fixed and pinned with tests (`pio test -e native`):
+
+- `filelist.cpp` scanned from the first `{`, which is the outer
+  `{"files":[...]}` object — so every listing showed its **first file twice**.
+- The `$CD` scanner initially ate the `$S` reply, because both are queued at
+  link-up and their replies each end in `ok`. It now ignores `$`/`[`/`<`/`{`
+  lines and only honours a terminator once the YAML has actually started.
+
+Still open: **the panel only ever browses `/sd`.** Controller flash holds no
+G-code on this machine (just `config.yaml`, `favicon.ico`, `index.html.gz`), so
+there is nothing to show there — but there is also no way to look.
+
+## Session 2026-08-20 — CrowPanel Advance 7.0 V1.4
 
 The Waveshare 7B went back on warranty (U13 mux dead, section below), and the
 firmware now targets the **Elecrow CrowPanel Advance 7.0 V1.4** (env `crowadv`,

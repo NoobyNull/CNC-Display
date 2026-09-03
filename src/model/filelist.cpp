@@ -61,6 +61,18 @@ static bool field(const char* p, const char* key, char* out, size_t outn) {
 void filelist_feed_line(const char* line) {
     if (!line) return;
     const char* p = line;
+
+    // Start scanning INSIDE the "files" array. The reply is
+    //   {"files":[{"name":"a.nc","size":"12"}, ...],"path":"/sd"}
+    // and the outer object's first "name" is the first entry's — so scanning
+    // from the very first '{' parsed entry zero twice and every listing showed
+    // its first file duplicated.
+    const char* arr = strstr(line, "\"files\"");
+    if (arr) {
+        const char* br = strchr(arr, '[');
+        if (br) p = br;
+    }
+
     while ((p = strchr(p, '{')) != nullptr) {
         if (s_count >= FL_MAX_ENTRIES) break;
         char name[FL_NAME_MAX] = { 0 };

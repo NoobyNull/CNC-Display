@@ -1,0 +1,91 @@
+# Overlay: the same Corgi, but fully equipped.
+#
+# Merged onto corgi_bringup.yaml (the real machine) by fluidnc_sim.py, rather
+# than kept as a second full copy — re-pull the live config and this profile
+# follows it instead of drifting.
+#
+# Everything here is what the bring-up machine does NOT have: endstops on all
+# four axes, homing cycles, a probe, a toolsetter, coolant, and the control
+# inputs. Switch to this profile to see the panel with every feature ENABLED;
+# the bring-up profile is the one that must show them greyed out.
+#
+# Pin numbers are plausible 6-Pack assignments. They are fixture values for the
+# simulator and have never been near hardware — do not upload this to a machine.
+
+axes:
+  X:
+    soft_limits: true
+    homing:
+      cycle: 2
+      positive_direction: false
+      mpos_mm: 0.0
+      feed_mm_per_min: 300.0
+      seek_mm_per_min: 2000.0
+    motor0:
+      hard_limits: true
+      limit_neg_pin: gpio.33:low:pu
+      limit_pos_pin: NO_PIN
+
+  Y:
+    soft_limits: true
+    homing:
+      cycle: 2
+      positive_direction: false
+      mpos_mm: 0.0
+      feed_mm_per_min: 300.0
+      seek_mm_per_min: 2000.0
+    motor0:
+      hard_limits: true
+      limit_neg_pin: gpio.32:low:pu
+      limit_pos_pin: NO_PIN
+    motor1:
+      hard_limits: true
+      limit_neg_pin: gpio.35:low:pu
+      limit_pos_pin: NO_PIN
+
+  Z:
+    soft_limits: true
+    homing:
+      cycle: 1
+      positive_direction: true
+      mpos_mm: 0.0
+      feed_mm_per_min: 300.0
+      seek_mm_per_min: 1000.0
+    motor0:
+      hard_limits: true
+      limit_pos_pin: gpio.34:low:pu
+      limit_neg_pin: NO_PIN
+
+  A:
+    soft_limits: false
+    homing:
+      cycle: 3
+      positive_direction: false
+      mpos_mm: 0.0
+      feed_mm_per_min: 300.0
+      seek_mm_per_min: 2000.0
+    motor0:
+      hard_limits: true
+      limit_neg_pin: gpio.36:low:pu
+      limit_pos_pin: NO_PIN
+
+probe:
+  pin: gpio.26:low:pu
+  toolsetter_pin: gpio.4:low:pu
+  check_mode_start: true
+
+coolant:
+  flood_pin: gpio.2
+  mist_pin: gpio.13
+  delay_ms: 1000
+
+control:
+  safety_door_pin: gpio.39:low:pu
+  estop_pin: gpio.14:low:pu
+  feed_hold_pin: gpio.12:low:pu
+  cycle_start_pin: gpio.0:low:pu
+  macro0_pin: NO_PIN
+
+start:
+  must_home: true
+  check_limits: true

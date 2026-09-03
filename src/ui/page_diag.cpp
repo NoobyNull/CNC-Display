@@ -4,6 +4,7 @@
 #include "ui/view_expanded.h"
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
+#include "model/caps.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <string.h>
@@ -111,15 +112,14 @@ bool page_diag_limits_feed(const char* line) {
     return false;
 }
 
+// The probe lamp's existence, from the capability model rather than from a
+// direct $S lookup. This used to scan the settings for "/probe/pin", which is
+// a FluidNC v3 key: v4's $S carries only the Grbl-compat settings, so that
+// lookup never matched and the lamp could never appear. caps.cpp reads the
+// config dump, which is where pins actually live on v4.
 static void scan_probe_config() {
     uint16_t m = s_cfg_mask & (uint16_t)~(1u << 12);
-    for (size_t i = 0; i < fncset_count(); i++) {
-        const fnc_setting_t* st = fncset_at(i);
-        if (st && strcmp(st->name, "/probe/pin") == 0 &&
-            strcmp(st->value, "NO_PIN") != 0) {
-            m |= (uint16_t)(1u << 12);
-        }
-    }
+    if (caps_probe() == CAP_PRESENT) m |= (uint16_t)(1u << 12);
     s_cfg_mask = m;
 }
 
@@ -341,6 +341,15 @@ void page_diag_build(lv_obj_t* p) {
 void page_diag_tick() {
     if (fncset_dirty_take()) {
         refresh();
+        scan_probe_config();
+    }
+
+    // The lamp's data comes from the $CD-fed caps model now, not from $S, so
+    // it must also rescan when caps move on their own — a lone $CD typed into
+    // the command box arrives with no fncset dirty tick attached.
+    static uint32_t caps_seen = (uint32_t)-1;
+    if (caps_seen != caps_generation()) {
+        caps_seen = caps_generation();
         scan_probe_config();
     }
 

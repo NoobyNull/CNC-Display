@@ -12,12 +12,20 @@ static uint32_t      s_baud = FNC_BAUD;
 static unsigned long s_rx_count = 0;
 static unsigned long s_tx_count = 0;
 
+// Why the peripheral is silent, for the Setup page. Empty means init was clean.
+// Serial shares this link's pins and is un-begun whenever the link owns them
+// (main.cpp:46), so every printf below reaches nobody in the one configuration
+// where these errors matter — the glass is the only place they can land.
+static char s_init_err[32] = "";
+
+const char* fnc_init_error() { return s_init_err; }
+
 uint32_t fnc_get_baud() { return s_baud; }
 
 unsigned long fnc_rx_count() { return s_rx_count; }
 unsigned long fnc_tx_count() { return s_tx_count; }
 
-void init_fnc_uart() {
+bool init_fnc_uart() {
     fnc_uart_port = (uart_port_t)FNC_UART_NUM;
     uart_driver_delete(fnc_uart_port);
 
@@ -41,6 +49,16 @@ void init_fnc_uart() {
                   FNC_UART_NUM, FNC_TX_PIN, FNC_RX_PIN, (unsigned long)s_baud,
                   (int)e_cfg, (int)e_pin, (int)e_drv);
 
+    // A driver that failed to install must never read as a ready link: every
+    // read and write after it returns an error, which looks exactly like a
+    // dead cable. 16K of RX ring comes out of internal DRAM, and this board
+    // spends most of it on LVGL.
+    if (e_cfg || e_pin || e_drv) {
+        snprintf(s_init_err, sizeof(s_init_err), "cfg%d pin%d drv%d",
+                 (int)e_cfg, (int)e_pin, (int)e_drv);
+        return false;
+    }
+
     // Silicon-internal loopback: TX routed to RX inside the chip, no pads
     // involved. Proves the peripheral + driver actually transmit.
     uart_set_loop_back(fnc_uart_port, true);
@@ -51,6 +69,13 @@ void init_fnc_uart() {
     int n = uart_read_bytes(fnc_uart_port, rb, 4, pdMS_TO_TICKS(100));
     uart_set_loop_back(fnc_uart_port, false);
     Serial.printf("[uart] internal loopback: n=%d data=%s\n", n, (const char*)rb);
+
+    // Short of 4 bytes means the peripheral itself is not transmitting — no
+    // cable can explain that. Reported, not fatal: refusing the link on it
+    // would turn a flaky self-test into a dead pendant.
+    if (n == 4) s_init_err[0] = 0;
+    else        snprintf(s_init_err, sizeof(s_init_err), "lb%d/4", n);
+    return true;
 }
 
 void reinit_fnc_uart() {

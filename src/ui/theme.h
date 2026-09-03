@@ -19,6 +19,12 @@ static const lv_coord_t SAFETY_H      = U * 10;   // 80
 static const lv_coord_t CONTENT_W     = SCREEN_W - RAIL_W;              // 928
 static const lv_coord_t CONTENT_H     = SCREEN_H - DRO_H - SAFETY_H;    // 376
 
+// A disabled control still has to be READ: it carries the reason it is
+// disabled, which is the whole point of leaving it on screen. Low enough to
+// read as inert against an enabled neighbour, high enough to stay legible on
+// an emissive panel in daylight.
+static const lv_opa_t OPA_DISABLED = LV_OPA_70;
+
 // The panel is deliberately single-theme: an emissive display in a workshop is
 // dark because glare and grime make it so, not because a viewer chose it.
 #define C_BG      lv_color_hex(0x0D1114)

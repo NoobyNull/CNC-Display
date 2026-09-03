@@ -1,0 +1,230 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FluidNC bench</title>
+<style>
+  /* One palette and one spacing unit drive the whole sheet, so the bench can
+     be retinted or retuned without hunting literals through the markup. */
+  :root {
+    --u: 8px;
+    --bg: #0e1116;      --surface: #171c24;  --raise: #212936;
+    --line: #2c3542;    --text: #e6edf3;     --dim: #8b98a8;
+    --ok: #3fb950;      --warn: #d29922;     --bad: #f85149;
+    --accent: #58a6ff;  --run: #2ea043;
+    --lamp-off: #2a323d;
+    --radius: 4px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: calc(var(--u) * 2);
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 15px; margin: 0 0 var(--u); letter-spacing: .08em; text-transform: uppercase; }
+  h2 { font-size: 11px; margin: 0 0 var(--u); color: var(--dim);
+       letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
+  .wrap { display: grid; gap: calc(var(--u) * 2);
+          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+  .card { background: var(--surface); border: 1px solid var(--line);
+          border-radius: var(--radius); padding: calc(var(--u) * 1.5); }
+  .row { display: flex; gap: var(--u); flex-wrap: wrap; align-items: center; }
+
+  /* Switch: a chunky bench toggle, green while the contact is made. */
+  .sw { display: flex; align-items: center; gap: var(--u); cursor: pointer;
+        background: var(--raise); border: 1px solid var(--line);
+        border-radius: var(--radius); padding: var(--u); min-width: 120px;
+        user-select: none; transition: border-color .12s, background .12s; }
+  .sw:hover { border-color: var(--accent); }
+  .sw .dot { width: calc(var(--u) * 1.75); height: calc(var(--u) * 1.75);
+             border-radius: 50%; background: var(--lamp-off);
+             box-shadow: inset 0 0 0 1px #0006; flex: none; }
+  .sw.on { background: #14301c; border-color: var(--ok); }
+  .sw.on .dot { background: var(--ok); box-shadow: 0 0 calc(var(--u)) var(--ok); }
+  .sw .cap { font-size: 11px; color: var(--dim); }
+  .sw.on .cap { color: var(--ok); }
+
+  .lamp { display: flex; align-items: center; gap: var(--u);
+          padding: calc(var(--u) * .5) 0; font-size: 12px; }
+  .lamp .dot { width: calc(var(--u) * 1.5); height: calc(var(--u) * 1.5);
+               border-radius: 50%; background: var(--lamp-off); flex: none; }
+  .lamp.on .dot { background: var(--ok); box-shadow: 0 0 var(--u) var(--ok); }
+  .lamp.no .dot { background: var(--lamp-off); opacity: .35; }
+  .lamp.no { color: #55606e; }
+  .lamp .tag { margin-left: auto; font-size: 10px; letter-spacing: .06em; }
+  .yes { color: var(--ok); } .not { color: #55606e; }
+
+  .dro { display: grid; grid-template-columns: auto 1fr 1fr; gap: calc(var(--u) * .5) var(--u);
+         font-size: 17px; align-items: baseline; }
+  .dro .ax { color: var(--accent); font-weight: 700; }
+  .dro .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .dro .hdr { font-size: 10px; color: var(--dim); text-align: right;
+              letter-spacing: .1em; text-transform: uppercase; }
+
+  .state { font-size: 22px; font-weight: 700; letter-spacing: .06em; }
+  button, select, input {
+    font: inherit; background: var(--raise); color: var(--text);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: calc(var(--u) * .75) var(--u); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  input { cursor: text; flex: 1; min-width: 0; }
+  pre { margin: 0; max-height: calc(var(--u) * 30); overflow: auto;
+        font-size: 11px; color: var(--dim); white-space: pre-wrap; }
+  .pill { font-size: 10px; padding: 2px calc(var(--u) * .75); border-radius: 999px;
+          border: 1px solid var(--line); color: var(--dim); letter-spacing: .06em; }
+  .pill.live { color: var(--ok); border-color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: right; padding: calc(var(--u) * .4) calc(var(--u) * .5);
+           border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  th { color: var(--dim); font-size: 10px; letter-spacing: .08em;
+       text-transform: uppercase; font-weight: 600; }
+  th:first-child, td:first-child { text-align: left; color: var(--accent); }
+</style>
+
+<h1>FluidNC bench
+  <span class="pill" id="links">no link</span>
+  <span class="pill" id="prof"></span>
+</h1>
+
+<div class="wrap">
+  <div class="card">
+    <h2>Machine</h2>
+    <div class="row" style="justify-content:space-between">
+      <span class="state" id="state">--</span>
+      <span id="mname" style="font-size:11px;color:var(--dim)"></span>
+    </div>
+    <div class="dro" id="dro" style="margin-top:var(--u)"></div>
+    <div class="row" style="margin-top:calc(var(--u)*1.5)">
+      <select id="profile">
+        <option value="bringup">bring-up (no limits/probe)</option>
+        <option value="equipped">equipped (limits+probe+coolant)</option>
+      </select>
+      <button id="reset">Soft reset</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>NPN inputs &mdash; click to make contact</h2>
+    <div class="row" id="switches"></div>
+    <p style="font-size:11px;color:var(--dim);margin:var(--u) 0 0">
+      Only pins the loaded config actually declares appear here. That is the
+      point: the bring-up profile has none.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Subsystems</h2>
+    <div id="caps"></div>
+  </div>
+
+  <div class="card">
+    <h2>Axis limits &amp; rates</h2>
+    <table id="axtab"></table>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Controller log</h2>
+    <div class="row" style="margin-bottom:var(--u)">
+      <input id="cmd" placeholder="send a line to the controller, e.g. $S or $H">
+      <button id="send">Send</button>
+    </div>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const post = (p, b) => fetch(p, {method:'POST', headers:{'Content-Type':'application/json'},
+                               body: JSON.stringify(b||{})});
+
+// Long-form names for the single-letter pin codes the controller reports.
+const SW_LABEL = {P:'PROBE', T:'TOOLSETTER', D:'SAFETY DOOR', E:'E-STOP'};
+const STATE_COLOR = {Idle:'var(--ok)', Run:'var(--run)', Jog:'var(--accent)',
+                     Home:'var(--accent)', Hold:'var(--warn)', Door:'var(--warn)',
+                     Alarm:'var(--bad)'};
+
+let last = '';
+
+function lamp(label, on, tag) {
+  return `<div class="lamp ${on ? 'on' : 'no'}"><span class="dot"></span>
+          <span>${label}</span>
+          <span class="tag ${on ? 'yes' : 'not'}">${tag}</span></div>`;
+}
+
+function render(s) {
+  $('#state').textContent = s.state + (s.alarm ? ` (ALARM ${s.alarm})` : '');
+  $('#state').style.color = STATE_COLOR[s.state] || 'var(--text)';
+  $('#mname').textContent = s.machine;
+  $('#prof').textContent = s.profile;
+  $('#links').textContent = s.links ? `${s.links} link` : 'no link';
+  $('#links').className = 'pill' + (s.links ? ' live' : '');
+  if ($('#profile').value !== s.profile) $('#profile').value = s.profile;
+
+  $('#dro').innerHTML = '<span></span><span class="hdr">machine</span><span class="hdr">work</span>'
+    + s.axes.map((a, i) =>
+        `<span class="ax">${a}</span><span class="v">${s.mpos[i].toFixed(3)}</span>`
+        + `<span class="v">${s.wpos[i].toFixed(3)}</span>`).join('');
+
+  // Switches are rebuilt only when the set changes, so clicking one does not
+  // fight the 5Hz poll for the DOM node under the cursor.
+  const keys = Object.keys(s.switches);
+  const sig = keys.join(',');
+  if (sig !== last) {
+    last = sig;
+    $('#switches').innerHTML = keys.length
+      ? keys.map(k => `<div class="sw" data-k="${k}"><span class="dot"></span>
+          <span><b>${k}</b><br><span class="cap">${SW_LABEL[k] || 'LIMIT'}</span></span></div>`).join('')
+      : '<span style="color:var(--dim);font-size:12px">'
+        + 'No input pins configured &mdash; nothing to toggle.</span>';
+    $('#switches').querySelectorAll('.sw').forEach(el =>
+      el.onclick = () => post('/api/switch',
+        {name: el.dataset.k, value: !el.classList.contains('on')}));
+  }
+  keys.forEach(k => {
+    const el = $(`.sw[data-k="${k}"]`);
+    if (el) el.classList.toggle('on', !!s.switches[k]);
+  });
+
+  const c = s.caps;
+  $('#caps').innerHTML =
+      lamp('Homing',        c.homing,      c.homing ? 'CONFIGURED' : 'NOT CONFIGURED')
+    + lamp('Hard limits',   c.hard_limits, c.hard_limits ? 'ENABLED' : 'NONE')
+    + lamp('Soft limits',   c.soft_limits, c.soft_limits ? 'ENABLED' : 'NONE')
+    + lamp('Probe',         c.probe,       c.probe ? 'PIN SET' : 'NO_PIN')
+    + lamp('Toolsetter',    c.toolsetter,  c.toolsetter ? 'PIN SET' : 'NO_PIN')
+    + lamp('Flood coolant', c.flood,       c.flood ? 'PIN SET' : 'NO_PIN')
+    + lamp('Mist coolant',  c.mist,        c.mist ? 'PIN SET' : 'NO_PIN')
+    + lamp('Safety door',   c.safety_door, c.safety_door ? 'PIN SET' : 'NO_PIN')
+    + lamp('E-stop input',  c.estop,       c.estop ? 'PIN SET' : 'NO_PIN')
+    + lamp('SD card',       c.sdcard,      c.sdcard ? 'PIN SET' : 'NO_PIN')
+    + lamp('Spindle',       !!c.spindle,   c.spindle || 'NONE')
+    + lamp('Spindle running', s.spindle.on, s.spindle.on ? s.spindle.rpm + ' RPM' : 'OFF')
+    + lamp('Flood on',      s.flood,       s.flood ? 'ON' : 'OFF')
+    + lamp('Homed',         s.homed,       s.homed ? 'YES' : 'NO');
+
+  $('#axtab').innerHTML =
+    '<tr><th>axis</th><th>steps/mm</th><th>max rate</th><th>accel</th><th>travel</th><th>home</th></tr>'
+    + s.axes.map(a => { const x = s.axis_cfg[a]; return `<tr><td>${a}</td>
+        <td>${x.steps_per_mm}</td><td>${x.max_rate}</td><td>${x.accel}</td>
+        <td>${x.max_travel}</td>
+        <td class="${x.homing_cycle >= 0 ? 'yes' : 'not'}">
+          ${x.homing_cycle >= 0 ? 'cycle ' + x.homing_cycle : '--'}</td></tr>`; }).join('');
+
+  const log = $('#log');
+  const stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = s.log.join('\n');
+  if (stuck) log.scrollTop = log.scrollHeight;
+}
+
+async function poll() {
+  try { render(await (await fetch('/api/state')).json()); } catch (e) {}
+}
+setInterval(poll, 200);
+poll();
+
+$('#profile').onchange = e => { last = ''; post('/api/profile', {name: e.target.value}); };
+$('#reset').onclick = () => post('/api/reset');
+const send = () => { const v = $('#cmd').value.trim();
+                     if (v) { post('/api/cmd', {line: v}); $('#cmd').value = ''; } };
+$('#send').onclick = send;
+$('#cmd').onkeydown = e => { if (e.key === 'Enter') send(); };
+</script>

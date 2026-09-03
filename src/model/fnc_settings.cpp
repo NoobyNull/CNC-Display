@@ -2,6 +2,7 @@
 #include "model/FluidNCModel.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>   // strtol in uri_decode; only reached transitively on ESP32
 
 static fnc_setting_t s_list[FS_MAX];
 static size_t        s_count = 0;

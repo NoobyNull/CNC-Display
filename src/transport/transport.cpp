@@ -20,17 +20,11 @@ static char s_detail[64] = "no link";
 static bool s_uart_ready = false;
 
 void transport_init() {
-    if (settings_uart_enabled()) {
-        init_fnc_uart();
-        s_uart_ready = true;
-    }
+    if (settings_uart_enabled()) s_uart_ready = init_fnc_uart();
 }
 
 void transport_settings_changed() {
-    if (settings_uart_enabled() && !s_uart_ready) {
-        init_fnc_uart();
-        s_uart_ready = true;
-    }
+    if (settings_uart_enabled() && !s_uart_ready) s_uart_ready = init_fnc_uart();
 }
 
 const char* transport_label() {
@@ -56,8 +50,12 @@ void transport_poll() {
     uint32_t now = millis();
     if ((int32_t)(now - next_poke) < 0) return;
     next_poke = now + 2000;
-    snprintf(s_detail, sizeof(s_detail), "waiting for controller @ %lu",
-             (unsigned long)fnc_get_baud());
+    // The counters are the whole diagnosis: rx=0 with tx climbing is a dead
+    // cable or a wrong connector, rx climbing with nothing parsed is a
+    // baud/framing fight, and tx=0 means we are not even transmitting. Naming
+    // the baud here was never useful — it is fixed at build time.
+    snprintf(s_detail, sizeof(s_detail), "wait rx=%lu tx=%lu %s",
+             fnc_rx_count(), fnc_tx_count(), fnc_init_error());
     fnc_realtime(StatusReport);
 }
 

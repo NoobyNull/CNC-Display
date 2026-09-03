@@ -3,6 +3,7 @@
 #include "model/offsets.h"
 #include "model/filelist.h"
 #include "model/fnc_settings.h"
+#include "model/caps.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -51,6 +52,10 @@ bool page_diag_limits_feed(const char* line);
 extern "C" void handle_other_line(char* line) {
     if (!line) return;
     if (page_diag_limits_feed(line)) return;
+    // The $CD config dump is ~300 lines of YAML. It answers "does this machine
+    // have a probe / coolant / door" and belongs to the capability model, not
+    // to the console it would otherwise bury.
+    if (caps_feed_line(line)) return;
     offsets_feed_line(line);
     fncset_feed_line(line);
     filelist_feed_line(line);

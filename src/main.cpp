@@ -28,6 +28,7 @@
 #include "model/console_log.h"
 #include "model/offsets.h"
 #include "model/fnc_settings.h"
+#include "model/caps.h"
 #include "model/filelist.h"
 #include "model/path_loader.h"
 #include "ui/shell.h"
@@ -192,12 +193,16 @@ static void prime_link_if_up() {
     if (s_primed) return;
     if (state == Disconnected) return;
     s_primed = true;
+    // Config dump first: it decides which controls are even offered, and every
+    // second it is late is a second the panel shows homing and probing to a
+    // machine that has neither.
+    caps_request_config();
     send_line("$#");
     filelist_request();
     // The full settings dump also feeds the Diag limit lamps: which lamps
     // exist is read from the controller's configured limit/probe pins.
     fncset_request_all();
-    Serial.println("link up: primed offsets, file list and settings");
+    Serial.println("link up: primed config, offsets, file list and settings");
 }
 
 void loop() {

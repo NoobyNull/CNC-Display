@@ -7,7 +7,7 @@ typedef void (*page_build_fn)(lv_obj_t* parent);
 
 enum page_id_t {
     PAGE_JOG = 0, PAGE_HOME, PAGE_PROBE, PAGE_OFFSETS,
-    PAGE_RUN, PAGE_MACRO, PAGE_CAL, PAGE_DIAG, PAGE_SETUP,
+    PAGE_RUN, PAGE_MACRO, PAGE_MOTION, PAGE_CAL, PAGE_DIAG, PAGE_SETUP,
     PAGE_COUNT
 };
 
@@ -17,6 +17,7 @@ void page_probe_build(lv_obj_t* p);
 void page_offsets_build(lv_obj_t* p);
 void page_run_build(lv_obj_t* p);
 void page_macro_build(lv_obj_t* p);
+void page_motion_build(lv_obj_t* p);
 void page_cal_build(lv_obj_t* p);
 void page_diag_build(lv_obj_t* p);
 void page_setup_build(lv_obj_t* p);
@@ -28,6 +29,12 @@ void page_run_tick();
 void page_setup_tick();
 void page_diag_tick();
 void page_cal_tick();
+void page_motion_tick();
+// These two re-gate their controls against the capability model, so they run
+// even while off screen — a page must be correct the instant it is shown, not
+// one tick later.
+void page_home_tick();
+void page_probe_tick();
 
 // Diag runs $Limits/Show only while it is on screen; the shell calls this on
 // navigating away so the controller stops monitoring.

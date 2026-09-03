@@ -1,4 +1,5 @@
 #include "ui/widgets.h"
+#include <string.h>
 
 void w_flatten(lv_obj_t* o) {
     lv_obj_set_style_pad_all(o, 0, 0);
@@ -42,6 +43,11 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
     // Pressed state must be visible, not just felt: a gloved finger on a
     // capacitive panel gets no tactile confirmation.
     lv_obj_set_style_bg_color(b, lv_color_lighten(bg, 40), LV_STATE_PRESSED);
+    // The disabled look is a state style, not a repaint: LVGL restores the
+    // original colours by itself when the state clears, so w_gate() never has
+    // to remember what the button looked like. Style opacity covers the
+    // children too, which is what dims the labels along with the fill.
+    lv_obj_set_style_opa(b, OPA_DISABLED, LV_STATE_DISABLED);
     if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
 
     lv_obj_t* col = lv_obj_create(b);
@@ -52,10 +58,47 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
     lv_obj_clear_flag(col, LV_OBJ_FLAG_CLICKABLE);
 
     w_label(col, label, &lv_font_montserrat_14, fg);
+    // The sub-label doubles as the slot w_gate() writes a disabled reason
+    // into, so stash it where the gate can find it without walking children.
+    lv_obj_t* sublbl = nullptr;
     if (sub) {
-        w_label(col, sub, &lv_font_montserrat_10, lv_color_mix(fg, C_DIM, 128));
+        sublbl = w_label(col, sub, &lv_font_montserrat_10, lv_color_mix(fg, C_DIM, 128));
+        lv_obj_set_style_text_align(sublbl, LV_TEXT_ALIGN_CENTER, 0);
+        // A gate reason is far longer than the "$H" this slot normally holds,
+        // and the axis buttons are narrow: wrap rather than clip, or the
+        // explanation is cut off exactly where it starts to matter.
+        lv_obj_set_width(sublbl, LV_PCT(100));
+        lv_label_set_long_mode(sublbl, LV_LABEL_LONG_WRAP);
     }
+    lv_obj_set_user_data(b, sublbl);
     return b;
+}
+
+void w_gate(lv_obj_t* btn, bool enabled, const char* reason) {
+    if (!btn) return;
+
+    lv_obj_t* sub = (lv_obj_t*)lv_obj_get_user_data(btn);
+    if (sub) {
+        // Remember the build-time sub text once, so re-enabling restores the
+        // G-code the button sends rather than leaving the reason behind.
+        const char* orig = (const char*)lv_obj_get_user_data(sub);
+        if (!orig) {
+            orig = lv_label_get_text(sub);
+            lv_obj_set_user_data(sub, (void*)strdup(orig));
+            orig = (const char*)lv_obj_get_user_data(sub);
+        }
+        lv_label_set_text(sub, (!enabled && reason) ? reason : orig);
+    }
+
+    if (enabled) {
+        lv_obj_clear_state(btn, LV_STATE_DISABLED);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_add_state(btn, LV_STATE_DISABLED);
+        // Clearing CLICKABLE is what actually stops the press: LV_STATE_DISABLED
+        // alone still delivers LV_EVENT_CLICKED to the callback.
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    }
 }
 
 lv_obj_t* w_keyboard() {

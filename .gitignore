@@ -33,3 +33,8 @@ cad/print/
 
 # clangd compilation database, regenerate with: pio run -e ws7b -t compiledb
 compile_commands.json
+
+# Desktop sim: deps are cloned by `make deps`, build/ and cncsim are output
+sim/deps/
+sim/build/
+sim/cncsim

@@ -2,7 +2,12 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "model/caps.h"
 #include "GrblParserC.h"
+
+static lv_obj_t* s_all;
+static lv_obj_t* s_axis[3];
+static lv_obj_t* s_note;
 
 static void home_all_cb(lv_event_t*) { send_line("$H"); }
 
@@ -26,9 +31,9 @@ void page_home_build(lv_obj_t* p) {
     // Both halves grow: they were equal fixed heights that filled the old 256px
     // content area exactly, so sharing the taller one keeps the design's 50/50
     // split instead of stacking them at the top over a band of background.
-    lv_obj_t* all = w_button(left, "HOME ALL", "$H", C_RUN, C_BG, home_all_cb, nullptr);
-    lv_obj_set_width(all, LV_PCT(100));
-    lv_obj_set_flex_grow(all, 1);
+    s_all = w_button(left, "HOME ALL", "$H", C_RUN, C_BG, home_all_cb, nullptr);
+    lv_obj_set_width(s_all, LV_PCT(100));
+    lv_obj_set_flex_grow(s_all, 1);
 
     lv_obj_t* row = lv_obj_create(left);
     w_flatten(row);
@@ -37,11 +42,14 @@ void page_home_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(row, U, 0);
     static const char* AXL[3] = { "HOME X", "HOME Y", "HOME Z" };
+    static const char* AXS[3] = { "$HX", "$HY", "$HZ" };
     for (int i = 0; i < 3; i++) {
-        lv_obj_t* b = w_button(row, AXL[i], nullptr, C_SURFACE, C_TEXT,
-                               home_axis_cb, (void*)(intptr_t)i);
-        lv_obj_set_flex_grow(b, 1);
-        lv_obj_set_height(b, LV_PCT(100));
+        // Each carries its own sub-label so w_gate() has somewhere to put the
+        // reason it is unavailable.
+        s_axis[i] = w_button(row, AXL[i], AXS[i], C_SURFACE, C_TEXT,
+                             home_axis_cb, (void*)(intptr_t)i);
+        lv_obj_set_flex_grow(s_axis[i], 1);
+        lv_obj_set_height(s_axis[i], LV_PCT(100));
     }
 
     lv_obj_t* right = lv_obj_create(p);
@@ -58,8 +66,28 @@ void page_home_build(lv_obj_t* p) {
     lv_obj_t* note = w_panel(right, C_SURFACE);
     lv_obj_set_width(note, LV_PCT(100));
     lv_obj_set_flex_grow(note, 1);
-    lv_obj_t* nl = w_label(note, "Homing moves at full rate.\nClear the table first.",
-                           &lv_font_montserrat_12, C_DIM);
-    lv_obj_set_style_text_align(nl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(nl);
+    s_note = w_label(note, "Homing moves at full rate.\nClear the table first.",
+                     &lv_font_montserrat_12, C_DIM);
+    lv_obj_set_style_text_align(s_note, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(s_note);
+
+    page_home_tick();
+}
+
+// Homing is only offered when the controller says it has a homing cycle.
+// $Grbl/HomingCycleEnable is 0 on a machine with no endstops, and $H there
+// answers error:5 without moving — so the button would be a lie.
+void page_home_tick() {
+    static uint32_t seen = (uint32_t)-1;
+    if (seen == caps_generation()) return;
+    seen = caps_generation();
+
+    bool ok = cap_ok(caps_homing());
+    const char* why = caps_why(caps_homing(), "endstops");
+    w_gate(s_all, ok, why);
+    for (int i = 0; i < 3; i++) w_gate(s_axis[i], ok, why);
+
+    lv_label_set_text(s_note, ok
+        ? "Homing moves at full rate.\nClear the table first."
+        : "This machine has no homing cycle\nconfigured. Add endstops and a\nhoming cycle to config.yaml.");
 }
