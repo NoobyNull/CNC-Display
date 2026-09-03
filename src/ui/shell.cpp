@@ -309,6 +309,14 @@ static void build_dro(lv_obj_t* parent) {
     lv_obj_set_style_border_width(s_state_chip, 0, 0);
     s_state_lbl = w_label(s_state_chip, "NO LINK", &lv_font_montserrat_14, C_DIM);
     lv_obj_center(s_state_lbl);
+    // One tap into Setup from any running page. The chip is always on screen
+    // (every DRO page has it) and Setup hides the DRO, so it cannot re-fire
+    // from inside Setup. The GT911 driver is single-point, so any gesture
+    // fancier than a plain tap is unreliable by construction.
+    lv_obj_add_flag(s_state_chip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_state_chip, [](lv_event_t*) {
+        shell_show_page(PAGE_SETUP);
+    }, LV_EVENT_CLICKED, nullptr);
 
     s_wcs_lbl = w_label(sc, "G54", &lv_font_montserrat_12, C_ACCENT);
     s_link_lbl = w_label(sc, "NO LINK", &lv_font_montserrat_10, C_DIM);
