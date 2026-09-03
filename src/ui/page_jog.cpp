@@ -19,35 +19,27 @@ static int s_step = 2;
 static lv_obj_t* s_step_btn[4];
 static lv_obj_t* s_mid_lbl;
 
-// Continuous jog has its OWN step, decoupled from the selector (FluidDial does
-// the same: button-jog distance is fixed, only feed follows the dial). Coupling
-// them meant a 10mm step had no hold-to-jog at all, and the selector doubled as
-// a speed control nobody asked for. Held keys now always crawl at this rate, so
-// a coarse step for touch-off taps costs nothing.
-// ponytail: fixed rate; make it a Setup knob if one speed doesn't fit all axes.
-static const float CONT_STEP_MM = 1.0f;   // feed = 5x this per second
-
-// Continuous jog re-issues short moves while the key is held, rather than
-// sending one long move and cancelling it on release (FluidDial's idiom, see
-// MultiJogScene::start_button_jog).
+// Continuous jog is FluidDial's idiom (MultiJogScene::start_button_jog): one
+// long move -- a fixed distance far beyond any travel -- ended by JogCancel on
+// release. Feed follows the selected step, 5x the step per second, so the
+// selector picks creep-vs-traverse and every step size has hold-to-jog.
 //
-// That is deliberate. Against FluidNC v4.0.4 the JogCancel realtime byte (0x85)
-// did not stop a jog in testing -- neither raw, which is what GrblParserC sends
-// (GrblParserC.c:572), nor UTF-8 encoded -- while feed hold on the same channel
-// stopped it every time. Until that is understood on real hardware, nothing that
-// moves the machine may depend on that byte arriving. Releasing the key stops
-// the axis by *not asking for more*, which holds whatever the controller does
-// with realtime commands.
-//
-// Each tick asks for exactly one tick's worth of travel, so the planner stays fed
-// without the queue growing, and a release overshoots by at most one chunk. At
-// the 1mm step -- the fastest continuous setting -- that is 0.75mm.
-static const uint32_t JOG_TICK_MS = 150;
+// History: this used to re-issue 150ms chunks instead, because early bring-up
+// saw the 0x85 JogCancel byte ignored by FluidNC v4.0.4. That testing was done
+// over the WiFi link; wired UART at 1Mbaud delivers realtime bytes reliably,
+// which is the likely difference. Belt and braces stays anyway: the cancel is
+// resent every CANCEL_RESEND_MS until the state actually leaves Jog (FluidDial
+// does exactly this), so one lost byte cannot run an axis to the end of travel.
+static const float    CONT_DIST_MM     = 5000.0f;  // FluidDial's button-jog distance
+static const uint32_t CANCEL_RESEND_MS = 80;       // all three mirror MultiJogScene
+static const uint32_t CANCEL_MIN_MS    = 250;
+static const uint32_t CANCEL_MAX_MS    = 1500;
 
 struct dir_t { int dx, dy, dz; };
 
-static lv_timer_t* s_jog_timer = nullptr;
-static dir_t       s_jog_dir   = { 0, 0, 0 };
+static bool        s_jogging      = false;    // a continuous session is live
+static lv_timer_t* s_cancel_timer = nullptr;  // the resend pump
+static uint32_t    s_cancel_t0    = 0;
 
 // Pad slots in reading order; slot 4 is the centre and is not a button.
 static const dir_t PADDIR[9] = {
@@ -67,53 +59,44 @@ static void jog_send(const dir_t* d, float feed_mm_min, float dist_mm) {
     send_jog_line(buf);
 }
 
-static float continuous_feed() { return CONT_STEP_MM * 300.0f; }
+// FluidDial's "5x the highlighted distance in 1 second".
+static float continuous_feed() { return STEPS[s_step] * 300.0f; }
 
-static void jog_stop(lv_event_t*);
-
-static void jog_chunk(lv_timer_t*) {
-    // Leaving the page with a key held would otherwise keep the timer running
-    // and the axis moving somewhere nobody is looking.
-    if (shell_current_page() != PAGE_JOG) {
-        jog_stop(nullptr);
+// Resend 0x85 until the controller confirms it stopped: keep pumping while the
+// state is still Jog, for at least CANCEL_MIN_MS (a status report is ~75ms out,
+// so the first look at `state` is stale) and at most CANCEL_MAX_MS.
+static void cancel_pump(lv_timer_t* t) {
+    uint32_t since = millis() - s_cancel_t0;
+    if ((state != Jog && since >= CANCEL_MIN_MS) || since >= CANCEL_MAX_MS) {
+        lv_timer_del(t);
+        s_cancel_timer = nullptr;
         return;
     }
-    const float feed = continuous_feed();
-    // send_jog_line() is ack-gated on UART (jog_flow_control() == Blocking), so a
-    // chunk can sit in fnc_send_line()'s `while (_ackwait)` for its full timeout.
-    // This runs inside lv_timer_handler(), which also drives touch_poll and
-    // LVGL's input read -- so a slow chunk is a frozen panel, not a slow jog.
-    uint32_t t0 = millis();
-    jog_send(&s_jog_dir, feed, feed / 60.0f * (JOG_TICK_MS / 1000.0f));
-    uint32_t dt = millis() - t0;
-    if (dt > 20) Serial.printf("[jog] chunk blocked %lums\n", (unsigned long)dt);
+    send_jog_cancel();
 }
 
 // Held past LVGL's 400ms long-press, the key becomes a continuous jog at any
-// step size; the worst case of a lost release is always one 0.75mm chunk,
-// which is why the old 1mm cap is gone.
+// step size: one long move, ended by cancel on release.
 static void jog_hold(lv_event_t* e) {
     const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
     if (!d || (!d->dx && !d->dy && !d->dz)) return;
-    if (s_jog_timer) return;
-
-    s_jog_dir   = *d;
-    s_jog_timer = lv_timer_create(jog_chunk, JOG_TICK_MS, nullptr);
-    jog_chunk(nullptr);   // first chunk now, not one tick from now
+    if (s_jogging || s_cancel_timer) return;   // never stack a move on a cancel in flight
+    s_jogging = true;
+    jog_send(d, continuous_feed(), CONT_DIST_MM);
 }
 
-// The jog cancel is a bonus, not the mechanism. Stopping the chunks is what
-// actually halts the axis; if the realtime byte does land it just stops sooner.
 static bool end_continuous() {
-    if (!s_jog_timer) return false;
-    lv_timer_del(s_jog_timer);
-    s_jog_timer = nullptr;
+    if (!s_jogging) return false;
+    s_jogging = false;
     send_jog_cancel();
+    s_cancel_t0 = millis();
+    if (!s_cancel_timer)
+        s_cancel_timer = lv_timer_create(cancel_pump, CANCEL_RESEND_MS, nullptr);
     return true;
 }
 
 // The discrete step fires on RELEASE, not press. On press it would land right
-// before a hold's continuous crawl -- a surprise 10mm lunge at the coarse step
+// before a hold's continuous move -- a surprise 10mm lunge at the coarse step
 // -- and it is delivered whole, never truncated: the step is the number you
 // are trusting for a touch-off.
 static void jog_stop(lv_event_t* e) {
@@ -124,8 +107,8 @@ static void jog_stop(lv_event_t* e) {
     jog_send(d, 2000.0f, STEPS[s_step]);
 }
 
-// Press-lost is the finger sliding off the key onto the bezel: end a running
-// crawl, and send nothing -- a move you half-made is not a move you meant.
+// Press-lost is the finger sliding off the key onto the bezel: cancel a running
+// jog, and send nothing -- a move you half-made is not a move you meant.
 static void jog_abort(lv_event_t*) {
     end_continuous();
 }
@@ -290,10 +273,7 @@ void page_jog_build(lv_obj_t* p) {
 // A jog key with no controller behind it is not a harmless no-op. send_jog_line()
 // is ack-gated on UART, so every press parks in fnc_send_line()'s `while
 // (_ackwait)` until the timeout expires -- inside the same lv_timer_handler()
-// pass that reads touch. Held past 400ms it is worse: jog_chunk() re-sends every
-// 150ms, each send costing more than the tick that scheduled it, so the timer is
-// permanently overdue, the input read is starved, and the release that would
-// call jog_stop() never arrives. The panel is then dead until a power cycle.
+// pass that reads touch, starving the input read and the release event with it.
 //
 // lv_obj_hit_test() rejects LV_STATE_DISABLED outright, so disabling the keys
 // stops the press ever reaching an event handler -- no press, no long press, no
@@ -308,8 +288,7 @@ void page_jog_tick() {
         if (off) lv_obj_add_state(s_jog_keys[i], LV_STATE_DISABLED);
         else     lv_obj_clear_state(s_jog_keys[i], LV_STATE_DISABLED);
     }
-    // A link that drops mid-hold must not leave the chunk timer running: it
-    // would keep asking a controller that is no longer answering, at the full
-    // ack timeout per tick.
+    // A link that drops mid-hold must not leave a continuous move armed: end
+    // the session so the release logic cannot mistake reconnection for a jog.
     if (off) jog_stop(nullptr);
 }
