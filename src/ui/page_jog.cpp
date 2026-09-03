@@ -19,10 +19,13 @@ static int s_step = 2;
 static lv_obj_t* s_step_btn[4];
 static lv_obj_t* s_mid_lbl;
 
-// Hold-to-jog is offered at 1mm and below only. At 10mm a press is a deliberate
-// discrete move; a held key that ran away at coarse resolution is the wrong
-// thing to have under a thumb.
-static const float CONTINUOUS_MAX_MM = 1.0f;
+// Continuous jog has its OWN step, decoupled from the selector (FluidDial does
+// the same: button-jog distance is fixed, only feed follows the dial). Coupling
+// them meant a 10mm step had no hold-to-jog at all, and the selector doubled as
+// a speed control nobody asked for. Held keys now always crawl at this rate, so
+// a coarse step for touch-off taps costs nothing.
+// ponytail: fixed rate; make it a Setup knob if one speed doesn't fit all axes.
+static const float CONT_STEP_MM = 1.0f;   // feed = 5x this per second
 
 // Continuous jog re-issues short moves while the key is held, rather than
 // sending one long move and cancelling it on release (FluidDial's idiom, see
@@ -64,17 +67,7 @@ static void jog_send(const dir_t* d, float feed_mm_min, float dist_mm) {
     send_jog_line(buf);
 }
 
-// A tap is one step, delivered whole.
-static void jog_start(lv_event_t* e) {
-    const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
-    if (!d || (!d->dx && !d->dy && !d->dz)) return;
-    jog_send(d, 2000.0f, STEPS[s_step]);
-}
-
-// Feed tracks the selected step -- FluidDial's "5x the step per second" scaling
-// -- so the same key creeps at 0.01mm and traverses at 1mm, and the step
-// selector doubles as a speed selector.
-static float continuous_feed() { return STEPS[s_step] * 300.0f; }
+static float continuous_feed() { return CONT_STEP_MM * 300.0f; }
 
 static void jog_stop(lv_event_t*);
 
@@ -96,14 +89,12 @@ static void jog_chunk(lv_timer_t*) {
     if (dt > 20) Serial.printf("[jog] chunk blocked %lums\n", (unsigned long)dt);
 }
 
-// Held past LVGL's 400ms long-press, the discrete step gives way to a continuous
-// jog in the same direction -- but only at 1mm and below. At 10mm a press stays
-// a deliberate discrete move: that cap is what keeps the worst case of a lost
-// release down to one 0.75mm chunk instead of a coarse runaway.
+// Held past LVGL's 400ms long-press, the key becomes a continuous jog at any
+// step size; the worst case of a lost release is always one 0.75mm chunk,
+// which is why the old 1mm cap is gone.
 static void jog_hold(lv_event_t* e) {
     const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
     if (!d || (!d->dx && !d->dy && !d->dz)) return;
-    if (STEPS[s_step] > CONTINUOUS_MAX_MM) return;
     if (s_jog_timer) return;
 
     s_jog_dir   = *d;
@@ -111,21 +102,32 @@ static void jog_hold(lv_event_t* e) {
     jog_chunk(nullptr);   // first chunk now, not one tick from now
 }
 
-// Stop on release AND on press-lost -- press-lost is the finger sliding off the
-// key, and without it the axis keeps moving once the thumb reaches the bezel.
-//
-// Only a hold gets stopped. A tap has to deliver its whole step: cancelling
-// every release truncated the move to however long the finger happened to be
-// down, which is precisely wrong when the step is the number you are trusting
-// for a touch-off.
-//
 // The jog cancel is a bonus, not the mechanism. Stopping the chunks is what
 // actually halts the axis; if the realtime byte does land it just stops sooner.
-static void jog_stop(lv_event_t*) {
-    if (!s_jog_timer) return;
+static bool end_continuous() {
+    if (!s_jog_timer) return false;
     lv_timer_del(s_jog_timer);
     s_jog_timer = nullptr;
     send_jog_cancel();
+    return true;
+}
+
+// The discrete step fires on RELEASE, not press. On press it would land right
+// before a hold's continuous crawl -- a surprise 10mm lunge at the coarse step
+// -- and it is delivered whole, never truncated: the step is the number you
+// are trusting for a touch-off.
+static void jog_stop(lv_event_t* e) {
+    if (end_continuous()) return;       // a hold ends with no extra step
+    if (!e) return;
+    const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
+    if (!d || (!d->dx && !d->dy && !d->dz)) return;
+    jog_send(d, 2000.0f, STEPS[s_step]);
+}
+
+// Press-lost is the finger sliding off the key onto the bezel: end a running
+// crawl, and send nothing -- a move you half-made is not a move you meant.
+static void jog_abort(lv_event_t*) {
+    end_continuous();
 }
 
 // Every key attach_jog() touched, so the link guard below has one list to walk.
@@ -133,10 +135,9 @@ static lv_obj_t* s_jog_keys[10];
 static uint8_t   s_jog_key_n = 0;
 
 static void attach_jog(lv_obj_t* btn, const dir_t* d) {
-    lv_obj_add_event_cb(btn, jog_start, LV_EVENT_PRESSED,      (void*)d);
     lv_obj_add_event_cb(btn, jog_hold,  LV_EVENT_LONG_PRESSED, (void*)d);
     lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_RELEASED,     (void*)d);
-    lv_obj_add_event_cb(btn, jog_stop,  LV_EVENT_PRESS_LOST,   (void*)d);
+    lv_obj_add_event_cb(btn, jog_abort, LV_EVENT_PRESS_LOST,   (void*)d);
     // Dim rather than restyle: opa covers the glyph and the background together,
     // so a disabled key reads as unavailable without a second colour to keep in
     // step with the theme.
