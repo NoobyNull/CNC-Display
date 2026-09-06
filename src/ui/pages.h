@@ -30,6 +30,7 @@ void page_setup_tick();
 void page_diag_tick();
 void page_cal_tick();
 void page_motion_tick();
+void page_macro_tick();
 // These two re-gate their controls against the capability model, so they run
 // even while off screen — a page must be correct the instant it is shown, not
 // one tick later.

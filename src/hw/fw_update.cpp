@@ -74,7 +74,7 @@ static void ui_open(const char* title) {
     lv_obj_align(t, LV_ALIGN_CENTER, 0, -U * 8);
 
     s_note = lv_label_create(s_m);
-    lv_label_set_text(s_note, "updating — do not power off — reboots itself when done");
+    lv_label_set_text(s_note, "updating - do not power off - reboots itself when done");
     lv_obj_set_style_text_font(s_note, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_note, C_WARN, 0);
     lv_obj_align(s_note, LV_ALIGN_CENTER, 0, -U * 4);
@@ -146,7 +146,7 @@ static bool ui_countdown() {
     uint32_t start = millis();
     for (int sec = 3; sec > 0; sec--) {
         char b[48];
-        snprintf(b, sizeof(b), "starting in %d — touch to cancel", sec);
+        snprintf(b, sizeof(b), "starting in %d - touch to cancel", sec);
         ui_note_set(b, C_ACCENT);
         uint32_t t0 = millis();
         while (millis() - t0 < 1000) {
@@ -183,7 +183,7 @@ static void fail(const char* what) {
     // and the console log dies with it.
     char n[120];
     snprintf(n, sizeof(n), "FAILED: %s%s", what,
-             s_radio_used ? " — rebooting" : "");
+             s_radio_used ? " - rebooting" : "");
     ui_note_set(n, C_CRIT);
     uint32_t t0 = millis();
     while (millis() - t0 < 4000) { ui_pump(); delay(30); }
@@ -249,7 +249,7 @@ bool fwupd_net() {
             // is even visible from here (ESP32 = 2.4GHz only) and how loud:
             // not visible = wrong band / out of range; visible = bad password
             // (or an AP mode the S3 cannot join, e.g. WPA3-only).
-            ui_note_set("join failed — scanning...", C_DIM);
+            ui_note_set("join failed - scanning...", C_DIM);
             WiFi.disconnect();
             int n = WiFi.scanNetworks();
             char e[96];
@@ -304,7 +304,7 @@ bool fwupd_net() {
     uint8_t* fwbuf = (uint8_t*)ps_malloc(cap);
     if (!fwbuf) { http.end(); fail("no PSRAM for download buffer"); return false; }
 
-    ui_note_set("downloading — do not power off", C_WARN);
+    ui_note_set("downloading - do not power off", C_WARN);
     WiFiClient* stream = http.getStreamPtr();
     size_t done = 0;
     uint32_t idle = millis();
@@ -334,7 +334,7 @@ bool fwupd_net() {
     // so say what happens, cut the backlight, and burn it in the dark — the
     // reboot into the splash is the "done" signal.
     ui_progress(done, done);
-    ui_note_set("flashing — screen goes dark — reboots itself when done", C_WARN);
+    ui_note_set("flashing - screen goes dark - reboots itself when done", C_WARN);
     uint32_t t_note = millis();
     while (millis() - t_note < 1800) { ui_pump(); delay(30); }    // let it be read
     stc8_display(false);

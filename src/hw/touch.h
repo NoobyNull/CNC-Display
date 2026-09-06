@@ -28,6 +28,10 @@ void i2c_give();
 // stalled counter is NOT a fault: this chip reports only while something is
 // happening, so untouched it stops at whatever it last reached. See touch.cpp.
 bool     touch_is_down();
+
+// Fingers reported by the last fresh scan (GT911 tracks up to 5). Used for the
+// two-finger gesture that opens config mode; only point 0 is ever positioned.
+uint8_t  touch_points();
 uint32_t touch_fresh_count();
 uint32_t touch_poll_count();   // polls attempted
 uint32_t touch_lock_fails();   // polls that lost the I2C mutex

@@ -1,5 +1,8 @@
 #include "splash.h"
 #include "theme.h"
+#include "model/FluidNCModel.h"
+#include "model/model_events.h"
+#include "model/caps.h"
 #include <lvgl.h>
 
 // Boot splash: a gantry sweeps left-to-right and "machines" the FluidNC
@@ -14,36 +17,99 @@ static lv_obj_t* s_root     = nullptr;
 static lv_obj_t* s_reveal   = nullptr;   // clipping window, width animated
 static lv_obj_t* s_gantry   = nullptr;   // vertical line at the cut front
 static lv_obj_t* s_carriage = nullptr;   // little block riding the gantry
+static lv_obj_t* s_status   = nullptr;   // what boot is waiting on
 
 static const int SWEEP_MS = 2800;
 static const int HOLD_MS  = 1200;
 static const int EXIT_MS  = 500;
 static const int DELAY_MS = 150;         // timeline starts after boot, tiny settle only
 
+// The splash doubles as the boot gate. The layout the console draws is decided
+// by the controller — axis count sets the DRO's column count and its font size,
+// and the configured limit/probe pins decide which Diag lamps exist — so
+// revealing the UI before the first status report means drawing a 3-axis
+// machine that may not be this machine, then reflowing it under the operator.
+// Hold here until the controller has described itself.
+//
+// It is a HOLD, never a lock. A panel that will not leave its loading screen
+// without a controller is a panel you cannot reach SETUP on — and SETUP owns
+// the Wired UART toggle and hold-UPDATE-FW, which are the two ways out of a
+// bad link or a bad image. So: a tap skips it, and it gives up on its own.
+static const int GATE_TIMEOUT_MS = 12000;
+
+static lv_timer_t* s_gate = nullptr;
+static uint32_t    s_gate_start = 0;
+
+static void gate_stop() {
+    if (!s_gate) return;
+    lv_timer_del(s_gate);
+    s_gate = nullptr;
+}
+
 static void splash_delete() {
     if (!s_root) return;
+    gate_stop();                         // must die first: it dereferences s_status
     lv_obj_del(s_root);                  // takes every child and their anims with it
     s_root = nullptr;
+    s_status = nullptr;
 }
 
 static void exit_done_cb(lv_anim_t*) { splash_delete(); }
 
 static void exit_exec_cb(void* obj, int32_t v) { lv_obj_set_y((lv_obj_t*)obj, v); }
 
-static void hold_then_exit_cb(lv_anim_t*) {
+static void start_exit(int delay_ms) {
     if (!s_root) return;
-    lv_obj_add_flag(s_gantry, LV_OBJ_FLAG_HIDDEN);   // cut done, tool retracts
-    lv_obj_add_flag(s_carriage, LV_OBJ_FLAG_HIDDEN);
+    gate_stop();
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_root);
     lv_anim_set_exec_cb(&a, exit_exec_cb);
     lv_anim_set_values(&a, 0, -LV_VER_RES);
     lv_anim_set_time(&a, EXIT_MS);
-    lv_anim_set_delay(&a, HOLD_MS);
+    lv_anim_set_delay(&a, delay_ms);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
     lv_anim_set_ready_cb(&a, exit_done_cb);
     lv_anim_start(&a);
+}
+
+// Polled rather than event-driven: the three things being waited on (link up,
+// first report, timeout) are already polled elsewhere, and an observer registry
+// for one consumer would be the only one in the codebase.
+static void gate_cb(lv_timer_t*) {
+    if (!s_root || !s_status) return;
+
+    if (model_dro_ever() && caps_settled()) {
+        // The machine has described itself; the shell underneath has already
+        // reflowed to its axis count. Reveal a correct UI, not a corrected one.
+        lv_label_set_text(s_status, "");
+        start_exit(0);
+        return;
+    }
+
+    if (lv_tick_elaps(s_gate_start) > (uint32_t)GATE_TIMEOUT_MS) {
+        // Give up rather than strand the operator. The console comes up on its
+        // compiled defaults with NO LINK showing, which is the honest state.
+        lv_label_set_text(s_status, "no controller - starting anyway");
+        start_exit(700);
+        return;
+    }
+
+    lv_label_set_text(s_status, state == Disconnected
+                                    ? "waiting for controller - tap to skip"
+                                    : "reading machine config - tap to skip");
+}
+
+static void hold_then_exit_cb(lv_anim_t*) {
+    if (!s_root) return;
+    lv_obj_add_flag(s_gantry, LV_OBJ_FLAG_HIDDEN);   // cut done, tool retracts
+    lv_obj_add_flag(s_carriage, LV_OBJ_FLAG_HIDDEN);
+
+    // Already know the machine: keep the original timing exactly.
+    if (model_dro_ever() && caps_settled()) { start_exit(HOLD_MS); return; }
+
+    s_gate_start = lv_tick_get();
+    s_gate = lv_timer_create(gate_cb, 100, nullptr);
 }
 
 static void sweep_exec_cb(void*, int32_t v) {
@@ -99,6 +165,15 @@ void splash_show() {
     lv_obj_align(rule, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(rule, C_LINE, 0);
     lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
+
+    // Status sits on s_root rather than inside the reveal clip: it has to stay
+    // readable while the plate slides, and it is boot information, not part of
+    // the wordmark being machined out.
+    s_status = lv_label_create(s_root);
+    lv_label_set_text(s_status, "");
+    lv_obj_set_style_text_font(s_status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_status, C_DIM, 0);
+    lv_obj_align(s_status, LV_ALIGN_BOTTOM_MID, 0, -U * 4);
 
     // The gantry: a vertical accent line at the cut front, carriage riding it.
     s_gantry = lv_obj_create(s_root);

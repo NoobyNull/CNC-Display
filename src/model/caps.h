@@ -29,6 +29,10 @@ enum cap_state_t : uint8_t {
     CAP_PRESENT,       // reported, configured
 };
 
+// FluidNC v4 defines Macro0..Macro3.
+#define CAPS_MACRO_MAX 4
+#define CAPS_MACRO_NAME_MAX 24
+
 void caps_reset();
 
 // Sends $CD. The reply is consumed by caps_feed_line(), not the console.
@@ -51,6 +55,15 @@ void caps_poll();
 // against its own last-seen value — not a take-once dirty flag, which only the
 // first caller of the tick would ever see.
 uint32_t caps_generation();
+
+// True once a $CD dump has completed or been given up on. The boot splash
+// waits on this so the page set is decided before the UI is shown.
+bool caps_settled();
+
+// Non-empty macro slots only, in controller order. count is 0..CAPS_MACRO_MAX.
+size_t      caps_macro_count();
+const char* caps_macro_name(size_t i);   // the key, e.g. "Macro0"
+const char* caps_macro_body(size_t i);   // the g-code, for the button subtitle
 
 cap_state_t caps_homing();
 cap_state_t caps_probe();

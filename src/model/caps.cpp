@@ -16,6 +16,11 @@ static cap_state_t s_door        = CAP_UNKNOWN;
 static cap_state_t s_estop       = CAP_UNKNOWN;
 
 static uint32_t s_gen = 0;
+static bool     s_settled = false;
+
+static size_t s_mcount = 0;
+static char   s_mname[CAPS_MACRO_MAX][CAPS_MACRO_NAME_MAX];
+static char   s_mbody[CAPS_MACRO_MAX][CAPS_MACRO_NAME_MAX];
 
 struct axis_t {
     char  letter;
@@ -41,10 +46,17 @@ void caps_reset() {
     memset(s_axes, 0, sizeof(s_axes));
     s_dumping = false;
     s_section[0] = 0;
+    s_settled = false;
+    s_mcount = 0;
     s_gen++;
 }
 
 uint32_t caps_generation() { return s_gen; }
+bool     caps_settled()    { return s_settled; }
+
+size_t      caps_macro_count() { return s_mcount; }
+const char* caps_macro_name(size_t i) { return i < s_mcount ? s_mname[i] : ""; }
+const char* caps_macro_body(size_t i) { return i < s_mcount ? s_mbody[i] : ""; }
 
 cap_state_t caps_homing()      { return s_homing; }
 cap_state_t caps_probe()       { return s_probe; }
@@ -127,6 +139,7 @@ void caps_poll() {
         s_dumping = false;
         s_probe = s_toolsetter = s_flood = s_mist = CAP_UNKNOWN;
         s_door = s_estop = CAP_UNKNOWN;
+        s_settled = true;      // gave up: the splash gate must not wait for ever
         s_gen++;
     }
 }
@@ -172,6 +185,7 @@ void caps_request_config() {
     // reached by waiting for a line that will not come.
     s_probe = s_toolsetter = s_flood = s_mist = CAP_ABSENT;
     s_door = s_estop = CAP_ABSENT;
+    s_mcount = 0;              // empty slots are the common case, dump proves otherwise
     send_line("$CD");
 }
 
@@ -223,6 +237,7 @@ bool caps_feed_line(const char* line) {
     // belongs to the console again.
     if (strcmp(line, "ok") == 0 || strncmp(line, "error", 5) == 0) {
         s_dumping = false;
+        s_settled = true;
         s_gen++;
         return true;
     }
@@ -243,6 +258,34 @@ bool caps_feed_line(const char* line) {
     } else if (strcmp(s_section, "coolant") == 0) {
         if ((v = yaml_value(line, "flood_pin"))) s_flood = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
         if ((v = yaml_value(line, "mist_pin")))  s_mist  = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
+    } else if (strcmp(s_section, "macros") == 0) {
+        const char* sp = line;
+        while (*sp == ' ') sp++;
+        if (strncmp(sp, "Macro", 5) == 0) {
+            const char* colon = strchr(sp, ':');
+            if (colon && s_mcount < CAPS_MACRO_MAX) {
+                char name[CAPS_MACRO_NAME_MAX];
+                size_t n = (size_t)(colon - sp);
+                if (n >= sizeof(name)) n = sizeof(name) - 1;
+                memcpy(name, sp, n); name[n] = 0;
+                const char* val = colon + 1;
+                while (*val == ' ') val++;
+                // Values can be quoted; the subtitle wants the bare g-code.
+                char body[CAPS_MACRO_NAME_MAX];
+                size_t bn = strlen(val);
+                while (bn && (val[bn-1] == ' ' || val[bn-1] == '\r')) bn--;
+                if (bn >= 2 && ((val[0] == '\'' && val[bn-1] == '\'') ||
+                                (val[0] == '"'  && val[bn-1] == '"'))) { val++; bn -= 2; }
+                if (bn >= sizeof(body)) bn = sizeof(body) - 1;
+                memcpy(body, val, bn); body[bn] = 0;
+                // Empty slots must not become buttons.
+                if (body[0]) {
+                    snprintf(s_mname[s_mcount], CAPS_MACRO_NAME_MAX, "%s", name);
+                    snprintf(s_mbody[s_mcount], CAPS_MACRO_NAME_MAX, "%s", body);
+                    s_mcount++;
+                }
+            }
+        }
     } else if (strcmp(s_section, "control") == 0) {
         if ((v = yaml_value(line, "safety_door_pin"))) s_door  = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
         if ((v = yaml_value(line, "estop_pin")))       s_estop = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;

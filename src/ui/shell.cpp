@@ -2,12 +2,15 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "ui/view_expanded.h"
+#include "ui/goto_popup.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
+#include "model/caps.h"
 #include "model/model_compat.h"
 #include "model/offsets.h"
-#include "model/caps.h"
+#include "model/settings.h"
 #include "transport/transport.h"
+#include "hw/touch.h"
 #include "GrblParserC.h"
 #include "e4math.h"
 #include <stdio.h>
@@ -31,6 +34,8 @@ static_assert(NAV_VISIBLE >= 1, "rail is too short for a single nav slot");
 static const char* NAV_LABEL[NAV_COUNT] = {
     "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "MOTION", "CAL", "DIAG", "SETUP"
 };
+static_assert(sizeof(NAV_LABEL) / sizeof(NAV_LABEL[0]) == PAGE_COUNT,
+              "every page needs a rail label");
 
 static lv_obj_t* s_scr;
 static lv_obj_t* s_rail;
@@ -106,49 +111,126 @@ static const char* state_word(state_t s) {
 }
 
 // ---- nav -------------------------------------------------------------------
-
-// Whether this machine has the hardware a page is about.
+// Which optional pages the rail shows is the operator's choice, set in
+// Setup, not a deduction from the controller's config.
 //
-// Unavailable pages stay REACHABLE, just visibly inert. Removing them would
-// only move the question — "where did PROBE go?" is worse than a greyed PROBE
-// that explains itself when opened.
-static bool page_available(int idx) {
-    switch (idx) {
-        case PAGE_HOME:  return cap_ok(caps_homing());
-        case PAGE_PROBE: return cap_ok(caps_probe());
+// This used to hide pages automatically from the config dump. It worked, but
+// it made the rail change shape for reasons that were invisible from the
+// panel: a page vanishing because a dump arrived slightly differently is not
+// something anyone can debug standing at a machine. A checkbox is a thing you
+// can look at. caps still drives the macro names, where the config genuinely
+// is the only source.
+static bool page_available(page_id_t id) {
+    switch (id) {
+        case PAGE_PROBE:
+        case PAGE_MACRO:
+        case PAGE_HOME:
+        case PAGE_OFFSETS:
+        case PAGE_CAL:   return settings_page_enabled((int)id);
+        // JOG, RUN, SETUP and DIAG are not optional: jogging and running are
+        // the job, and the other two are how a panel gets diagnosed.
         default:         return true;
     }
 }
 
+// Two rails, not one list.
+//
+// RUN mode is what an operator standing at a moving machine needs, and nothing
+// else: jog, home, probe, run a file, fire a macro — each present only if this
+// machine actually has it. CONFIG mode holds everything you set up once and
+// then stop looking at: panel settings, work offsets, calibration, diagnostics.
+//
+// Mixing them cost rail slots that operation needed and put a settings screen
+// one mistaken tap from a running job.
+enum ui_mode_t { MODE_RUN = 0, MODE_CONFIG };
+
+// -1 is the EXIT affordance rather than a page. Config mode must always show a
+// way out on the glass: the gesture toggles both ways, but a gesture nobody
+// remembers on a touch controller with a known stall is not an escape route.
+#define NAV_EXIT (-1)
+
+static const int RUN_PAGES[]    = { PAGE_JOG, PAGE_HOME, PAGE_PROBE, PAGE_RUN, PAGE_MACRO };
+static const int CONFIG_PAGES[] = { PAGE_SETUP, PAGE_OFFSETS, PAGE_CAL, PAGE_MOTION, PAGE_DIAG, NAV_EXIT };
+
+static const int RUN_N    = (int)(sizeof(RUN_PAGES) / sizeof(RUN_PAGES[0]));
+static const int CONFIG_N = (int)(sizeof(CONFIG_PAGES) / sizeof(CONFIG_PAGES[0]));
+
+static ui_mode_t s_mode = MODE_RUN;
+
+// Rail slot -> page, rebuilt whenever the mode or capabilities change. Without
+// this indirection the rail indexes pages directly and a hidden page leaves a
+// hole in the middle of the strip.
+static int s_visible[PAGE_COUNT + 1];
+static int s_visible_n = 0;
+
+static void nav_rebuild() {
+    const int* src = s_mode == MODE_RUN ? RUN_PAGES : CONFIG_PAGES;
+    const int  n   = s_mode == MODE_RUN ? RUN_N     : CONFIG_N;
+    s_visible_n = 0;
+    for (int i = 0; i < n; i++) {
+        if (src[i] == NAV_EXIT || page_available((page_id_t)src[i]))
+            s_visible[s_visible_n++] = src[i];
+    }
+}
+
+static int nav_slot_of(page_id_t id) {
+    for (int i = 0; i < s_visible_n; i++) if (s_visible[i] == (int)id) return i;
+    return -1;
+}
+
+static void shell_set_mode(ui_mode_t m);
+
+static int nav_max_start() {
+    int m = s_visible_n - NAV_VISIBLE;
+    return m > 0 ? m : 0;
+}
+
 static void nav_refresh() {
+    if (s_nav_start > nav_max_start()) s_nav_start = nav_max_start();
+
     for (int i = 0; i < NAV_VISIBLE; i++) {
         int idx = s_nav_start + i;
-        lv_label_set_text(s_nav_lbl[i], NAV_LABEL[idx]);
-        bool on = (idx == (int)s_page);
-        bool have = page_available(idx);
+        if (idx >= s_visible_n) {
+            // Fewer pages than rail slots: blank the leftovers rather than
+            // repeating the last label.
+            lv_label_set_text(s_nav_lbl[i], "");
+            lv_obj_set_style_bg_color(s_nav_btn[i], C_BG, 0);
+            continue;
+        }
+        int pg = s_visible[idx];
+        if (pg == NAV_EXIT) {
+            lv_label_set_text(s_nav_lbl[i], "EXIT");
+            lv_obj_set_style_bg_color(s_nav_btn[i], C_RAISE, 0);
+            lv_obj_set_style_text_color(s_nav_lbl[i], C_WARN, 0);
+            continue;
+        }
+        lv_label_set_text(s_nav_lbl[i], NAV_LABEL[pg]);
+        bool on = (pg == (int)s_page);
         lv_obj_set_style_bg_color(s_nav_btn[i], on ? C_ACCENT : C_SURFACE, 0);
-        lv_obj_set_style_text_color(s_nav_lbl[i],
-                                    on ? C_BG : (have ? C_DIM : C_LINE), 0);
+        lv_obj_set_style_text_color(s_nav_lbl[i], on ? C_BG : C_DIM, 0);
     }
     // Grey out at each end so the rail never lies about whether there is more.
     lv_obj_set_style_text_color(s_rail_up,
         s_nav_start > 0 ? C_DIM : C_LINE, 0);
     lv_obj_set_style_text_color(s_rail_down,
-        s_nav_start < NAV_COUNT - NAV_VISIBLE ? C_DIM : C_LINE, 0);
+        s_nav_start < nav_max_start() ? C_DIM : C_LINE, 0);
 }
 
 static void nav_scroll_cb(lv_event_t* e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
     int n = s_nav_start + dir;
     if (n < 0) n = 0;
-    if (n > NAV_COUNT - NAV_VISIBLE) n = NAV_COUNT - NAV_VISIBLE;
+    if (n > nav_max_start()) n = nav_max_start();
     s_nav_start = n;
     nav_refresh();
 }
 
 static void nav_pick_cb(lv_event_t* e) {
     int slot = (int)(intptr_t)lv_event_get_user_data(e);
-    shell_show_page((page_id_t)(s_nav_start + slot));
+    int idx  = s_nav_start + slot;
+    if (idx < 0 || idx >= s_visible_n) return;   // blank slot
+    if (s_visible[idx] == NAV_EXIT) { shell_set_mode(MODE_RUN); return; }
+    shell_show_page((page_id_t)s_visible[idx]);
 }
 
 // Setup and Diag are the two pages with no business near a moving machine, so
@@ -172,10 +254,45 @@ void shell_show_page(page_id_t id) {
         if (i == (int)id) lv_obj_clear_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
         else              lv_obj_add_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
     }
-    // Keep the active item on screen when navigated to programmatically.
-    if ((int)id < s_nav_start)                   s_nav_start = (int)id;
-    if ((int)id > s_nav_start + NAV_VISIBLE - 1) s_nav_start = (int)id - NAV_VISIBLE + 1;
+    // Keep the active item on screen when navigated to programmatically. The
+    // rail scrolls in slot space, not page space, so the page has to be looked
+    // up in the visible list first.
+    int slot = nav_slot_of(id);
+    if (slot >= 0) {
+        if (slot < s_nav_start)                   s_nav_start = slot;
+        if (slot > s_nav_start + NAV_VISIBLE - 1) s_nav_start = slot - NAV_VISIBLE + 1;
+    }
     nav_refresh();
+}
+
+// Entering config mode lands on its first page; leaving returns to JOG, which
+// is the page an operator wants when they put the panel back to work.
+static void shell_set_mode(ui_mode_t m) {
+    if (m == s_mode) return;
+    s_mode = m;
+    s_nav_start = 0;
+    nav_rebuild();
+    shell_show_page(m == MODE_CONFIG ? PAGE_SETUP : PAGE_JOG);
+}
+
+// Two fingers held anywhere opens or closes config mode. Held, not tapped: a
+// palm or a knuckle brushing the glass registers two points for a moment, and
+// that must not drop a running job's operator into a settings screen.
+// Capabilities arrive after the link comes up, so the page set can change while
+// the console is running. Called from the tick; cheap when nothing moved.
+static void nav_sync_caps() {
+    static int s_sig = -1;
+    // Tracks the user's page settings, not the capability flags.
+    int sig = 0;
+    for (int i = 0; i < PAGE_COUNT; i++) sig |= (page_available((page_id_t)i) ? 1 : 0) << i;
+    if (sig == s_sig) return;
+    s_sig = sig;
+
+    nav_rebuild();
+    // If the open page just went away, do not leave the operator staring at a
+    // page with no rail entry.
+    if (nav_slot_of(s_page) < 0) shell_show_page(PAGE_JOG);
+    else                         nav_refresh();
 }
 
 // ---- safety bar: on every screen, always the same place ---------------------
@@ -309,13 +426,14 @@ static void build_dro(lv_obj_t* parent) {
     lv_obj_set_style_border_width(s_state_chip, 0, 0);
     s_state_lbl = w_label(s_state_chip, "NO LINK", &lv_font_montserrat_14, C_DIM);
     lv_obj_center(s_state_lbl);
-    // One tap into Setup from any running page. The chip is always on screen
-    // (every DRO page has it) and Setup hides the DRO, so it cannot re-fire
-    // from inside Setup. The GT911 driver is single-point, so any gesture
-    // fancier than a plain tap is unreliable by construction.
+    // One tap into config mode (lands on Setup) from any running page. This
+    // replaces the old two-finger hold outright: the GT911 driver reports a
+    // second point too unreliably to hang a mode switch off it, and the chip
+    // is on every DRO page. Setup hides the DRO, so it cannot re-fire from
+    // inside; the rail's EXIT slot is the way back.
     lv_obj_add_flag(s_state_chip, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_state_chip, [](lv_event_t*) {
-        shell_show_page(PAGE_SETUP);
+        shell_set_mode(MODE_CONFIG);
     }, LV_EVENT_CLICKED, nullptr);
 
     s_wcs_lbl = w_label(sc, "G54", &lv_font_montserrat_12, C_ACCENT);
@@ -341,6 +459,13 @@ static void build_dro(lv_obj_t* parent) {
         w_label(c, nm, &lv_font_montserrat_12, C_DIM);
         s_axis_work[i] = w_label(c, "0.000", &lv_font_montserrat_40, C_TEXT);
         s_axis_mach[i] = w_label(c, "M 0.000", &lv_font_montserrat_12, C_DIM);
+        // The readout doubles as the target picker: tap an axis to type an
+        // absolute coordinate and jog there. The step selector caps at 10mm,
+        // which made a long traverse dozens of presses.
+        lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(c, [](lv_event_t* e) {
+            goto_open((int)(intptr_t)lv_event_get_user_data(e));
+        }, LV_EVENT_CLICKED, (void*)(intptr_t)i);
         s_axis_cell[i] = c;
     }
     dro_layout(3);   // until FluidNC says otherwise
@@ -428,6 +553,7 @@ void shell_build() {
     }
 
     expanded_build();
+    nav_rebuild();
     shell_show_page(PAGE_JOG);
     nav_refresh();
 }
@@ -479,17 +605,12 @@ void shell_tick() {
     // Recompute what the machine can do before anything paints, so a settings
     // or config dump that just landed is reflected on this frame.
     caps_poll();
-    static uint32_t caps_seen = (uint32_t)-1;
-    if (caps_seen != caps_generation()) {
-        caps_seen = caps_generation();
-        nav_refresh();
-    }
+    nav_sync_caps();
     // Both re-gate their own controls and are cheap no-ops until the
     // capability model actually changes, so they run regardless of which page
     // is on screen — a page must be right the moment it is shown.
     page_home_tick();
     page_probe_tick();
-
     if (model_take_state() || take_redisplay()) {
         lv_label_set_text(s_state_lbl, state_word(state));
         lv_obj_set_style_bg_color(s_state_chip, state_colour(state), 0);
@@ -536,6 +657,7 @@ void shell_tick() {
         case PAGE_SETUP:   page_setup_tick();   break;
         case PAGE_DIAG:    page_diag_tick();    break;
         case PAGE_CAL:     page_cal_tick();     break;
+        case PAGE_MACRO:   page_macro_tick();   break;
         case PAGE_MOTION:  page_motion_tick();  break;
         default: break;
     }

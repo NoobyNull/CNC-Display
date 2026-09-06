@@ -12,6 +12,7 @@
 //   250     activate the touch controller (pulses TP_RST)
 // Everything else is undocumented; nothing here sends it.
 bool stc8_init();                    // false if 0x30 never answers
+bool stc8_present();                 // latched result of stc8_init()
 bool stc8_cmd(uint8_t cmd);          // raw command, mutex-protected
 void stc8_backlight(uint8_t level);  // 0 = off, 255 = max (scaled+inverted to 245..0)
 void stc8_display(bool on);          // blanking: off sends 245, on restores the last level

@@ -239,6 +239,7 @@ void loop() {
     vib_guard();
     upload_poll();
     prime_link_if_up();
+    caps_poll();
     link_watchdog();
     service_action();
     lv_timer_handler();

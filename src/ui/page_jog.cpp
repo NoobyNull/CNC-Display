@@ -3,6 +3,9 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "model/fnc_settings.h"
+#include "model/settings.h"
+#include "ui/goto_popup.h"
 #include "GrblParserC.h"
 #include <Arduino.h>
 #include <stdio.h>
@@ -14,15 +17,23 @@
 static const lv_coord_t PAD    = CONTENT_H - U * 2;
 static const lv_coord_t ZCOL_W = U * 11;   // 88
 
-static const float STEPS[4] = { 0.01f, 0.1f, 1.0f, 10.0f };
-static int s_step = 2;
-static lv_obj_t* s_step_btn[4];
+// The -/+ ladder. Not the set of legal sizes: tapping the value types any
+// number, and the ladder is only what the buttons walk through.
+static const float STEPS[] = { 0.001f, 0.01f, 0.1f, 1.0f, 10.0f, 100.0f };
+static const int   STEPS_N = (int)(sizeof(STEPS) / sizeof(STEPS[0]));
+// The step is a VALUE, not an index into the ladder — a custom size typed on
+// the keypad is not on the ladder at all, and every safety test below has to
+// ask how far the axis will move rather than which button is lit.
+static float s_step_mm = 1.0f;
+static lv_obj_t* s_step_dn;
+static lv_obj_t* s_step_up;
 static lv_obj_t* s_mid_lbl;
+static lv_obj_t* s_step_val;
+static lv_obj_t* s_step_note;
 
 // Continuous jog is FluidDial's idiom (MultiJogScene::start_button_jog): one
 // long move -- a fixed distance far beyond any travel -- ended by JogCancel on
-// release. Feed follows the selected step, 5x the step per second, so the
-// selector picks creep-vs-traverse and every step size has hold-to-jog.
+// release, at whatever continuous_feed() says below.
 //
 // History: this used to re-issue 150ms chunks instead, because early bring-up
 // saw the 0x85 JogCancel byte ignored by FluidNC v4.0.4. That testing was done
@@ -59,8 +70,42 @@ static void jog_send(const dir_t* d, float feed_mm_min, float dist_mm) {
     send_jog_line(buf);
 }
 
-// FluidDial's "5x the highlighted distance in 1 second".
-static float continuous_feed() { return STEPS[s_step] * 300.0f; }
+// Used only until the settings dump lands. Deliberately slow: an unknown
+// machine should creep, not traverse.
+static const float JOG_FALLBACK_RATE = 500.0f;
+
+static float axis_max_rate(int axis) {
+    char key[FS_NAME_MAX];
+    snprintf(key, sizeof(key), "Grbl/MaxRate/%c", axisNumToChar(axis));
+    for (size_t i = 0; i < fncset_count(); i++) {
+        const fnc_setting_t* st = fncset_at(i);
+        if (st && strcmp(st->name, key) == 0) {
+            float v = (float)atof(st->value);
+            if (v > 0.0f) return v;
+        }
+    }
+    return JOG_FALLBACK_RATE;
+}
+
+// Feed is a percentage of what the machine says it can do, not a multiple of
+// the step size.
+//
+// It used to be STEPS[s_step] * 300 -- FluidDial's "5x the step per second" --
+// which made the step selector secretly a speed selector and pinned 1mm jogging
+// to 300mm/min. Now the step sets distance and settings_jog_pct() sets speed,
+// which are genuinely different things.
+//
+// The slowest involved axis governs: a diagonal is coordinated motion, so
+// feeding it Z's rate would ask X to exceed its own maximum, and the planner
+// would clip the whole move to something nobody chose.
+static float continuous_feed(const dir_t* d) {
+    float rate = 0.0f;
+    if (d->dx) { float r = axis_max_rate(0); if (!rate || r < rate) rate = r; }
+    if (d->dy) { float r = axis_max_rate(1); if (!rate || r < rate) rate = r; }
+    if (d->dz) { float r = axis_max_rate(2); if (!rate || r < rate) rate = r; }
+    if (rate <= 0.0f) rate = JOG_FALLBACK_RATE;
+    return rate * (float)settings_jog_pct() / 100.0f;
+}
 
 // Resend 0x85 until the controller confirms it stopped: keep pumping while the
 // state is still Jog, for at least CANCEL_MIN_MS (a status report is ~75ms out,
@@ -82,7 +127,7 @@ static void jog_hold(lv_event_t* e) {
     if (!d || (!d->dx && !d->dy && !d->dz)) return;
     if (s_jogging || s_cancel_timer) return;   // never stack a move on a cancel in flight
     s_jogging = true;
-    jog_send(d, continuous_feed(), CONT_DIST_MM);
+    jog_send(d, continuous_feed(d), CONT_DIST_MM);
 }
 
 static bool end_continuous() {
@@ -96,15 +141,16 @@ static bool end_continuous() {
 }
 
 // The discrete step fires on RELEASE, not press. On press it would land right
-// before a hold's continuous move -- a surprise 10mm lunge at the coarse step
-// -- and it is delivered whole, never truncated: the step is the number you
-// are trusting for a touch-off.
+// before a hold's continuous move -- a surprise lunge at a coarse step -- and
+// it is delivered whole, never truncated: the step is the number you are
+// trusting for a touch-off. Same speed law as the hold: the machine's own
+// max rate scaled by jog%%, not a compiled-in feed.
 static void jog_stop(lv_event_t* e) {
     if (end_continuous()) return;       // a hold ends with no extra step
     if (!e) return;
     const dir_t* d = (const dir_t*)lv_event_get_user_data(e);
     if (!d || (!d->dx && !d->dy && !d->dz)) return;
-    jog_send(d, 2000.0f, STEPS[s_step]);
+    jog_send(d, continuous_feed(d), s_step_mm);
 }
 
 // Press-lost is the finger sliding off the key onto the bezel: cancel a running
@@ -130,25 +176,104 @@ static void attach_jog(lv_obj_t* btn, const dir_t* d) {
     }
 }
 
-static void step_apply(int idx) {
-    s_step = idx;
-    for (int i = 0; i < 4; i++) {
-        lv_obj_set_style_bg_color(s_step_btn[i], i == s_step ? C_ACCENT : C_RAISE, 0);
+// LVGL's symbol font has no diagonal arrow, and the montserrat subset carries
+// no Unicode one either — U+2196 would render as a missing-glyph box, the same
+// way the em dashes did. So the four corners draw their own: a shaft along the
+// travel direction and a two-barb head at the tip.
+//
+// Points must outlive the call: lv_line_set_points() keeps the pointer rather
+// than copying, so these are static per corner and never rebuilt.
+static lv_point_t s_diag_head[4][3];
+static lv_point_t s_diag_shaft[4][2];
+static int        s_diag_n = 0;
+
+static void diag_arrow(lv_obj_t* parent, const dir_t* d) {
+    if (s_diag_n >= 4) return;
+    const int k = s_diag_n++;
+
+    // Sized off the caption font the cardinal chevrons are drawn in, so the two
+    // stay matched if that font ever changes. Not the grid quantum: at U*4 these
+    // came out roughly double the weight of the glyphs beside them, because an
+    // arrow spans its box corner to corner — 1.41x the box edge — while a glyph
+    // sits inside its own. Scaling by ~2/3 cancels that out.
+    const lv_coord_t S = (lv_coord_t)(lv_font_montserrat_14.line_height * 2 / 3);
+    const lv_coord_t b = S / 2;
+
+    // dy is +1 for "up the table", and screen y grows downward, so it inverts.
+    const lv_coord_t tipx  = d->dx > 0 ? S : 0;
+    const lv_coord_t tipy  = d->dy > 0 ? 0 : S;
+    const lv_coord_t tailx = S - tipx;
+    const lv_coord_t taily = S - tipy;
+
+    s_diag_shaft[k][0] = { tailx, taily };
+    s_diag_shaft[k][1] = { tipx,  tipy  };
+
+    // Barbs run back from the tip along each axis, giving a corner-style head
+    // that stays legible at this size where a narrow V does not.
+    s_diag_head[k][0] = { (lv_coord_t)(tipx + (tailx > tipx ? b : -b)), tipy };
+    s_diag_head[k][1] = { tipx, tipy };
+    s_diag_head[k][2] = { tipx, (lv_coord_t)(tipy + (taily > tipy ? b : -b)) };
+
+    lv_obj_t* box = lv_obj_create(parent);
+    w_flatten(box);
+    lv_obj_set_size(box, S, S);
+    lv_obj_center(box);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);   // the press belongs to the button
+
+    for (int j = 0; j < 2; j++) {
+        lv_obj_t* ln = lv_line_create(box);
+        lv_line_set_points(ln, j ? s_diag_head[k] : s_diag_shaft[k], j ? 3 : 2);
+        lv_obj_set_style_line_width(ln, 2, 0);   // matches the glyph stroke
+        lv_obj_set_style_line_color(ln, C_TEXT, 0);
+        lv_obj_set_style_line_rounded(ln, true, 0);
     }
-    char b[12];
-    snprintf(b, sizeof(b), "%g", (double)STEPS[s_step]);
-    lv_label_set_text(s_mid_lbl, b);
 }
 
+static void step_apply(float mm) {
+    if (mm < STEPS[0])            mm = STEPS[0];
+    if (mm > STEPS[STEPS_N - 1])  mm = STEPS[STEPS_N - 1];
+    s_step_mm = mm;
+
+    char b[16];
+    snprintf(b, sizeof(b), "%g", (double)s_step_mm);
+    lv_label_set_text(s_step_val, b);
+    lv_label_set_text(s_mid_lbl, b);
+
+    lv_label_set_text(s_step_note, "hold to jog");
+}
+
+// Walk the ladder. From a custom value off the ladder, step to the next rung
+// in that direction rather than snapping to the nearest — a typed 250 then a
+// tap of "-" should go down, not jump up to 100.
 static void step_cb(lv_event_t* e) {
-    step_apply((int)(intptr_t)lv_event_get_user_data(e));
+    const int dir = (int)(intptr_t)lv_event_get_user_data(e);
+    if (dir < 0) {
+        for (int i = STEPS_N - 1; i >= 0; i--)
+            if (STEPS[i] < s_step_mm - 1e-6f) { step_apply(STEPS[i]); return; }
+        step_apply(STEPS[0]);
+    } else {
+        for (int i = 0; i < STEPS_N; i++)
+            if (STEPS[i] > s_step_mm + 1e-6f) { step_apply(STEPS[i]); return; }
+        step_apply(STEPS[STEPS_N - 1]);
+    }
 }
 
 // The dead centre of the pad was a label. It is the one spot a thumb can reach
 // without leaving the pad, so tapping it walks the step by a factor of ten and
 // wraps: 0.01 -> 0.1 -> 1 -> 10 -> 0.01.
+// Tapping the value types any size, so the ladder is a convenience rather than
+// the limit. Clamped by step_apply().
+static void step_custom_cb(lv_event_t*) {
+    numpad_open("JOG STEP", "millimetres per press", s_step_mm,
+                [](float mm) { step_apply(mm); });
+}
+
 static void step_cycle_cb(lv_event_t*) {
-    step_apply((s_step + 1) % 4);
+    // Wraps, unlike the -/+ buttons: this is the thumb-reachable shortcut, and
+    // a control that silently stops at the end reads as broken.
+    for (int i = 0; i < STEPS_N; i++)
+        if (STEPS[i] > s_step_mm + 1e-6f) { step_apply(STEPS[i]); return; }
+    step_apply(STEPS[0]);
 }
 
 static void zero_cb(lv_event_t* e) {
@@ -178,10 +303,13 @@ void page_jog_build(lv_obj_t* p) {
     lv_obj_set_grid_dsc_array(pad, pc, pr);
     lv_obj_set_layout(pad, LV_LAYOUT_GRID);
 
+    // Corners are diagonals and are left blank here — they get a drawn arrow
+    // below. They used to wear the same vertical chevron as the cardinals,
+    // which made a diagonal move indistinguishable from a straight one.
     static const char* GLYPH[9] = {
-        LV_SYMBOL_UP,   LV_SYMBOL_UP,   LV_SYMBOL_UP,
+        "",             LV_SYMBOL_UP,   "",
         LV_SYMBOL_LEFT, "",             LV_SYMBOL_RIGHT,
-        LV_SYMBOL_DOWN, LV_SYMBOL_DOWN, LV_SYMBOL_DOWN
+        "",             LV_SYMBOL_DOWN, ""
     };
     for (int i = 0; i < 9; i++) {
         if (i == 4) {
@@ -204,6 +332,7 @@ void page_jog_build(lv_obj_t* p) {
         }
         lv_obj_t* b = w_button(pad, GLYPH[i], nullptr, C_RAISE, C_TEXT, nullptr, nullptr);
         lv_obj_set_grid_cell(b, LV_GRID_ALIGN_STRETCH, i % 3, 1, LV_GRID_ALIGN_STRETCH, i / 3, 1);
+        if (!GLYPH[i][0]) diag_arrow(b, &PADDIR[i]);
         attach_jog(b, &PADDIR[i]);
     }
 
@@ -235,13 +364,28 @@ void page_jog_build(lv_obj_t* p) {
     lv_obj_set_size(steps, LV_PCT(100), U * 8);
     lv_obj_set_flex_flow(steps, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(steps, U, 0);
-    static const char* SLBL[4] = { "0.01", "0.1", "1.0", "10" };
-    for (int i = 0; i < 4; i++) {
-        s_step_btn[i] = w_button(steps, SLBL[i], "mm", C_RAISE, C_TEXT,
-                                 step_cb, (void*)(intptr_t)i);
-        lv_obj_set_flex_grow(s_step_btn[i], 1);
-        lv_obj_set_height(s_step_btn[i], LV_PCT(100));
-    }
+    // Four fixed sizes became a ladder you walk. The old row could only ever
+    // offer what was compiled into it, which is why crossing 400mm meant forty
+    // presses of "10".
+    s_step_dn = w_button(steps, "-", nullptr, C_RAISE, C_ACCENT,
+                         step_cb, (void*)(intptr_t)-1);
+    lv_obj_set_width(s_step_dn, TOUCH_HOLD);
+    lv_obj_set_height(s_step_dn, LV_PCT(100));
+
+    lv_obj_t* mid = w_panel(steps, C_SURFACE);
+    lv_obj_set_flex_grow(mid, 1);
+    lv_obj_set_height(mid, LV_PCT(100));
+    lv_obj_add_flag(mid, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(mid, step_custom_cb, LV_EVENT_CLICKED, nullptr);
+    s_step_val = w_label(mid, "1", &lv_font_montserrat_28, C_TEXT);
+    lv_obj_align(s_step_val, LV_ALIGN_CENTER, 0, -6);
+    s_step_note = w_label(mid, "", &lv_font_montserrat_10, C_DIM);
+    lv_obj_align(s_step_note, LV_ALIGN_BOTTOM_MID, 0, -4);
+
+    s_step_up = w_button(steps, "+", nullptr, C_RAISE, C_ACCENT,
+                         step_cb, (void*)(intptr_t)1);
+    lv_obj_set_width(s_step_up, TOUCH_HOLD);
+    lv_obj_set_height(s_step_up, LV_PCT(100));
 
     lv_obj_t* zeros = lv_obj_create(rc);
     w_flatten(zeros);
@@ -267,13 +411,14 @@ void page_jog_build(lv_obj_t* p) {
     lv_obj_set_grid_cell(b2, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
     lv_obj_set_grid_cell(b3, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
 
-    step_apply(s_step);   // paints the selector and the centre from one place
+    step_apply(s_step_mm);   // paints the selector and the centre from one place
 }
 
 // A jog key with no controller behind it is not a harmless no-op. send_jog_line()
 // is ack-gated on UART, so every press parks in fnc_send_line()'s `while
 // (_ackwait)` until the timeout expires -- inside the same lv_timer_handler()
-// pass that reads touch, starving the input read and the release event with it.
+// pass that reads touch. Held past 400ms it is worse:
+// the release that would stop the jog can starve behind the blocked send.
 //
 // lv_obj_hit_test() rejects LV_STATE_DISABLED outright, so disabling the keys
 // stops the press ever reaching an event handler -- no press, no long press, no

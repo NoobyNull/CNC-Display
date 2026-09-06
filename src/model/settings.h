@@ -35,5 +35,19 @@ void settings_set_update_url(const char* url);
 // Minutes of no touch before the backlight goes off, 0..60. 0 = never blank,
 // and that is the default: a panel that goes dark unasked next to a running
 // spindle is the wrong surprise, so this is opt-in.
+// Which optional pages the rail shows. Held as a bitmask over page_id_t so one
+// NVS key covers all of them, defaulting to every page on: a panel that boots
+// with pages missing and no memory of why is worse than one showing a page you
+// do not use.
+bool settings_page_enabled(int page_id);
+void settings_set_page_enabled(int page_id, bool on);
+
+// Continuous-jog speed as a percentage of each axis's configured max rate.
+// Panel-side rather than the controller's overrides: RAPID has no +/- (three
+// fixed positions) and FEED governs cutting moves, so borrowing it would scale
+// the next G1 as a side effect of jogging. See docs/HANDOFF.md.
+uint8_t settings_jog_pct();
+void    settings_set_jog_pct(uint8_t pct);
+
 uint8_t settings_screen_off_min();
 void    settings_set_screen_off_min(uint8_t m);
