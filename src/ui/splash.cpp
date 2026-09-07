@@ -113,7 +113,13 @@ static void hold_then_exit_cb(lv_anim_t*) {
 }
 
 static void sweep_exec_cb(void*, int32_t v) {
-    lv_obj_set_width(s_reveal, v);
+    // The reveal advances in coarse passes while the gantry glides. Growing
+    // the clip window every frame invalidates the full-height region behind
+    // it, and at 800x480 through a 1/10-screen buffer that collapsed the
+    // sweep to ~7 visible chunks (seen on the glass, 2026-09-07). Quantized,
+    // each band paints exactly once; the per-frame cost is just the 3px
+    // gantry line — smooth, and it reads as a machine cutting in passes.
+    lv_obj_set_width(s_reveal, v - (v % (LV_HOR_RES / 8)));
     lv_obj_set_x(s_gantry, v);
     lv_obj_set_x(s_carriage, v - 5);
 }
