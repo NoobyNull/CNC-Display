@@ -33,6 +33,7 @@ public:
 
     bool     getBool(const char* k, bool d = false)      { auto v = find(k); return v ? *v == "1" : d; }
     uint8_t  getUChar(const char* k, uint8_t d = 0)      { auto v = find(k); return v ? (uint8_t)atoi(v->c_str()) : d; }
+    uint16_t getUShort(const char* k, uint16_t d = 0)    { auto v = find(k); return v ? (uint16_t)atoi(v->c_str()) : d; }
     uint32_t getUInt(const char* k, uint32_t d = 0)      { auto v = find(k); return v ? (uint32_t)strtoul(v->c_str(), nullptr, 10) : d; }
     float    getFloat(const char* k, float d = 0.0f)     { auto v = find(k); return v ? strtof(v->c_str(), nullptr) : d; }
 
@@ -46,6 +47,7 @@ public:
 
     size_t putBool(const char* k, bool v)      { set(k, v ? "1" : "0"); return 1; }
     size_t putUChar(const char* k, uint8_t v)  { set(k, std::to_string((int)v)); return 1; }
+    size_t putUShort(const char* k, uint16_t v){ set(k, std::to_string((int)v)); return 2; }
     size_t putUInt(const char* k, uint32_t v)  { set(k, std::to_string(v)); return 1; }
     size_t putFloat(const char* k, float v)    { set(k, std::to_string(v)); return 1; }
     size_t putString(const char* k, const char* v) { set(k, v ? v : ""); return strlen(v ? v : ""); }

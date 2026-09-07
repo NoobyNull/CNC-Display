@@ -78,6 +78,14 @@
   th { color: var(--dim); font-size: 10px; letter-spacing: .08em;
        text-transform: uppercase; font-weight: 600; }
   th:first-child, td:first-child { text-align: left; color: var(--accent); }
+
+  /* Pinout rides on the same page; hovering zooms it in place, so reading
+     a pin never means opening anything (or walking to the board). */
+  #pincard { transition: transform .12s; }
+  #pincard:hover { transform: scale(1.5); transform-origin: top right;
+                   position: relative; z-index: 5;
+                   box-shadow: 0 4px 32px #000c; }
+  #pintab td:last-child { color: var(--text); white-space: nowrap; }
 </style>
 
 <h1>FluidNC bench
@@ -86,6 +94,14 @@
 </h1>
 
 <div class="wrap">
+  <div class="card" style="grid-column:1/-1">
+    <h2>Panel &mdash; live, click to touch</h2>
+    <img id="pv" width="800" height="480" alt="panel offline"
+         style="max-width:100%;height:auto;display:block;margin:0 auto;
+                border:1px solid var(--line);border-radius:var(--radius);
+                cursor:crosshair;background:var(--lamp-off)">
+  </div>
+
   <div class="card">
     <h2>Machine</h2>
     <div class="row" style="justify-content:space-between">
@@ -121,6 +137,11 @@
     <table id="axtab"></table>
   </div>
 
+  <div class="card" id="pincard">
+    <h2>Pinout &mdash; hover to zoom</h2>
+    <table id="pintab"></table>
+  </div>
+
   <div class="card" style="grid-column:1/-1">
     <h2>Controller log</h2>
     <div class="row" style="margin-bottom:var(--u)">
@@ -137,7 +158,9 @@ const post = (p, b) => fetch(p, {method:'POST', headers:{'Content-Type':'applica
                                body: JSON.stringify(b||{})});
 
 // Long-form names for the single-letter pin codes the controller reports.
-const SW_LABEL = {P:'PROBE', T:'TOOLSETTER', D:'SAFETY DOOR', E:'E-STOP'};
+const SW_LABEL = {P:'PROBE', T:'TOOLSETTER', D:'SAFETY DOOR', E:'E-STOP',
+                  0:'X DRIVER', 1:'Y1 DRIVER', 2:'Y2 DRIVER',
+                  3:'Z DRIVER', 4:'A DRIVER'};
 const STATE_COLOR = {Idle:'var(--ok)', Run:'var(--run)', Jog:'var(--accent)',
                      Home:'var(--accent)', Hold:'var(--warn)', Door:'var(--warn)',
                      Alarm:'var(--bad)'};
@@ -209,6 +232,12 @@ function render(s) {
         <td class="${x.homing_cycle >= 0 ? 'yes' : 'not'}">
           ${x.homing_cycle >= 0 ? 'cycle ' + x.homing_cycle : '--'}</td></tr>`; }).join('');
 
+  $('#pintab').innerHTML =
+    '<tr><th>function</th><th>pin</th></tr>'
+    + (s.pins || []).map(p =>
+        `<tr><td>${p.path.replace(/_pin$/, '')}</td><td>${p.pin}</td></tr>`
+      ).join('');
+
   const log = $('#log');
   const stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
   log.textContent = s.log.join('\n');
@@ -220,6 +249,27 @@ async function poll() {
 }
 setInterval(poll, 200);
 poll();
+
+// The embedded panel: poll frames (self-paced by onload, backs off while
+// offline) and translate mouse to touch in 800x480 panel coordinates.
+const pv = $('#pv');
+function pvLoad() { pv.src = '/panel/frame.bmp?' + Date.now(); }
+pv.onload  = () => setTimeout(pvLoad, 80);
+pv.onerror = () => setTimeout(pvLoad, 700);
+pvLoad();
+let pvDown = false, pvLast = 0;
+function pvSend(e, d) {
+  const r = pv.getBoundingClientRect();
+  const x = Math.round((e.clientX - r.left) * 800 / r.width);
+  const y = Math.round((e.clientY - r.top) * 480 / r.height);
+  fetch(`/panel/touch?x=${x}&y=${y}&d=${d}`, {method: 'POST'});
+}
+pv.onmousedown = e => { pvDown = true; pvSend(e, 1); e.preventDefault(); };
+pv.onmousemove = e => { if (!pvDown) return;
+  const now = performance.now();
+  if (now - pvLast < 30) return; pvLast = now; pvSend(e, 1); };
+window.addEventListener('mouseup', e => { if (pvDown) { pvDown = false; pvSend(e, 0); } });
+pv.ondragstart = e => e.preventDefault();
 
 $('#profile').onchange = e => { last = ''; post('/api/profile', {name: e.target.value}); };
 $('#reset').onclick = () => post('/api/reset');

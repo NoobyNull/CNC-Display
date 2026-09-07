@@ -26,6 +26,11 @@ static uint32_t* s_argb = nullptr;   // conversion target for SDL
 static uint8_t   s_backlight = 200;
 static bool      s_blank = false;
 
+// Full-frame shadow of everything flushed, for the web previewer: the HTTP
+// thread reads it under the mutex, the LVGL thread writes it in flush_cb.
+static uint32_t*  s_shadow = nullptr;
+static SDL_mutex* s_shadow_mx = nullptr;
+
 // Live pointer state, written by the SDL event pump in touch_poll().
 static int16_t s_x = 0, s_y = 0;
 static bool    s_down = false;
@@ -52,6 +57,12 @@ static void flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) 
     SDL_Rect r = { area->x1, area->y1, w, h };
     SDL_UpdateTexture(s_tex, &r, s_argb, w * (int)sizeof(uint32_t));
 
+    SDL_LockMutex(s_shadow_mx);
+    for (int32_t y = 0; y < h; y++)
+        memcpy(&s_shadow[(area->y1 + y) * SCREEN_WIDTH + area->x1],
+               &s_argb[y * w], w * sizeof(uint32_t));
+    SDL_UnlockMutex(s_shadow_mx);
+
     if (lv_disp_flush_is_last(drv)) {
         SDL_RenderClear(s_ren);
         SDL_RenderCopy(s_ren, s_tex, nullptr, nullptr);
@@ -76,6 +87,25 @@ void display_init() {
     s_tex = SDL_CreateTexture(s_ren, SDL_PIXELFORMAT_ARGB8888,
                               SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
     s_argb = (uint32_t*)malloc(SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint32_t));
+    s_shadow = (uint32_t*)calloc(SCREEN_WIDTH * SCREEN_HEIGHT, sizeof(uint32_t));
+    s_shadow_mx = SDL_CreateMutex();
+}
+
+// --- web previewer hooks (sim_web.cpp) -------------------------------------
+
+void sim_frame_copy(uint32_t* dst) {
+    SDL_LockMutex(s_shadow_mx);
+    memcpy(dst, s_shadow, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint32_t));
+    SDL_UnlockMutex(s_shadow_mx);
+}
+
+// Browser events write the same pointer state the SDL mouse does; the two
+// sources interleave harmlessly (last writer wins, like two mice would).
+void sim_web_touch(int x, int y, bool down) {
+    s_x = (int16_t)x;
+    s_y = (int16_t)y;
+    if (down) s_fresh++;
+    s_down = down;
 }
 
 void lvgl_init() {

@@ -24,6 +24,7 @@ Two ports:
 Nothing here talks to real hardware. It is a bench fixture.
 """
 import argparse
+import atexit
 import copy
 import json
 import math
@@ -31,8 +32,10 @@ import os
 import re
 import socket
 import socketserver
+import subprocess
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import yaml
@@ -77,6 +80,25 @@ class Machine:
 
     def _derive(self):
         cfg = self.cfg
+        # Every *_pin the config declares, as (dotted path, pin), sorted by
+        # pin number — the bench shows this next to the switches so nobody
+        # has to open the YAML (or squint at the board) to see what's where.
+        self.pin_map = []
+
+        def walk(node, path):
+            for k, v in (node or {}).items():
+                if isinstance(v, dict):
+                    walk(v, path + (k,))
+                elif k.endswith("_pin") and is_pin(v):
+                    self.pin_map.append(
+                        {"path": ".".join(path + (k,)), "pin": str(v)})
+        walk(cfg, ())
+
+        def pin_key(e):
+            m2 = re.search(r"(\d+)", e["pin"])
+            return (e["pin"].split(".")[0], int(m2.group(1)) if m2 else -1)
+        self.pin_map.sort(key=pin_key)
+
         ax = cfg.get("axes", {}) or {}
         # Config order is authoritative: FluidNC indexes axes by their position
         # in the canonical XYZABC order, not by how the YAML happens to sort.
@@ -151,6 +173,12 @@ class Machine:
             self.switches["D"] = False
         if self.caps["estop"]:
             self.switches["E"] = False
+        # Stepper-driver "online" inputs (Airedale 0-4: X Y1 y2 Z A), ridden
+        # into Pn: as digit chars. Default ON — a healthy bench — and toggled
+        # like any other input to fake a fault. M64/M65 on outputs 8-11 also
+        # drive them, so the panel's RESET pulse round-trips.
+        for d in "01234":
+            self.switches[d] = True
 
     def _spindle_name(self):
         for key in ("H100", "Huanyang", "PWM", "10V", "Laser", "relay", "NoSpindle"):
@@ -288,6 +316,9 @@ class Machine:
         for k in ("P", "T", "D", "E"):
             if self.switches.get(k):
                 s += {"P": "P", "T": "T", "D": "D", "E": "R"}[k]
+        for d in "01234":
+            if self.switches.get(d):
+                s += d
         return s
 
     def status(self):
@@ -702,6 +733,17 @@ class Session:
         m = self.m
         up = s.upper()
         with m.lock:
+            # Driver reset relays: M64 (on) opens the NC relay = driver power
+            # OFF, M65 restores it, which also clears the simulated fault —
+            # outputs 8-11 map to drivers 0-3 (X Y1 Y2 Z), per the Airedale.
+            pm = re.match(r"M6([45])\s*P(\d+)$", up.strip())
+            if pm:
+                out = int(pm.group(2))
+                if 8 <= out <= 11 and str(out - 8) in m.switches:
+                    on = pm.group(1) == "5"
+                    m.switches[str(out - 8)] = on
+                    m.note(f"driver {out - 8} power {'restored' if on else 'CUT'}")
+                return None
             if "M3" in up or "M4" in up:
                 m.spindle_on = True
                 sm = re.search(r"S(\d+)", up)
@@ -802,6 +844,23 @@ def make_http(m, sessions):
             self.wfile.write(b)
 
         def do_GET(self):
+            # Live panel frame, proxied from the LVGL sim's web previewer so
+            # the page stays one origin — the bench is ONE app in ONE tab.
+            if self.path.startswith("/panel/frame"):
+                try:
+                    with urllib.request.urlopen(
+                            f"http://127.0.0.1:{PANEL_WEB}/frame.bmp",
+                            timeout=1.0) as r:
+                        b = r.read()
+                except OSError:
+                    return self._json({"error": "panel offline"}, 503)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/bmp")
+                self.send_header("Content-Length", str(len(b)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(b)
+                return
             if self.path.startswith("/api/state"):
                 with m.lock:
                     return self._json({
@@ -821,6 +880,7 @@ def make_http(m, sessions):
                         "links": len(sessions),
                         "job": m.sd_run,
                         "axis_cfg": {a: m.axis[a] for a in m.axis_names},
+                        "pins": m.pin_map,
                         "log": m.log[-40:],
                     })
             body = open(PANEL, "rb").read()
@@ -831,6 +891,17 @@ def make_http(m, sessions):
             self.wfile.write(body)
 
         def do_POST(self):
+            # Touch passthrough carries its payload in the query string, no
+            # body — forward before the JSON parse below eats the request.
+            if self.path.startswith("/panel/touch"):
+                try:
+                    urllib.request.urlopen(urllib.request.Request(
+                        f"http://127.0.0.1:{PANEL_WEB}"
+                        + self.path[len("/panel"):], method="POST"),
+                        timeout=0.5).read()
+                except OSError:
+                    pass
+                return self._json({"ok": True})
             n = int(self.headers.get("Content-Length", 0))
             try:
                 req = json.loads(self.rfile.read(n) or b"{}")
@@ -879,12 +950,44 @@ def load_profile(m, name):
         m.note(f"loaded profile '{name}'")
 
 
+PANEL_WEB = 8081     # where the spawned LVGL sim serves frames/touches
+
+
+def spawn_panel(link_port, windowed):
+    """The LVGL sim as a child process: one command brings up the whole
+    bench, one Ctrl-C tears it all down. Headless by default — the panel
+    lives in the browser page; --windowed also opens the SDL window."""
+    exe = os.path.join(HERE, "cncsim")
+    if not os.access(exe, os.X_OK):
+        print("panel: sim/cncsim not built (make -C sim) — bench only")
+        return
+    time.sleep(0.3)   # let the link listener win the race; the panel does
+                      # retry, but booting already-connected primes cleanly
+    env = dict(os.environ)
+    if not windowed:
+        env["SDL_VIDEODRIVER"] = "dummy"
+    proc = subprocess.Popen(
+        [exe, "--port", str(link_port),
+         "--sd", os.path.join(HERE, "sdcard"),
+         "--web", str(PANEL_WEB)],
+        env=env, cwd=HERE,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    atexit.register(proc.terminate)
+
+
 def main():
+    global PANEL_WEB
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="bringup", choices=["bringup", "equipped"])
     ap.add_argument("--link-port", type=int, default=2323)
     ap.add_argument("--web-port", type=int, default=8080)
+    ap.add_argument("--panel-web", type=int, default=PANEL_WEB)
+    ap.add_argument("--no-panel", action="store_true",
+                    help="serve the bench only; don't spawn the LVGL sim")
+    ap.add_argument("--windowed", action="store_true",
+                    help="panel also opens its SDL window")
     args = ap.parse_args()
+    PANEL_WEB = args.panel_web
 
     base = yaml.safe_load(open(os.path.join(PROFILES, "corgi_bringup.yaml")))
     m = Machine(base, profile=args.profile)
@@ -897,9 +1000,12 @@ def main():
     web = HTTPServer(("0.0.0.0", args.web_port), make_http(m, sessions))
     threading.Thread(target=web.serve_forever, daemon=True).start()
 
+    if not args.no_panel:
+        spawn_panel(args.link_port, args.windowed)
+
     print(f"FluidNC v4.0.3 sim  profile={m.profile}  ({m.cfg.get('name','')})")
-    print(f"  link : tcp://127.0.0.1:{args.link_port}   (point the LVGL sim here)")
-    print(f"  bench: http://127.0.0.1:{args.web_port}")
+    print(f"  link : tcp://127.0.0.1:{args.link_port}")
+    print(f"  bench: http://127.0.0.1:{args.web_port}   (panel embedded)")
     print(f"  caps : {json.dumps(m.caps)}")
     try:
         while True:

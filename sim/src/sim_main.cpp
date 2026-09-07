@@ -84,6 +84,7 @@ int main(int argc, char** argv) {
     const char* page = nullptr;
     const char* shot = nullptr;
     uint32_t    shot_ms = 3000;
+    int         web = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--host") && i + 1 < argc)      host = argv[++i];
         else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
@@ -91,8 +92,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--page") && i + 1 < argc) page = argv[++i];
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
         else if (!strcmp(argv[i], "--shot-ms") && i + 1 < argc) shot_ms = (uint32_t)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--web") && i + 1 < argc)  web = atoi(argv[++i]);
         else {
-            printf("usage: %s [--host H] [--port P] [--sd DIR]\n"
+            printf("usage: %s [--host H] [--port P] [--sd DIR] [--web PORT]\n"
                    "          [--page NAME] [--shot FILE.bmp] [--shot-ms N]\n"
                    "pages: jog home probe offsets run macro motion cal diag setup\n", argv[0]);
             return argv[i][0] == '-' ? 1 : 0;
@@ -107,6 +109,10 @@ int main(int argc, char** argv) {
     display_init();
     lvgl_init();
     set_backlight(settings_brightness());
+    if (web) {
+        extern void sim_web_start(int);
+        sim_web_start(web);
+    }
 
     splash_show();
     lv_timer_handler();
