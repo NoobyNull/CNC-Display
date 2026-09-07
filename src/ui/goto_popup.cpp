@@ -276,11 +276,11 @@ void goto_open(int axis) {
     lv_obj_set_flex_grow(s_mode_rel, 1); lv_obj_set_height(s_mode_rel, LV_PCT(100));
 
     // Per Matthew: tapping into an axis is also where you revive its driver.
-    // Only on machines whose driver wiring reports (feature armed), and only
-    // for axes that have a reset relay — A doesn't.
+    // Only on machines whose driver wiring reports (feature armed). All five
+    // drivers have reset relays (A's landed 2026-09-07, slot P4).
     const char axc = (axis >= 0) ? axisNumToChar(axis) : 0;
     if (!s_numcb && drv_feature_armed()
-        && (axc == 'X' || axc == 'Y' || axc == 'Z')) {
+        && (axc == 'X' || axc == 'Y' || axc == 'Z' || axc == 'A')) {
         lv_obj_t* rst = w_button(modes, "RESET DRIVE",
                                  axc == 'Y' ? "cycle Y1+Y2" : "power-cycle",
                                  C_RAISE, C_WARN,

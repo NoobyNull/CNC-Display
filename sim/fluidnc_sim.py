@@ -316,7 +316,10 @@ class Machine:
         for k in ("P", "T", "D", "E"):
             if self.switches.get(k):
                 s += {"P": "P", "T": "T", "D": "D", "E": "R"}[k]
-        for d in "01234":
+        # Only the four macro-pin drivers push into Pn: ('0'-'3', per the
+        # 2026-09-07 contract); A ('4') is a user_input read via M66 and
+        # never appears here.
+        for d in "0123":
             if self.switches.get(d):
                 s += d
         return s
@@ -733,16 +736,18 @@ class Session:
         m = self.m
         up = s.upper()
         with m.lock:
-            # Driver reset relays: M64 (on) opens the NC relay = driver power
-            # OFF, M65 restores it, which also clears the simulated fault —
-            # outputs 8-11 map to drivers 0-3 (X Y1 Y2 Z), per the Airedale.
+            # Driver reset relays. M64/M65 P<n> addresses the user_outputs
+            # SLOT (FluidNC GCode.cpp:1748), and slots 0-4 map to the five
+            # driver relays (X Y1 Y2 Z A) per the 2026-09-07 contract. M64
+            # energizes the NC relay = driver power CUT; M65 restores it,
+            # which also clears the simulated fault.
             pm = re.match(r"M6([45])\s*P(\d+)$", up.strip())
             if pm:
                 out = int(pm.group(2))
-                if 8 <= out <= 11 and str(out - 8) in m.switches:
+                if 0 <= out <= 4 and str(out) in m.switches:
                     on = pm.group(1) == "5"
-                    m.switches[str(out - 8)] = on
-                    m.note(f"driver {out - 8} power {'restored' if on else 'CUT'}")
+                    m.switches[str(out)] = on
+                    m.note(f"driver {out} power {'restored' if on else 'CUT'}")
                 return None
             if "M3" in up or "M4" in up:
                 m.spindle_on = True

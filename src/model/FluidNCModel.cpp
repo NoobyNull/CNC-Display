@@ -144,13 +144,15 @@ extern "C" void show_control_pins(const char* pins) {
     myCtrlPins = pins;
 }
 
-// ---- stepper-driver health (Matthew's design, 2026-09-06) -----------------
-// The Airedale fault inputs ride Pn: as digit characters — 0=X 1=Y1 2=Y2
-// 3=Z 4=A — wired so a digit is PRESENT while its driver is powered and
-// healthy. Deliberately plain "online" inputs, not alarm-class pins: a
-// motors alarm mapped to limits confused the software. The feature arms
-// itself the first time any digit appears, so a machine without the wiring
-// never grows indicators.
+// ---- stepper-driver health ------------------------------------------------
+// Contract settled with the configurator session, 2026-09-07 (see
+// /tmp/HANDOFF-driver-io-configurator.md): X/Y1/Y2/Z ride FluidNC macro
+// pins, which report in Pn: as digit characters '0'-'3' while active —
+// wired active-while-online, so digit present = driver powered and healthy.
+// Deliberately NOT alarm-class. A's input is a user_input read via M66
+// (poll-only; NOT in Pn:) — that path is not built yet, so A has no badge
+// and never gates. The feature arms on the first digit sighting, so a
+// machine without the wiring never grows indicators.
 static bool s_drv_seen = false;
 
 bool drv_pin(int n) {
@@ -162,7 +164,7 @@ bool drv_pin(int n) {
 bool drv_feature_armed() {
     if (!s_drv_seen)
         for (const char* p = myCtrlPins; *p; ++p)
-            if (*p >= '0' && *p <= '4') { s_drv_seen = true; break; }
+            if (*p >= '0' && *p <= '3') { s_drv_seen = true; break; }
     return s_drv_seen;
 }
 
@@ -171,23 +173,25 @@ bool drv_axis_ok(char ax) {
         case 'X': return drv_pin(0);
         case 'Y': return drv_pin(1) && drv_pin(2);   // both gantry drivers
         case 'Z': return drv_pin(3);
-        case 'A': return drv_pin(4);
+        case 'A': return true;   // no telemetry until the M66 path exists
     }
     return true;
 }
 
-// Pulse the driver's reset relay(s): Airedale outputs 8-11 each sit on a
-// normally-closed relay in one driver's power feed (X=8 Y1=9 Y2=10 Z=11;
-// A has no relay). ON -> dwell -> OFF power-cycles the driver, which is
-// how a latched fault clears. The dwell runs on the controller as G4, so
-// nothing here blocks; both Y relays pulse together — half a gantry with
-// power is worse than none.
+// Pulse the driver's reset relay(s). M64/M65 P<n> addresses the config's
+// user_outputs SLOT, not the Airedale pin: slots 0-4 map to Airedale
+// outputs 8-12 (X Y1 Y2 Z A), each a normally-closed relay in that
+// driver's power feed. ON -> dwell -> OFF power-cycles the driver, which
+// is how a latched fault clears. The dwell runs on the controller as G4,
+// so nothing here blocks; both Y relays pulse together — half a gantry
+// with power is worse than none.
 void drv_reset_axis(char ax) {
     int outs[2] = { -1, -1 };
     switch (ax) {
-        case 'X': outs[0] = 8;               break;
-        case 'Y': outs[0] = 9; outs[1] = 10; break;
-        case 'Z': outs[0] = 11;              break;
+        case 'X': outs[0] = 0;              break;
+        case 'Y': outs[0] = 1; outs[1] = 2; break;
+        case 'Z': outs[0] = 3;              break;
+        case 'A': outs[0] = 4;              break;
         default:  return;
     }
     for (int i = 0; i < 2; i++)

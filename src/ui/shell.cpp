@@ -377,8 +377,9 @@ static void build_safety(lv_obj_t* parent) {
 static const lv_coord_t AXES_W = CONTENT_W - U * 16;
 
 // Axis count the DRO should show: what the controller reports, minus A when
-// its driver is offline — per Matthew, A only earns its cell while its Pn
-// digit says the driver is powered. X/Y/Z stay put and wear a red ! instead.
+// its driver is offline. With A's telemetry not built yet (M66 path,
+// 2026-09-07 contract), drv_axis_ok('A') is always true and A never hides —
+// the gate re-engages by itself once A reporting lands.
 static int gated_axis_count() {
     int n = n_axes;
     if (n < 1)        n = 1;
@@ -680,8 +681,10 @@ void shell_tick() {
         for (int i = 0; i < MAX_AXES; i++) {
             if (!s_axis_dot[i]) continue;
             const char ax = axisNumToChar(i);
+            // A is absent: its status arrives via M66 polling (not Pn:),
+            // which isn't built yet — no badge beats a lying green one.
             const bool mapped = armed && i < shown &&
-                (ax == 'X' || ax == 'Y' || ax == 'Z' || ax == 'A');
+                (ax == 'X' || ax == 'Y' || ax == 'Z');
             const bool ok = mapped && drv_axis_ok(ax);
             if (mapped && ok) lv_obj_clear_flag(s_axis_dot[i], LV_OBJ_FLAG_HIDDEN);
             else              lv_obj_add_flag(s_axis_dot[i], LV_OBJ_FLAG_HIDDEN);
