@@ -5,31 +5,22 @@
 #include "model/caps.h"
 #include <lvgl.h>
 
-// Boot splash: the FluidNC wordmark fades in while its pieces settle into
-// place — arriving from behind the viewer — holds a beat, then the whole
-// plate slides up and off, revealing the console that built underneath.
-//
-// This replaced a gantry-sweep reveal (per Matthew, 2026-09-07): the sweep
-// invalidated a full-height region every frame and slideshowed on the real
-// panel. Zoom+fade touches only the mark's own centred box per frame, the
-// cheapest animation this display can draw.
+// Boot splash: the FluidNC wordmark, shown at once, with a progress bar that
+// tracks what boot is actually waiting on. No entrance animation — per
+// Matthew after two rounds of them fighting this panel's redraw budget:
+// "forget the fancy shit, just load the screen and give a progress
+// indicator." When the gate clears, the plate slides up and off.
 //
 // Everything lives on lv_layer_top() so it needs nothing from the shell and
 // the shell needs nothing from it.
 
 static lv_obj_t* s_root     = nullptr;
 static lv_obj_t* s_mark     = nullptr;   // layout box for the wordmark
-static lv_obj_t* s_leaf[3]  = {};        // word, sub, rule — animated each:
-                                         // v8 opa/transform on a CONTAINER
-                                         // does not cascade to children (it
-                                         // shipped that way once: pop-in)
+static lv_obj_t* s_bar      = nullptr;   // boot-stage progress
 static lv_obj_t* s_status   = nullptr;   // what boot is waiting on
 
-static const int ARRIVE_MS = 700;
-static const int SPREAD    = U * 4;      // how far the leaves start from home
-static const int HOLD_MS  = 1200;
+static const int HOLD_MS  = 700;
 static const int EXIT_MS  = 500;
-static const int DELAY_MS = 150;         // timeline starts after boot, tiny settle only
 static const lv_coord_t MARK_W = U * 56;
 static const lv_coord_t MARK_H = U * 22;
 
@@ -82,12 +73,15 @@ static void start_exit(int delay_ms) {
     lv_anim_start(&a);
 }
 
+static void bar_update();
+
 // Polled rather than event-driven: the three things being waited on (link up,
 // first report, timeout) are already polled elsewhere, and an observer registry
 // for one consumer would be the only one in the codebase.
 static void gate_cb(lv_timer_t*) {
     if (!s_root || !s_status) return;
 
+    bar_update();
     if (model_dro_ever() && caps_settled()) {
         // The machine has described itself; the shell underneath has already
         // reflowed to its axis count. Reveal a correct UI, not a corrected one.
@@ -109,33 +103,30 @@ static void gate_cb(lv_timer_t*) {
                                     : "reading machine config - tap to skip");
 }
 
-static void hold_then_exit_cb(lv_anim_t*) {
+// Honest progress: each stage the boot actually passes moves the bar, and
+// nothing creeps on its own. 25 = code running, 50 = controller talking,
+// 75 = first status report, 100 = config settled.
+static void bar_update() {
+    if (!s_bar) return;
+    int v = 25;
+    if (state != Disconnected)  v = 50;
+    if (model_dro_ever())       v = 75;
+    if (caps_settled())         v = 100;
+    lv_bar_set_value(s_bar, v, LV_ANIM_ON);
+}
+
+static void hold_then_exit() {
     if (!s_root) return;
 
-    // Already know the machine: keep the original timing exactly.
-    if (model_dro_ever() && caps_settled()) { start_exit(HOLD_MS); return; }
+    // Already know the machine: straight to the reveal.
+    if (model_dro_ever() && caps_settled()) {
+        bar_update();
+        start_exit(HOLD_MS);
+        return;
+    }
 
     s_gate_start = lv_tick_get();
     s_gate = lv_timer_create(gate_cb, 100, nullptr);
-}
-
-// The arrival, without the transform engine: v8's transform_zoom on labels
-// simply blanks them while zoomed (measured in the sim — mark invisible for
-// the whole animation, popping in at the end; LV_DRAW_COMPLEX made no
-// difference). So depth is faked with what provably renders: the word
-// drifts down into place, the subtitle drifts up, the rule grows outward.
-// v runs 0 (scattered) .. 100 (home).
-static void settle_exec_cb(void*, int32_t v) {
-    const lv_coord_t d = (lv_coord_t)(SPREAD * (100 - v) / 100);
-    lv_obj_align(s_leaf[0], LV_ALIGN_CENTER, 0, (lv_coord_t)(-U * 2 - d));
-    lv_obj_align(s_leaf[1], LV_ALIGN_CENTER, 0, (lv_coord_t)(U * 2 + d));
-    lv_obj_set_width(s_leaf[2], (lv_coord_t)(U * 10 + U * 20 * v / 100));
-    lv_obj_align(s_leaf[2], LV_ALIGN_CENTER, 0, 0);
-}
-
-static void fade_exec_cb(void*, int32_t v) {
-    for (int i = 0; i < 3; i++)
-        if (s_leaf[i]) lv_obj_set_style_opa(s_leaf[i], (lv_opa_t)v, 0);
 }
 
 static void tap_cb(lv_event_t*) { splash_delete(); }
@@ -183,12 +174,20 @@ void splash_show() {
     lv_obj_set_style_bg_color(rule, C_LINE, 0);
     lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
 
-    // Fade rides each leaf's own opa — the only opa v8 honours — and the
-    // arrival starts scattered.
-    s_leaf[0] = word; s_leaf[1] = sub; s_leaf[2] = rule;
-    for (int i = 0; i < 3; i++)
-        lv_obj_set_style_opa(s_leaf[i], LV_OPA_TRANSP, 0);
-    settle_exec_cb(nullptr, 0);
+    (void)word; (void)sub;
+
+    // The progress bar, under the mark. lv_bar's own value animation gives
+    // the smoothing; the stages give the truth.
+    s_bar = lv_bar_create(s_root);
+    lv_obj_set_size(s_bar, U * 30, U / 2);
+    lv_obj_align(s_bar, LV_ALIGN_CENTER, 0, U * 10);
+    lv_obj_set_style_bg_color(s_bar, C_RAISE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_bar, 2, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_bar, C_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(s_bar, 2, LV_PART_INDICATOR);
+    lv_bar_set_range(s_bar, 0, 100);
+    lv_bar_set_value(s_bar, 25, LV_ANIM_OFF);   // code is running: stage one
 
     // Status sits on s_root rather than inside the reveal clip: it has to stay
     // readable while the plate slides, and it is boot information, not part of
@@ -203,29 +202,6 @@ void splash_show() {
 
 void splash_begin() {
     if (!s_root) return;                 // skipped by a tap during boot
-
-    // Arrival from behind the viewer: oversized and transparent, settling to
-    // life size as it becomes solid. Both anims are bound to s_mark so a
-    // tap-delete of the splash kills them with it; unbound, they would keep
-    // driving freed objects.
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, s_mark);
-    lv_anim_set_exec_cb(&a, settle_exec_cb);
-    lv_anim_set_values(&a, 0, 100);
-    lv_anim_set_time(&a, ARRIVE_MS);
-    lv_anim_set_delay(&a, DELAY_MS);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_set_ready_cb(&a, hold_then_exit_cb);
-    lv_anim_start(&a);
-
-    lv_anim_t b;
-    lv_anim_init(&b);
-    lv_anim_set_var(&b, s_mark);
-    lv_anim_set_exec_cb(&b, fade_exec_cb);
-    lv_anim_set_values(&b, LV_OPA_TRANSP, LV_OPA_COVER);
-    lv_anim_set_time(&b, ARRIVE_MS);
-    lv_anim_set_delay(&b, DELAY_MS);
-    lv_anim_set_path_cb(&b, lv_anim_path_ease_out);
-    lv_anim_start(&b);
+    bar_update();
+    hold_then_exit();
 }
