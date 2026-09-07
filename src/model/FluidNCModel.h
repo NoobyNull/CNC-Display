@@ -39,6 +39,13 @@ extern pos_t              myWco[6];    // work coordinate offset; machine = myAx
 extern bool               myLimitSwitches[6];
 extern bool               myProbeSwitch;
 extern const char*        myCtrlPins;
+
+// Stepper-driver health, carried in Pn: as digits (0=X 1=Y1 2=Y2 3=Z 4=A,
+// present while the driver is online). Armed on first sighting.
+bool drv_pin(int n);
+bool drv_feature_armed();
+bool drv_axis_ok(char axis);
+void drv_reset_axis(char axis);   // pulse its reset relay(s); no-op for A
 extern const char*        myFile;
 extern file_percent_t     myPercent;
 extern override_percent_t myFro;

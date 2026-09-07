@@ -144,6 +144,59 @@ extern "C" void show_control_pins(const char* pins) {
     myCtrlPins = pins;
 }
 
+// ---- stepper-driver health (Matthew's design, 2026-09-06) -----------------
+// The Airedale fault inputs ride Pn: as digit characters — 0=X 1=Y1 2=Y2
+// 3=Z 4=A — wired so a digit is PRESENT while its driver is powered and
+// healthy. Deliberately plain "online" inputs, not alarm-class pins: a
+// motors alarm mapped to limits confused the software. The feature arms
+// itself the first time any digit appears, so a machine without the wiring
+// never grows indicators.
+static bool s_drv_seen = false;
+
+bool drv_pin(int n) {
+    for (const char* p = myCtrlPins; *p; ++p)
+        if (*p == '0' + n) return true;
+    return false;
+}
+
+bool drv_feature_armed() {
+    if (!s_drv_seen)
+        for (const char* p = myCtrlPins; *p; ++p)
+            if (*p >= '0' && *p <= '4') { s_drv_seen = true; break; }
+    return s_drv_seen;
+}
+
+bool drv_axis_ok(char ax) {
+    switch (ax) {
+        case 'X': return drv_pin(0);
+        case 'Y': return drv_pin(1) && drv_pin(2);   // both gantry drivers
+        case 'Z': return drv_pin(3);
+        case 'A': return drv_pin(4);
+    }
+    return true;
+}
+
+// Pulse the driver's reset relay(s): Airedale outputs 8-11 each sit on a
+// normally-closed relay in one driver's power feed (X=8 Y1=9 Y2=10 Z=11;
+// A has no relay). ON -> dwell -> OFF power-cycles the driver, which is
+// how a latched fault clears. The dwell runs on the controller as G4, so
+// nothing here blocks; both Y relays pulse together — half a gantry with
+// power is worse than none.
+void drv_reset_axis(char ax) {
+    int outs[2] = { -1, -1 };
+    switch (ax) {
+        case 'X': outs[0] = 8;               break;
+        case 'Y': outs[0] = 9; outs[1] = 10; break;
+        case 'Z': outs[0] = 11;              break;
+        default:  return;
+    }
+    for (int i = 0; i < 2; i++)
+        if (outs[i] >= 0) send_linef("M64 P%d", outs[i]);
+    send_line("G4 P0.75");   // relay drop + driver discharge; tune on bench
+    for (int i = 0; i < 2; i++)
+        if (outs[i] >= 0) send_linef("M65 P%d", outs[i]);
+}
+
 #ifdef E4_POS_T
 extern "C" void show_dro(const pos_t* axes, const pos_t* wco, bool isMpos, bool* limits, size_t n_axis) {
     n_axes = (int)n_axis;

@@ -61,6 +61,8 @@ static lv_obj_t* s_link_lbl;
 static lv_obj_t* s_axis_cell[MAX_AXES];
 static lv_obj_t* s_axis_work[MAX_AXES];
 static lv_obj_t* s_axis_mach[MAX_AXES];
+static lv_obj_t* s_axis_dot[MAX_AXES];    // driver online: green dot
+static lv_obj_t* s_axis_bang[MAX_AXES];   // driver dropped: red !
 static int       s_axes_shown = 0;   // 0 = nothing laid out yet
 static lv_obj_t* s_flip_btn;
 static lv_obj_t* s_close_btn;
@@ -374,6 +376,17 @@ static void build_safety(lv_obj_t* parent) {
 // Width left for the axis cells once the state/WCS column is taken out.
 static const lv_coord_t AXES_W = CONTENT_W - U * 16;
 
+// Axis count the DRO should show: what the controller reports, minus A when
+// its driver is offline — per Matthew, A only earns its cell while its Pn
+// digit says the driver is powered. X/Y/Z stay put and wear a red ! instead.
+static int gated_axis_count() {
+    int n = n_axes;
+    if (n < 1)        n = 1;
+    if (n > MAX_AXES) n = MAX_AXES;
+    if (drv_feature_armed() && n >= 4 && !drv_axis_ok('A')) n = 3;
+    return n;
+}
+
 // Reflow the DRO for n axes. The readout font has to come down as the cells
 // narrow — a 40px "-1234.567" needs about 230px, so it fits three cells across
 // and clips at four. Picked off the resulting cell width rather than the axis
@@ -459,6 +472,26 @@ static void build_dro(lv_obj_t* parent) {
         w_label(c, nm, &lv_font_montserrat_12, C_DIM);
         s_axis_work[i] = w_label(c, "0.000", &lv_font_montserrat_40, C_TEXT);
         s_axis_mach[i] = w_label(c, "M 0.000", &lv_font_montserrat_12, C_DIM);
+
+        // Driver-health badge floating in the cell's top-right corner: green
+        // dot while every driver behind this axis reports online in Pn:,
+        // red ! when one drops. Hidden until the wiring ever reports.
+        lv_obj_t* dot = lv_obj_create(c);
+        lv_obj_remove_style_all(dot);
+        lv_obj_set_size(dot, U, U);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, C_OK, 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_add_flag(dot, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(dot, LV_ALIGN_TOP_RIGHT, -U, U / 2);
+        s_axis_dot[i] = dot;
+
+        lv_obj_t* bang = w_label(c, "!", &lv_font_montserrat_16, C_CRIT);
+        lv_obj_add_flag(bang, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_add_flag(bang, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(bang, LV_ALIGN_TOP_RIGHT, -U, U / 4);
+        s_axis_bang[i] = bang;
         // The readout doubles as the target picker: tap an axis to type an
         // absolute coordinate and jog there. The step selector caps at 10mm,
         // which made a long traverse dozens of presses.
@@ -625,7 +658,9 @@ void shell_tick() {
         int n = n_axes;
         if (n < 1)        n = 1;
         if (n > MAX_AXES) n = MAX_AXES;
-        dro_layout(n);
+        dro_layout(gated_axis_count());
+        // Labels update for ALL reported axes, including a gated-out A: its
+        // cell must be current the instant the driver returns.
         for (int a = 0; a < n; a++) {
             fmt_pos(b, sizeof(b), myAxes[a]);
             lv_label_set_text(s_axis_work[a], b);
@@ -635,6 +670,25 @@ void shell_tick() {
         }
     }
     lv_label_set_text(s_link_lbl, transport_label());
+
+    // Driver badges + the A gate, every tick: pin changes ride status
+    // reports that may not move the DRO, and two string scans are cheap.
+    {
+        const bool armed = drv_feature_armed();
+        const int  shown = gated_axis_count();
+        dro_layout(shown);
+        for (int i = 0; i < MAX_AXES; i++) {
+            if (!s_axis_dot[i]) continue;
+            const char ax = axisNumToChar(i);
+            const bool mapped = armed && i < shown &&
+                (ax == 'X' || ax == 'Y' || ax == 'Z' || ax == 'A');
+            const bool ok = mapped && drv_axis_ok(ax);
+            if (mapped && ok) lv_obj_clear_flag(s_axis_dot[i], LV_OBJ_FLAG_HIDDEN);
+            else              lv_obj_add_flag(s_axis_dot[i], LV_OBJ_FLAG_HIDDEN);
+            if (mapped && !ok) lv_obj_clear_flag(s_axis_bang[i], LV_OBJ_FLAG_HIDDEN);
+            else               lv_obj_add_flag(s_axis_bang[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     if (offsets_dirty_take()) {
         lv_label_set_text(s_wcs_lbl, offsets_active());
