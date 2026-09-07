@@ -26,6 +26,7 @@ static bool     s_ok = false;
 static uint8_t  s_addr = 0;
 static float    s_last_mag = 1.0f;
 static uint32_t s_next_us = 0;
+static uint32_t s_last_good_us = 0;  // last successful sample
 static bool     s_calibrated = false;
 static float    s_baseline = 1.0f;
 static uint32_t s_cal_start = 0;
@@ -56,6 +57,7 @@ static bool imu_probe(bool patient) {
 
         if (ok) {
             s_ok = true;
+            s_last_good_us = micros();
             s_addr = ad0 ? 0x69 : 0x68;
             Serial.printf("[imu] ICM-20948 at 0x%02X\n", s_addr);
             // Restart the stillness calibration: a sensor that just appeared has
@@ -104,6 +106,19 @@ void imu_poll() {
     bool have = s_icm.dataReady();
     if (have) s_icm.getAGMT();
     i2c_give();
+    if (have) {
+        s_last_good_us = now;
+    } else if ((int32_t)(now - s_last_good_us) > 2000000) {
+        // Presence expires. A hot-plug glitch or cable dropout leaves the
+        // device silent while s_ok swears it is fitted — the reading freezes
+        // at its last value and Setup's SEARCH refuses to re-probe (seen on
+        // the bench, 2026-09-06). Two silent seconds covers both failure
+        // shapes: a NAK-ing device and one that browned out and rebooted
+        // into sleep. Absent is honest; SEARCH re-probes and recalibrates.
+        s_ok = false;
+        Serial.println("[imu] went silent - marked absent (SEARCH re-probes)");
+        return;
+    }
     if (!have) return;
 
     // SparkFun reports milli-g.
