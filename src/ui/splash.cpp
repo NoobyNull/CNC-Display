@@ -5,9 +5,9 @@
 #include "model/caps.h"
 #include <lvgl.h>
 
-// Boot splash: the FluidNC wordmark fades in while settling back from large
-// to life size — arriving from behind the viewer — holds a beat, then the
-// whole plate slides up and off, revealing the console that built underneath.
+// Boot splash: the FluidNC wordmark fades in while its pieces settle into
+// place — arriving from behind the viewer — holds a beat, then the whole
+// plate slides up and off, revealing the console that built underneath.
 //
 // This replaced a gantry-sweep reveal (per Matthew, 2026-09-07): the sweep
 // invalidated a full-height region every frame and slideshowed on the real
@@ -18,11 +18,15 @@
 // the shell needs nothing from it.
 
 static lv_obj_t* s_root     = nullptr;
-static lv_obj_t* s_mark     = nullptr;   // the wordmark block, zoomed + faded
+static lv_obj_t* s_mark     = nullptr;   // layout box for the wordmark
+static lv_obj_t* s_leaf[3]  = {};        // word, sub, rule — animated each:
+                                         // v8 opa/transform on a CONTAINER
+                                         // does not cascade to children (it
+                                         // shipped that way once: pop-in)
 static lv_obj_t* s_status   = nullptr;   // what boot is waiting on
 
-static const int ZOOM_MS   = 700;
-static const int ZOOM_FROM = 460;        // ~180%; 256 is life size
+static const int ARRIVE_MS = 700;
+static const int SPREAD    = U * 4;      // how far the leaves start from home
 static const int HOLD_MS  = 1200;
 static const int EXIT_MS  = 500;
 static const int DELAY_MS = 150;         // timeline starts after boot, tiny settle only
@@ -115,12 +119,23 @@ static void hold_then_exit_cb(lv_anim_t*) {
     s_gate = lv_timer_create(gate_cb, 100, nullptr);
 }
 
-static void zoom_exec_cb(void* obj, int32_t v) {
-    lv_obj_set_style_transform_zoom((lv_obj_t*)obj, (lv_coord_t)v, 0);
+// The arrival, without the transform engine: v8's transform_zoom on labels
+// simply blanks them while zoomed (measured in the sim — mark invisible for
+// the whole animation, popping in at the end; LV_DRAW_COMPLEX made no
+// difference). So depth is faked with what provably renders: the word
+// drifts down into place, the subtitle drifts up, the rule grows outward.
+// v runs 0 (scattered) .. 100 (home).
+static void settle_exec_cb(void*, int32_t v) {
+    const lv_coord_t d = (lv_coord_t)(SPREAD * (100 - v) / 100);
+    lv_obj_align(s_leaf[0], LV_ALIGN_CENTER, 0, (lv_coord_t)(-U * 2 - d));
+    lv_obj_align(s_leaf[1], LV_ALIGN_CENTER, 0, (lv_coord_t)(U * 2 + d));
+    lv_obj_set_width(s_leaf[2], (lv_coord_t)(U * 10 + U * 20 * v / 100));
+    lv_obj_align(s_leaf[2], LV_ALIGN_CENTER, 0, 0);
 }
 
-static void fade_exec_cb(void* obj, int32_t v) {
-    lv_obj_set_style_opa((lv_obj_t*)obj, (lv_opa_t)v, 0);
+static void fade_exec_cb(void*, int32_t v) {
+    for (int i = 0; i < 3; i++)
+        if (s_leaf[i]) lv_obj_set_style_opa(s_leaf[i], (lv_opa_t)v, 0);
 }
 
 static void tap_cb(lv_event_t*) { splash_delete(); }
@@ -147,10 +162,6 @@ void splash_show() {
     lv_obj_clear_flag(s_mark, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(s_mark, MARK_W, MARK_H);
     lv_obj_align(s_mark, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_transform_pivot_x(s_mark, MARK_W / 2, 0);
-    lv_obj_set_style_transform_pivot_y(s_mark, MARK_H / 2, 0);
-    lv_obj_set_style_transform_zoom(s_mark, ZOOM_FROM, 0);
-    lv_obj_set_style_opa(s_mark, LV_OPA_TRANSP, 0);
 
     lv_obj_t* word = lv_label_create(s_mark);
     lv_label_set_text(word, "FluidNC");
@@ -171,6 +182,13 @@ void splash_show() {
     lv_obj_align(rule, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(rule, C_LINE, 0);
     lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
+
+    // Fade rides each leaf's own opa — the only opa v8 honours — and the
+    // arrival starts scattered.
+    s_leaf[0] = word; s_leaf[1] = sub; s_leaf[2] = rule;
+    for (int i = 0; i < 3; i++)
+        lv_obj_set_style_opa(s_leaf[i], LV_OPA_TRANSP, 0);
+    settle_exec_cb(nullptr, 0);
 
     // Status sits on s_root rather than inside the reveal clip: it has to stay
     // readable while the plate slides, and it is boot information, not part of
@@ -193,9 +211,9 @@ void splash_begin() {
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_mark);
-    lv_anim_set_exec_cb(&a, zoom_exec_cb);
-    lv_anim_set_values(&a, ZOOM_FROM, 256);   // 256 = life size
-    lv_anim_set_time(&a, ZOOM_MS);
+    lv_anim_set_exec_cb(&a, settle_exec_cb);
+    lv_anim_set_values(&a, 0, 100);
+    lv_anim_set_time(&a, ARRIVE_MS);
     lv_anim_set_delay(&a, DELAY_MS);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_ready_cb(&a, hold_then_exit_cb);
@@ -206,7 +224,7 @@ void splash_begin() {
     lv_anim_set_var(&b, s_mark);
     lv_anim_set_exec_cb(&b, fade_exec_cb);
     lv_anim_set_values(&b, LV_OPA_TRANSP, LV_OPA_COVER);
-    lv_anim_set_time(&b, ZOOM_MS);
+    lv_anim_set_time(&b, ARRIVE_MS);
     lv_anim_set_delay(&b, DELAY_MS);
     lv_anim_set_path_cb(&b, lv_anim_path_ease_out);
     lv_anim_start(&b);
