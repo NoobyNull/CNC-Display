@@ -137,13 +137,21 @@ void splash_show() {
 
     // Clipping window. Children are clipped to its bounds, so a fixed-size
     // plate inside it holds the text still while the window grows over it.
+    //
+    // NOT clickable — lv_obj defaults to CLICKABLE, and once the sweep has
+    // grown this to full screen it sat on top of s_root swallowing every
+    // tap with no handler: "tap to skip" worked during the animation (taps
+    // right of the sweep line hit s_root) and died the moment it finished.
+    // Found on the glass 2026-09-07; the cosmetic children pass taps through.
     s_reveal = lv_obj_create(s_root);
     lv_obj_remove_style_all(s_reveal);
+    lv_obj_clear_flag(s_reveal, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(s_reveal, 1, H);
     lv_obj_set_pos(s_reveal, 0, 0);
 
     lv_obj_t* plate = lv_obj_create(s_reveal);
     lv_obj_remove_style_all(plate);
+    lv_obj_clear_flag(plate, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(plate, W, H);
     lv_obj_set_pos(plate, 0, 0);
 
@@ -161,6 +169,7 @@ void splash_show() {
 
     lv_obj_t* rule = lv_obj_create(plate);
     lv_obj_remove_style_all(rule);
+    lv_obj_clear_flag(rule, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(rule, U * 30, 2);
     lv_obj_align(rule, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(rule, C_LINE, 0);
@@ -178,6 +187,7 @@ void splash_show() {
     // The gantry: a vertical accent line at the cut front, carriage riding it.
     s_gantry = lv_obj_create(s_root);
     lv_obj_remove_style_all(s_gantry);
+    lv_obj_clear_flag(s_gantry, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(s_gantry, 3, H);
     lv_obj_set_pos(s_gantry, 0, 0);
     lv_obj_set_style_bg_color(s_gantry, C_ACCENT, 0);
@@ -185,6 +195,7 @@ void splash_show() {
 
     s_carriage = lv_obj_create(s_root);
     lv_obj_remove_style_all(s_carriage);
+    lv_obj_clear_flag(s_carriage, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_size(s_carriage, 13, 13);
     lv_obj_set_pos(s_carriage, -5, H / 2);
     lv_obj_set_style_bg_color(s_carriage, C_ACCENT, 0);
