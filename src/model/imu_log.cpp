@@ -306,7 +306,6 @@ const char* imulog_status() {
     } else if (s_count) {
         snprintf(s_status, sizeof(s_status), "%lu saved%s",
                  (unsigned long)s_count, s_dropped ? "  DROPS" : "");
-        (void)s_tty_skipped;
     } else {
         snprintf(s_status, sizeof(s_status), "%s", s_tty ? "tty only" : "idle");
     }
