@@ -79,6 +79,19 @@ static const int STATE_N = (int)(sizeof(STATE_NAME) / sizeof(STATE_NAME[0]));
 // PSRAM first: 80K out of internal DRAM is 80K LVGL does not get, and this ring
 // is written once and read once per sample — nothing that cares about the
 // slower bus. (On the simulator Arduino.h maps ps_malloc to plain malloc.)
+// Machine position for one axis, in e4 fixed point, always in MILLIMETRES.
+//
+// Two traps here. myAxes/myWco are the DISPLAY unit, not mm — show_dro() stores
+// e4 inches on a machine in G20 — so an inch-mode job would otherwise log
+// numbers 25.4x too small with nothing to say so. And the obvious conversion,
+// toMm(), cannot be used: FluidNCModel.h declares it unconditionally but only
+// DEFINES it in the non-E4 build, and this project is built -DE4_POS_T. It
+// compiles and fails at link.
+static int32_t mpos_mm_e4(int axis) {
+    e4_t v = myAxes[axis] + myWco[axis];
+    return inInches ? e4_inch_to_mm(v) : v;
+}
+
 static void* log_alloc(size_t n) {
     void* p = ps_malloc(n);
     return p ? p : malloc(n);
@@ -139,6 +152,8 @@ bool imulog_start() {
         "# t_us   micros() at the sample, monotonic from panel boot, NOT wall clock\r\n"
         "# ax/ay/az  g, SENSOR frame (IMU is on the spindle; orientation arbitrary)\r\n"
         "# state  FluidNC state at the sample; mx..ma  MACHINE position in mm\r\n"
+        "# Empty position columns mean the panel had no link (standalone sensor);\r\n"
+        "# correlate against the host that was driving the machine instead.\r\n"
         "# Hold the machine still for two seconds at the start: that block is the\r\n"
         "# gravity reference the sensor frame is recovered from.\r\n"
         "t_us,ax,ay,az,state,mx,my,mz,ma,feed\r\n",
@@ -207,12 +222,18 @@ void imulog_sample(uint32_t t_us, float ax, float ay, float az) {
     r.t_us = t_us;
     r.ax = ax; r.ay = ay; r.az = az;
     r.state = (uint8_t)state;
-    r.naxes = (uint8_t)(n_axes < IMULOG_AXES ? n_axes : IMULOG_AXES);
-    r.feed  = myFeed;
+
+    // With the Setup "Wired UART" toggle off there is no controller on the far
+    // end and therefore no position to record. Zero is not the honest answer —
+    // it reads as a real measurement taken at the origin — so those columns go
+    // out EMPTY and `state` says Disconnected. Running the panel as a standalone
+    // sensor is a supported mode, not a fault, and its files have to say which
+    // mode they were taken in.
+    bool linked = (state != Disconnected);
+    r.naxes = linked ? (uint8_t)(n_axes < IMULOG_AXES ? n_axes : IMULOG_AXES) : 0;
+    r.feed  = linked ? myFeed : 0;
     for (int i = 0; i < IMULOG_AXES; i++) {
-        // myAxes is the WORK position and follows the display units; machine
-        // position in mm is what a G-code file can be lined up against.
-        r.mpos[i] = (i < r.naxes) ? (int32_t)toMm(myAxes[i] + myWco[i]) : 0;
+        r.mpos[i] = (i < r.naxes) ? mpos_mm_e4(i) : 0;
     }
 
     s_head = (uint16_t)((s_head + 1) % RING_N);
