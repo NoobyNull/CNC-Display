@@ -7,6 +7,8 @@
 #include "model/fnc_settings.h"
 #include "model/caps.h"
 #include "ui/goto_popup.h"
+#include "model/imu_log.h"
+#include "hw/imu.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <strings.h>
@@ -59,6 +61,12 @@ static bool      s_alive     = false;  // $Limits/Show sent, no ! sent since
 static bool      s_got_sample = false; // this attempt produced any sample
 static int       s_dry       = 0;      // consecutive sampleless attempts
 static uint32_t  s_last      = 0;      // last request or sample time, ms
+
+// IMU recorder control. Lives here rather than on Setup because Setup's
+// vibration block is about the guard — what stops the machine — and this is
+// instrumentation: it changes nothing the machine does.
+static lv_obj_t* s_rec_btn;
+static lv_obj_t* s_rec_lbl;   // the button's own label, repainted REC/IMU LOG
 
 // Motor lamp index for one letter out of a limit_set() string, -1 for
 // anything else (spaces, the probe/toolsetter markers).
@@ -556,6 +564,21 @@ void page_diag_build(lv_obj_t* p) {
         lv_obj_set_height(b, LV_PCT(100));
     }
 
+    // Raw 3-axis recorder to the card. A tap, not a hold: it is safe in both
+    // directions and gets used mid-job, which is exactly when a long-press on a
+    // panel next to a running spindle is the wrong gesture.
+    s_rec_btn = w_button(diag, "IMU LOG", "idle", C_RAISE, C_TEXT,
+                         [](lv_event_t*) {
+                             if (imulog_active()) imulog_stop();
+                             else                 imulog_start();
+                         }, nullptr);
+    lv_obj_set_flex_grow(s_rec_btn, 1);
+    lv_obj_set_height(s_rec_btn, LV_PCT(100));
+    // w_button() puts a flex column inside the button and the two labels inside
+    // that, so the caption is a grandchild. The sub-label is not walked for at
+    // all — w_button() stashes it in the button's user_data for w_gate().
+    s_rec_lbl = lv_obj_get_child(lv_obj_get_child(s_rec_btn, 0), 0);
+
     // $CD=<file> dumps the LIVE config tree over the file the controller boots
     // from — the persistence FluidNC has but never documents. It rewrites the
     // whole file (regenerated, comments gone), so it takes a hold, not a tap.
@@ -597,9 +620,30 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_add_event_cb(s_kb, kb_done_cb, LV_EVENT_CANCEL, nullptr);
 }
 
+// The recorder's own state is the only truth about whether it is running, so
+// the button is repainted from it rather than from whatever the last press did.
+static void rec_paint() {
+    if (!s_rec_btn) return;
+    bool rec = imulog_active();
+    lv_obj_set_style_bg_color(s_rec_btn, rec ? C_CRIT : C_RAISE, 0);
+    if (s_rec_lbl) lv_label_set_text(s_rec_lbl, rec ? "STOP LOG" : "IMU LOG");
+    // No sensor is not a failure to announce loudly, but a button that looks
+    // armed with nothing behind it is the same wrong failure mode the guard
+    // modes avoid on the Setup page.
+    w_gate(s_rec_btn, imu_present() || rec, "no sensor");
+    // After the gate, not before: w_gate() restores the button's build-time sub
+    // text whenever it enables one, so the live status has to be written back
+    // over the top of it.
+    if (imu_present() || rec) {
+        lv_obj_t* sub = (lv_obj_t*)lv_obj_get_user_data(s_rec_btn);
+        if (sub) lv_label_set_text(sub, imulog_status());
+    }
+}
+
 void page_diag_tick() {
     reply_tick();
     if (s_out_mode && clog_total() != s_out_seen) refresh();   // output still arriving
+    rec_paint();
     if (fncset_dirty_take()) {
         refresh();
         scan_probe_config();

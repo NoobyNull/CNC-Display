@@ -18,6 +18,7 @@
 #include "hw/fw_update.h"
 #include "esp32-hal-periman.h"
 #include "model/vibration.h"
+#include "model/imu_log.h"
 #include "transport/uart.h"
 #include "transport/transport.h"
 #include "model/settings.h"
@@ -191,6 +192,49 @@ static void vib_guard() {
     }
 }
 
+// Single-character commands on the USB console. Only reachable when the Setup
+// "Wired UART" toggle is OFF, since that is the one configuration where Serial
+// is begun at all (see the header comment at the top of this file) — with the
+// link up this is dead code and the REC button on the Diag page is the only
+// control there is.
+//
+// This exists because the console and the link are the same two pins but they
+// are NOT the same cable at the host end: FluidNC is a CP2102 and this panel is
+// a CH340K, so a PC can hold both at once. Console mode gives up the panel's
+// own view of the machine and hands the correlation to the PC, which is driving
+// the G-code anyway.
+static void console_cmd() {
+    if (settings_uart_enabled()) return;
+    while (Serial.available()) {
+        switch (Serial.read()) {
+        case 'r':
+            if (!imulog_start()) Serial.printf("# start failed: %s\r\n", imulog_status());
+            break;
+        case 's':
+            imulog_stop();
+            imulog_set_tty(false);
+            break;
+        case 't':
+            imulog_set_tty(!imulog_tty());
+            if (!imulog_tty()) Serial.println("# stream off");
+            break;
+        case '?':
+            Serial.printf("# %s  file=%s  rate=%uHz  samples=%lu dropped=%lu skips=%lu imu=%s\r\n",
+                          imulog_status(), imulog_path()[0] ? imulog_path() : "-",
+                          (unsigned)imu_rate(),
+                          (unsigned long)imulog_count(), (unsigned long)imulog_dropped(),
+                          (unsigned long)imu_skips(),
+                          imu_present() ? "yes" : "NOT FOUND");
+            break;
+        case 'h':
+            Serial.println("# r=record to SD  s=stop  t=toggle console stream  ?=status");
+            break;
+        default:
+            break;    // newlines and stray bytes from a terminal
+        }
+    }
+}
+
 // transport_poll() keeps poking the controller until FluidNC answers.
 static void link_watchdog() {
     static uint32_t next_log = 0;
@@ -276,6 +320,12 @@ void loop() {
     send_pump();   // queued controller lines; never sent from a UI callback
     imu_poll();
     status_led_tick();
+    // Straight after imu_poll(), so a sample taken this pass reaches the card on
+    // the same pass. The FluidNC drain at the top of the loop is therefore the
+    // very next thing to run: an SD write that stalls is followed immediately by
+    // a read, which is what keeps the 16K RX ring (~160 ms at 1 Mbaud) clear.
+    imulog_poll();
+    console_cmd();
     vib_guard();
     prime_link_if_up();
     caps_poll();

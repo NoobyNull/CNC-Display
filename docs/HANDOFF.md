@@ -34,6 +34,64 @@
   Z 1000 @ 800, 39.882 steps/mm XY, 400 Z. `sim/profiles/corgi_bringup.yaml`
   is now a historical fixture (its tests need a no-homing machine), not the
   live config the sim README describes.
+## Session 2026-09-16 — the IMU records now, and two sensor defaults were wrong
+
+The vibration guard kept only `sqrt(ax²+ay²+az²)` and threw the three axes away
+every sample. That is enough to notice a machine shaking and useless for working
+out **what** is shaking: a scalar cannot be rotated into the machine frame
+afterwards and cannot separate an X reversal from Z chatter. The sensor on this
+machine is bolted to the **spindle** in an orientation nobody wrote down, so the
+frame has to be recovered in post — which only works on raw axes.
+
+**New `src/model/imu_log.{h,cpp}`** — raw 3-axis recorder, two sinks:
+
+- **SD card**, `/imu/NNNN.csv`, the real one. Runs with the link up, so every
+  sample carries the FluidNC state and machine position it happened at.
+  Controlled by **IMU LOG on the Diag page**.
+- **USB console**, 115200, `t_us,ax,ay,az` only. Alive solely when the Setup
+  "Wired UART" toggle is OFF, so there is no link and no position — but the host
+  PC can hold FluidNC's own CP2102 at the same time (different cable, different
+  chip) and own that half of the correlation. `~/imu_capture.py` on the shop PC
+  is the other end. Console keys: `r` record, `s` stop, `t` stream, `?` status,
+  `h` help.
+
+Samples go into a 2048-record PSRAM ring; `imulog_poll()` drains it from
+`loop()`, never from a UI callback — an SD write can stall for tens of ms and
+the FluidNC RX ring is only 16K (~160 ms at 1 Mbaud). A full ring drops the
+**newest** sample and counts it: a log with a hole that says so is usable, one
+silently resampled is not. The card never waits on the console; when both are
+running, console lines that will not fit are skipped and counted separately.
+
+### Two ICM-20948 defaults that were quietly wrong
+
+SparkFun's `startupDefault()` leaves the accelerometer at **±2 g** with its
+low-pass filter **disabled** (`acc_d473bw_n499bw`, ~500 Hz of noise bandwidth)
+and the ODR at 1125 Hz. Both are now set explicitly in `imu_apply_config()`:
+
+- **Aliasing.** Sampling 500 Hz of bandwidth at 50 Hz folds every spindle
+  harmonic above 25 Hz back into the band, where it is indistinguishable from
+  real low-frequency machine motion. The guard has been reading that since the
+  port. The DLPF is now re-picked whenever the rate changes, always below
+  Nyquist for the rate actually sampled.
+- **±2 g clips below the 4.0 g impact threshold the guard ships with**, so
+  `THRESHOLD_ESTOP_PEAK_G` could never fire however hard the machine was hit.
+  Not a tuning problem — an unreachable number. Now ±8 g, which still resolves
+  0.00024 g.
+
+**This changes what the guard sees.** Less aliased noise in the band, and an
+impact threshold that can now actually trigger. Re-check the sensitivity
+settings on the Setup page against a real cut before trusting the old numbers.
+
+### Rate
+
+`IMU_RATE_HZ` is 50 (the comment above it claiming 200 has been stale since the
+port). 50 Hz resolves 25 Hz — fine for catching an impact, too narrow for bench
+and gantry resonances, which live in the tens of Hz. `imu_set_rate()` is new;
+the recorder holds 200 Hz while a sink is open and hands it back afterwards,
+because 200 Hz costs several percent of the shared I2C bus and that is visible
+in the UI. `imu_skips()` counts samples lost to GT911 contention and belongs
+next to any log taken at a raised rate.
+
 
 ## Session 2026-08-25 — the Corgi runs FluidNC **v4**, and $S changed — read this first
 

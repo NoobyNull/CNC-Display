@@ -48,6 +48,12 @@ void     delay(uint32_t ms);
 struct SimSerial {
     void begin(unsigned long) {}
     void write(uint8_t c) { fputc(c, stdout); }
+    size_t write(const uint8_t* b, size_t n) { return fwrite(b, 1, n, stdout); }
+    // The IMU recorder paces its console output against this so it never
+    // blocks the loop; stdout has no such limit, so say "plenty".
+    int availableForWrite() { return 4096; }
+    int available() { return 0; }
+    int read() { return -1; }
     void print(const char* s) { fputs(s, stdout); }
     void println(const char* s) { fputs(s, stdout); fputc('\n', stdout); }
     void println() { fputc('\n', stdout); }

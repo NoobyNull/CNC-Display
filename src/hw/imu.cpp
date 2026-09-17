@@ -1,6 +1,7 @@
 #include "hw/imu.h"
 #include "hw/touch.h"           // i2c_take / i2c_give
 #include "model/vibration.h"
+#include "model/imu_log.h"
 #include "model/settings.h"
 #include <Arduino.h>
 #include <Wire.h>
@@ -19,12 +20,16 @@
 // and a 20ms impact would fall clean between two samples. That would not make
 // the guard slower, it would make it blind while still appearing armed.
 #define IMU_RATE_HZ  50
-#define IMU_PERIOD_US (1000000 / IMU_RATE_HZ)
+
+static uint16_t s_rate_hz   = IMU_RATE_HZ;
+static uint32_t s_period_us = 1000000 / IMU_RATE_HZ;
+static uint32_t s_skips     = 0;
 
 static ICM_20948_I2C s_icm;
 static bool     s_ok = false;
 static uint8_t  s_addr = 0;
 static float    s_last_mag = 1.0f;
+static float    s_ax = 0.0f, s_ay = 0.0f, s_az = 1.0f;
 static uint32_t s_next_us = 0;
 static uint32_t s_last_good_us = 0;  // last successful sample
 static bool     s_calibrated = false;
@@ -36,6 +41,73 @@ static uint32_t s_cal_n = 0;
 bool imu_present()      { return s_ok; }
 float imu_last_magnitude() { return s_last_mag; }
 uint8_t imu_address()   { return s_addr; }
+uint16_t imu_rate()     { return s_rate_hz; }
+uint32_t imu_skips()    { return s_skips; }
+
+void imu_last_axes(float* ax, float* ay, float* az) {
+    if (ax) *ax = s_ax;
+    if (ay) *ay = s_ay;
+    if (az) *az = s_az;
+}
+
+// Anti-alias filter for a given sample rate: the widest of the ICM's accel
+// bandwidths that still sits under Nyquist.
+static uint8_t dlpf_for_rate(uint16_t hz) {
+    if (hz >= 300) return acc_d111bw4_n136bw;   // 3dB 111.4 Hz
+    if (hz >= 150) return acc_d50bw4_n68bw8;    // 3dB  50.4 Hz
+    if (hz >= 75)  return acc_d23bw9_n34bw4;    // 3dB  23.9 Hz
+    return acc_d11bw5_n17bw;                    // 3dB  11.5 Hz
+}
+
+// SparkFun's startupDefault() leaves the accelerometer at +/-2g with its
+// low-pass filter DISABLED — acc_d473bw_n499bw, i.e. ~500 Hz of noise
+// bandwidth — and the ODR at 1125 Hz. Both defaults are wrong here:
+//
+//  - Sampling 500 Hz of bandwidth at 50 Hz ALIASES. Every spindle harmonic
+//    above 25 Hz folds back into the band and is then indistinguishable from
+//    real low-frequency machine motion. The guard has been reading that, and
+//    any log taken without fixing it would record it as signal.
+//  - +/-2g CLIPS below the 4.0g impact threshold the guard ships with, so that
+//    threshold could never fire however hard the machine was hit. Not a tuning
+//    problem — an unreachable number.
+//
+// +/-8g still resolves 0.00024 g, which is orders below any vibration this
+// machine makes, so the range costs nothing that matters.
+static void imu_apply_config() {
+    if (!s_ok) return;
+    // Called from imu_probe() and from imu_set_rate(), and the second of those
+    // can come from a UI callback. The wait is bounded and the bus is almost
+    // always free, but a contended one costs a visible LVGL hitch rather than a
+    // freeze — which beats leaving the sensor on defaults that alias.
+    if (!i2c_take(100)) {
+        Serial.println("[imu] config skipped: I2C busy");
+        return;
+    }
+
+    ICM_20948_fss_t fss;
+    fss.a = gpm8;
+    fss.g = dps250;
+    s_icm.setFullScale(ICM_20948_Internal_Acc, fss);
+
+    ICM_20948_dlpcfg_t cfg;
+    cfg.a = dlpf_for_rate(s_rate_hz);
+    cfg.g = gyr_d196bw6_n229bw8;
+    s_icm.setDLPFcfg(ICM_20948_Internal_Acc, cfg);
+    s_icm.enableDLPF(ICM_20948_Internal_Acc, true);
+
+    i2c_give();
+    Serial.printf("[imu] %u Hz, +/-8g, dlpf cfg %u\n",
+                  (unsigned)s_rate_hz, (unsigned)cfg.a);
+}
+
+void imu_set_rate(uint16_t hz) {
+    if (hz < 10)  hz = 10;
+    if (hz > 500) hz = 500;
+    if (hz == s_rate_hz) return;
+    s_rate_hz   = hz;
+    s_period_us = 1000000u / hz;
+    imu_apply_config();
+}
 
 // Probe both address straps. `patient` is used for the one-shot call at boot,
 // where waiting on the I2C mutex is free because nothing is drawing yet; the
@@ -66,6 +138,7 @@ static bool imu_probe(bool patient) {
             s_cal_sum    = 0;
             s_cal_n      = 0;
             s_cal_start  = millis();
+            imu_apply_config();
             return true;
         }
     }
@@ -98,11 +171,11 @@ void imu_poll() {
 
     uint32_t now = micros();
     if ((int32_t)(now - s_next_us) < 0) return;
-    s_next_us = now + IMU_PERIOD_US;
+    s_next_us = now + s_period_us;
 
     // The bus is shared with touch; never block waiting for it, just skip this
     // sample. Missing one sample at 200Hz is invisible, a stalled UI is not.
-    if (!i2c_take(2)) return;
+    if (!i2c_take(2)) { s_skips++; return; }
     bool have = s_icm.dataReady();
     if (have) s_icm.getAGMT();
     i2c_give();
@@ -125,7 +198,13 @@ void imu_poll() {
     float ax = s_icm.accX() / 1000.0f;
     float ay = s_icm.accY() / 1000.0f;
     float az = s_icm.accZ() / 1000.0f;
+    s_ax = ax; s_ay = ay; s_az = az;
     s_last_mag = sqrtf(ax * ax + ay * ay + az * az);
+
+    // Before the calibration gate below, deliberately: the recorder wants the
+    // still period at the head of a run, because that block IS the gravity
+    // reference the sensor's orientation gets recovered from.
+    imulog_sample(now, ax, ay, az);
 
     // Two seconds of stillness at boot establishes what "at rest" reads, so the
     // machine's own orientation and any sensor bias fall out of the deviation.

@@ -86,6 +86,17 @@ bool     sd_open(const char*) { return false; }
 size_t   sd_read(uint8_t*, size_t) { return 0; }
 void     sd_close() {}
 
+// Writes are refused rather than redirected to a host file: a sim that quietly
+// filled ./imu/0001.csv would make a recording look like it worked on hardware
+// that has no card in it.
+bool   sd_log_open(const char*) { return false; }
+size_t sd_log_write(const void*, size_t n) { return n; }
+void   sd_log_flush() {}
+void   sd_log_close() {}
+bool   sd_log_is_open() { return false; }
+bool   sd_mkdir(const char*) { return false; }
+bool   sd_exists(const char*) { return false; }
+
 // ---------------- IMU ----------------
 // Absent, which is the panel's own default: no IMU is fitted unless one is
 // wired to the I2C-OUT connector. The vibration guard stays inert, and the
@@ -96,6 +107,18 @@ bool    imu_present() { return false; }
 void    imu_poll() {}
 float   imu_last_magnitude() { return 0.0f; }
 uint8_t imu_address() { return 0; }
+void    imu_last_axes(float* ax, float* ay, float* az) {
+    if (ax) *ax = 0.0f;
+    if (ay) *ay = 0.0f;
+    if (az) *az = 1.0f;
+}
+// The recorder is built into the sim so the Diag button's states can be laid
+// out and clicked, but it can never start: sd_log_open() below refuses, which
+// is the same path a panel with no card takes.
+static uint16_t s_sim_rate = 50;
+void     imu_set_rate(uint16_t hz) { s_sim_rate = hz; }
+uint16_t imu_rate() { return s_sim_rate; }
+uint32_t imu_skips() { return 0; }
 
 // ---------------- firmware update ----------------
 // Refused, not simulated. fwupd_net() ends in ESP.restart() on success; there

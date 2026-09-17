@@ -10,3 +10,16 @@ bool   sd_present();
 bool   sd_open(const char* path);
 size_t sd_read(uint8_t* dst, size_t max);    // 0 = EOF
 void   sd_close();
+
+// Streaming WRITE, on its own File handle. Deliberately not the one above: the
+// XModem transmitter reads a G-code file for as long as an upload lasts, and
+// the IMU recorder writes for as long as a job lasts, so the two overlap. One
+// shared handle would have whichever started second silently close the first.
+bool   sd_log_open(const char* path);        // create, truncating any existing
+size_t sd_log_write(const void* src, size_t n);
+void   sd_log_flush();                       // commit to the card, keep it open
+void   sd_log_close();
+bool   sd_log_is_open();
+
+bool sd_mkdir(const char* path);             // true if it exists afterwards
+bool sd_exists(const char* path);

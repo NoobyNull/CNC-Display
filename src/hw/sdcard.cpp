@@ -20,6 +20,7 @@
 static SPIClass   sd_spi(FSPI);
 static bool       s_ok = false;
 static File       s_file;
+static File       s_log;     // write handle; see the comment in sdcard.h
 
 bool sd_present() { return s_ok; }
 
@@ -51,3 +52,41 @@ size_t sd_read(uint8_t* dst, size_t max) {
 void sd_close() {
     if (s_file) s_file.close();
 }
+
+// ---- streaming write ---------------------------------------------------------
+
+bool sd_mkdir(const char* path) {
+    if (!s_ok) return false;
+    if (SD.exists(path)) return true;
+    return SD.mkdir(path);
+}
+
+bool sd_exists(const char* path) {
+    return s_ok && SD.exists(path);
+}
+
+bool sd_log_open(const char* path) {
+    if (!s_ok) return false;
+    sd_log_close();
+    s_log = SD.open(path, FILE_WRITE);
+    return (bool)s_log;
+}
+
+size_t sd_log_write(const void* src, size_t n) {
+    if (!s_log) return 0;
+    return s_log.write((const uint8_t*)src, n);
+}
+
+// The FAT directory entry is only updated on flush or close, so a log that is
+// never flushed reads as a zero-length file if the panel loses power mid-job —
+// the data is on the card but nothing points at it. Cheap enough to do on a
+// timer; expensive enough not to do per line.
+void sd_log_flush() {
+    if (s_log) s_log.flush();
+}
+
+void sd_log_close() {
+    if (s_log) s_log.close();
+}
+
+bool sd_log_is_open() { return (bool)s_log; }
