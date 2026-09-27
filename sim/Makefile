@@ -4,7 +4,7 @@
 #   make run        build, then connect to a fluidnc_sim.py on 127.0.0.1:2323
 #   make -j         parallel (LVGL is ~400 translation units, use this)
 #
-# Everything under src/ui, src/model and src/transport/xmodem_* is compiled
+# Everything under src/ui, src/model and src/transport/xmodem_rx is compiled
 # from the firmware tree UNMODIFIED. Only the hardware layer is replaced, by
 # sim/src/*.cpp. If a build here fails after a firmware change, the firmware
 # grew a hardware dependency in a layer that is meant to be portable.
@@ -37,8 +37,7 @@ LDFLAGS  := $(shell sdl2-config --libs) -lm -lpthread
 # replaced wholesale by sim/src.
 FW_SRC := $(wildcard $(ROOT)/src/ui/*.cpp) \
           $(wildcard $(ROOT)/src/model/*.cpp) \
-          $(ROOT)/src/transport/xmodem_rx.cpp \
-          $(ROOT)/src/transport/xmodem_tx.cpp
+          $(ROOT)/src/transport/xmodem_rx.cpp
 
 SIM_SRC := $(wildcard $(CURDIR)/src/*.cpp)
 LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')

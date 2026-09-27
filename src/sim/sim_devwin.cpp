@@ -173,11 +173,18 @@ static void build_ui() {
 
 // ---- live values -----------------------------------------------------------
 static const char* cap_word(cap_state_t c) {
-    return c == CAP_YES ? "yes" : c == CAP_NO ? "no" : "unknown";
+    return c == CAP_PRESENT ? "yes" : c == CAP_ABSENT ? "no" : "unknown";
 }
 
 static lamp_t cap_lamp(cap_state_t c) {
-    return c == CAP_YES ? LAMP_GOOD : c == CAP_NO ? LAMP_BAD : LAMP_UNKNOWN;
+    return c == CAP_PRESENT ? LAMP_GOOD : c == CAP_ABSENT ? LAMP_BAD : LAMP_UNKNOWN;
+}
+
+// main's caps model has no caps_macros(): derive it — settled with slots is
+// present, settled without is absent, unsettled is unknown.
+static cap_state_t caps_macros() {
+    if (!caps_settled()) return CAP_UNKNOWN;
+    return caps_macro_count() ? CAP_PRESENT : CAP_ABSENT;
 }
 
 static void tick_display() {
@@ -228,7 +235,7 @@ static void tick_corgi() {
     // which pages the panel next door is allowed to show.
     set_row(2, i++, cap_lamp(caps_probe()),  "PROBE",  cap_word(caps_probe()));
     set_row(2, i++, cap_lamp(caps_homing()), "HOMING", cap_word(caps_homing()));
-    if (caps_macros() == CAP_YES) snprintf(b, sizeof(b), "%u defined", (unsigned)caps_macro_count());
+    if (caps_macros() == CAP_PRESENT) snprintf(b, sizeof(b), "%u defined", (unsigned)caps_macro_count());
     else                          snprintf(b, sizeof(b), "%s", cap_word(caps_macros()));
     set_row(2, i++, cap_lamp(caps_macros()), "MACROS", b);
     set_row(2, i++, caps_settled() ? LAMP_GOOD : LAMP_UNKNOWN,

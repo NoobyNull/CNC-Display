@@ -1,4 +1,7 @@
 #include "model/console_log.h"
+#include "model/fnc_codes.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // FluidNC emits <Run|MPos:...> several times a second. Unfiltered, those scroll
@@ -29,11 +32,26 @@ static clog_kind_t classify(const char* s) {
     return CLOG_INFO;
 }
 
+// "error:22" -> "error:22 Gcode undefined feed rate". Only a bare code is
+// named: anything already carrying text is left as FluidNC sent it.
+static const char* with_name(const char* line, clog_kind_t k, char* buf, size_t n) {
+    if (k != CLOG_ERROR && k != CLOG_ALARM) return line;
+    char* end;
+    long code = strtol(line + 6, &end, 10);
+    if (end == line + 6 || *end) return line;
+    const char* name = k == CLOG_ERROR ? fnc_error_name((int)code) : fnc_alarm_name((int)code);
+    if (!name) return line;
+    snprintf(buf, n, "%s %s", line, name);
+    return buf;
+}
+
 void clog_add(const char* line) {
     if (!line || !*line) return;
 
     clog_kind_t k = classify(line);
     if (k == CLOG_STATUS && !s_show_status) return;
+    char named[CLOG_LINE_MAX];
+    line = with_name(line, k, named, sizeof(named));
 
     size_t slot;
     if (s_count < CLOG_CAPACITY) {

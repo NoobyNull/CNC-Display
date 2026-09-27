@@ -18,6 +18,8 @@ static lv_obj_t* s_name[VISIBLE_ROWS];
 static lv_obj_t* s_cell[VISIBLE_ROWS][3];
 static int s_sel = 0;
 
+static lv_obj_t* s_act[4];
+
 static void row_pick_cb(lv_event_t* e) {
     s_sel = (int)(intptr_t)lv_event_get_user_data(e);
     page_offsets_tick();
@@ -111,13 +113,21 @@ void page_offsets_build(lv_obj_t* p) {
         { "ACTIVATE",      "Gnn",          activate_cb,    C_RAISE,  C_TEXT },
     };
     for (int i = 0; i < 4; i++) {
-        lv_obj_t* b = w_button(acts, A[i].t, A[i].s, A[i].bg, A[i].fg, A[i].cb, nullptr);
+        lv_obj_t* b = s_act[i] = w_button(acts, A[i].t, A[i].s, A[i].bg, A[i].fg, A[i].cb, nullptr);
         lv_obj_set_width(b, LV_PCT(100));
         lv_obj_set_flex_grow(b, 1);
     }
 }
 
 void page_offsets_tick() {
+    // All four actions are G-code (G10, G0, G92.1, G5x): refused in Alarm.
+    static int was_locked = -1;
+    const bool locked = w_locked();
+    if (locked != was_locked) {
+        was_locked = locked;
+        for (lv_obj_t* b : s_act) w_gate(b, !locked, LOCK_REASON);
+    }
+
     for (int r = 0; r < VISIBLE_ROWS; r++) {
         const wcs_t* w = offsets_row(r);
         if (!w) continue;

@@ -33,6 +33,19 @@ void test_ordinary_lines_are_kept_and_classified() {
     TEST_ASSERT_EQUAL_INT(CLOG_SENT,  clog_line(5)->kind);
 }
 
+void test_bare_codes_get_fluidnc_names() {
+    clog_add("error:22");
+    clog_add("error:10");      // FluidNC: soft limit (Grbl meant something else)
+    clog_add("ALARM:14");
+    clog_add("error:9 G-code locked out");   // already has text: untouched
+    clog_add("error:999");                   // unknown: left as sent
+    TEST_ASSERT_EQUAL_STRING("error:22 Gcode undefined feed rate", clog_line(0)->text);
+    TEST_ASSERT_EQUAL_STRING("error:10 Soft limit error", clog_line(1)->text);
+    TEST_ASSERT_EQUAL_STRING("ALARM:14 Unhomed", clog_line(2)->text);
+    TEST_ASSERT_EQUAL_STRING("error:9 G-code locked out", clog_line(3)->text);
+    TEST_ASSERT_EQUAL_STRING("error:999", clog_line(4)->text);
+}
+
 void test_ring_buffer_drops_oldest_when_full() {
     char b[16];
     for (int i = 0; i < CLOG_CAPACITY + 10; i++) {
@@ -71,6 +84,7 @@ int main() {
     RUN_TEST(test_status_frames_are_hidden_by_default);
     RUN_TEST(test_status_frames_appear_when_enabled);
     RUN_TEST(test_ordinary_lines_are_kept_and_classified);
+    RUN_TEST(test_bare_codes_get_fluidnc_names);
     RUN_TEST(test_ring_buffer_drops_oldest_when_full);
     RUN_TEST(test_long_lines_are_truncated_not_overflowed);
     RUN_TEST(test_blank_and_null_input_is_ignored);

@@ -30,6 +30,8 @@ static lv_obj_t* s_note_lbl;
 
 static float commanded() { return DISTANCE[s_dist]; }
 
+static lv_obj_t* s_move_btn;
+
 static void refresh() {
     char b[40];
 
@@ -128,7 +130,7 @@ void page_cal_build(lv_obj_t* p) {
     }
     lv_obj_t* rd = w_button(r1, "READ", "current", C_SURFACE, C_ACCENT, read_cb, nullptr);
     lv_obj_set_size(rd, U * 12, LV_PCT(100));
-    lv_obj_t* mv = w_button(r1, "MOVE", "G91 G0", C_ACCENT, C_BG, move_cb, nullptr);
+    lv_obj_t* mv = s_move_btn = w_button(r1, "MOVE", "G91 G0", C_ACCENT, C_BG, move_cb, nullptr);
     lv_obj_set_flex_grow(mv, 1);
     lv_obj_set_height(mv, LV_PCT(100));
 
@@ -197,6 +199,14 @@ void page_cal_build(lv_obj_t* p) {
 }
 
 void page_cal_tick() {
+    // MOVE is motion, refused in Alarm; READ and APPLY are $ settings and
+    // stay usable.
+    static int was_locked = -1;
+    const bool locked = w_locked();
+    if (locked != was_locked) {
+        was_locked = locked;
+        w_gate(s_move_btn, !locked, LOCK_REASON);
+    }
     // cal_feed_line() fills in behind us off the reply stream, so the display
     // only becomes correct on the tick after READ.
     static bool s_had;

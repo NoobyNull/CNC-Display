@@ -2,6 +2,7 @@
 #include "hw/display_hw.h"
 #include <Preferences.h>
 #include <string.h>
+#include <math.h>
 
 static Preferences prefs;
 
@@ -21,6 +22,8 @@ static uint16_t s_pages = 0xFFFF;
 // Half speed by default: fast enough to be useful, slow enough that the
 // one-tick release coast stays small on an unfamiliar machine.
 static uint8_t s_jogpct = 50;
+static uint8_t s_probe_type = 0;
+static uint8_t s_probe_corner = 0;
 
 // WiFi creds exist ONLY for the network firmware update (fw_update.cpp): the
 // radio never runs alongside the live display. The old WiFi-transport keys
@@ -43,6 +46,8 @@ void settings_load() {
     s_scroff   = prefs.getUChar("scroff", 0);
     s_pages    = (uint16_t)prefs.getUShort("pages", 0xFFFF);
     s_jogpct   = prefs.getUChar("jogpct", 50);
+    s_probe_type   = prefs.getUChar("probetype", 0) == 1;
+    s_probe_corner = prefs.getUChar("probecorner", 0) & 3;
     // An empty or absent NVS key must never shadow the baked defaults.
     char tmp[161];
     if (prefs.getString("upd_ssid", tmp, sizeof(tmp)) && tmp[0]) strncpy(s_ssid, tmp, sizeof(s_ssid) - 1);
@@ -166,4 +171,33 @@ void settings_set_screen_off_min(uint8_t m) {
     if (m == s_scroff) return;
     s_scroff = m;
     nvs_put_uchar("scroff", m);
+}
+
+uint8_t settings_probe_type()   { return s_probe_type; }
+uint8_t settings_probe_corner() { return s_probe_corner; }
+
+void settings_set_probe_type(uint8_t t) {
+    if (t > 1 || t == s_probe_type) return;
+    s_probe_type = t;
+    nvs_put_uchar("probetype", t);
+}
+
+void settings_set_probe_corner(uint8_t c) {
+    c &= 3;
+    if (c == s_probe_corner) return;
+    s_probe_corner = c;
+    nvs_put_uchar("probecorner", c);
+}
+
+float settings_get_float(const char* key, float def) {
+    prefs.begin("cncdisp", true);
+    float v = prefs.getFloat(key, def);
+    prefs.end();
+    return v;
+}
+
+void settings_set_float(const char* key, float v) {
+    if (settings_get_float(key, NAN) == v) return;   // spare the flash
+    prefs.begin("cncdisp", false); prefs.putFloat(key, v); prefs.end();
+    display_resync();
 }

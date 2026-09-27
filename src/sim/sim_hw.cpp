@@ -75,30 +75,16 @@ uint8_t  touch_int_level() { return sim_touch_down ? 0 : 1; }
 uint8_t  touch_last_status() { return sim_touch_down ? 0x81 : 0x00; }
 
 // ---------------- SD card ----------------
-// A fake card, so the Run page has a file list to lay out. Names and sizes are
-// arbitrary; edit them freely, nothing reads their contents.
-static const sd_entry_t SIM_FILES[] = {
-    { "bracket-roughing.nc", 184320, false },
-    { "bracket-finish.nc",    96256, false },
-    { "surfacing-pass.gcode", 12800, false },
-    { "probe-corner.nc",       2048, false },
-    { "macros",                   0, true  },
-};
-static const size_t SIM_FILE_COUNT = sizeof(SIM_FILES) / sizeof(SIM_FILES[0]);
-
+// Only /wifi.txt is ever read from the panel card; the sim has none.
 bool   sd_begin() { return true; }
 bool   sd_present() { return true; }
-bool   sd_list(const char*) { return true; }
-size_t sd_count() { return SIM_FILE_COUNT; }
 
-const sd_entry_t* sd_at(size_t i) { return i < SIM_FILE_COUNT ? &SIM_FILES[i] : nullptr; }
 
 // No file bodies exist, so a read is immediate EOF. The XModem senders treat
 // that as a zero-length file and give up cleanly rather than hanging.
 bool     sd_open(const char*) { return false; }
 size_t   sd_read(uint8_t*, size_t) { return 0; }
 void     sd_close() {}
-uint32_t sd_size() { return 0; }
 
 // ---------------- IMU ----------------
 // Absent, which is the panel's own default: no IMU is fitted unless one is

@@ -123,7 +123,10 @@ static void refresh() {
     const bool typed = s_buf[0] && strcmp(s_buf, "-") != 0;
 
     char note[96];
-    if (!idle) {
+    if (w_locked()) {
+        snprintf(note, sizeof(note), "ALARM - %s first", LOCK_REASON);
+        lv_obj_set_style_text_color(s_note, C_WARN, 0);
+    } else if (!idle) {
         // Refusing while the machine is busy is the whole point: a goto issued
         // mid-cut is a crash, and jog is rejected in Cycle anyway.
         snprintf(note, sizeof(note), "machine must be IDLE to go to a position");
@@ -290,6 +293,8 @@ void goto_open(int axis) {
                                  }, nullptr);
         lv_obj_set_flex_grow(rst, 1);
         lv_obj_set_height(rst, LV_PCT(100));
+        // M64/M65 are G-code, refused in Alarm like the rest.
+        w_gate(rst, !w_locked(), LOCK_REASON);
     }
 
     s_entry = w_label(card, "0", &lv_font_montserrat_28, C_TEXT);

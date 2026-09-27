@@ -51,3 +51,17 @@ void    settings_set_jog_pct(uint8_t pct);
 
 uint8_t settings_screen_off_min();
 void    settings_set_screen_off_min(uint8_t m);
+
+// Probe page: which touch plate is on the machine, and for the Sienci AutoZero,
+// which corner of the stock it sits on. 0 = flat plate (Z only), 1 = AutoZero
+// (XYZ). Corner follows gSender's numbering: 0 BL, 1 TL, 2 TR, 3 BR.
+uint8_t settings_probe_type();
+void    settings_set_probe_type(uint8_t t);
+uint8_t settings_probe_corner();
+void    settings_set_probe_corner(uint8_t c);
+
+// Plain persisted numbers for pages that own a small table of them (the probe
+// page's plate settings). Read straight from NVS, so call at build time, not
+// per frame; the key is the caller's (NVS keys max 15 chars).
+float settings_get_float(const char* key, float def);
+void  settings_set_float(const char* key, float v);

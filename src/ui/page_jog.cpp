@@ -283,9 +283,29 @@ static void zero_cb(lv_event_t* e) {
     send_linef("G10 L20 P0 %c0", axisNumToChar(axis));
 }
 
-// Drops holding torque so the gantry can be pushed by hand. Tinted amber: on a
-// machine with an unbalanced Z, the head can fall when the steppers release.
-static void motors_off_cb(lv_event_t*) { send_line("$MD"); }
+// Drops holding torque so the gantry can be pushed by hand, and $ME puts it
+// back. FluidNC never reports enable state, so it is tracked here: green while
+// the steppers hold, red once released. Any motion re-enables them on the
+// controller side, which page_jog_tick() mirrors.
+static lv_obj_t* s_zero_btn[3];
+static lv_obj_t* s_motors_btn;
+static bool      s_motors_on = true;
+
+static void motors_paint() {
+    lv_color_t bg = s_motors_on ? C_OK : C_CRIT;
+    lv_obj_set_style_bg_color(s_motors_btn, bg, 0);
+    lv_obj_set_style_bg_color(s_motors_btn, lv_color_lighten(bg, 40), LV_STATE_PRESSED);
+    // w_button(): button -> column -> caption, sub-label.
+    lv_obj_t* col = lv_obj_get_child(s_motors_btn, 0);
+    lv_label_set_text(lv_obj_get_child(col, 0), s_motors_on ? "STEPPERS ON" : "STEPPERS OFF");
+    lv_label_set_text(lv_obj_get_child(col, 1), s_motors_on ? "$MD" : "$ME");
+}
+
+static void motors_cb(lv_event_t*) {
+    send_line(s_motors_on ? "$MD" : "$ME");
+    s_motors_on = !s_motors_on;
+    motors_paint();
+}
 
 void page_jog_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW);
@@ -402,10 +422,11 @@ void page_jog_build(lv_obj_t* p) {
 
     // $MD takes the fourth slot rather than Zero-All: pushing the gantry by hand
     // is reached far more often than zeroing every axis at once.
-    lv_obj_t* b0 = w_button(zeros, "X ZERO", "G10 L20 P0", C_SURFACE, C_TEXT, zero_cb, (void*)(intptr_t)0);
-    lv_obj_t* b1 = w_button(zeros, "Y ZERO", "G10 L20 P0", C_SURFACE, C_TEXT, zero_cb, (void*)(intptr_t)1);
-    lv_obj_t* b2 = w_button(zeros, "Z ZERO", "G10 L20 P0", C_SURFACE, C_TEXT, zero_cb, (void*)(intptr_t)2);
-    lv_obj_t* b3 = w_button(zeros, "STEPPERS OFF", "$MD", C_RAISE, C_WARN, motors_off_cb, nullptr);
+    lv_obj_t* b0 = s_zero_btn[0] = w_button(zeros, "X ZERO", "G10 L20 P0", C_SURFACE, C_TEXT, zero_cb, (void*)(intptr_t)0);
+    lv_obj_t* b1 = s_zero_btn[1] = w_button(zeros, "Y ZERO", "G10 L20 P0", C_SURFACE, C_TEXT, zero_cb, (void*)(intptr_t)1);
+    lv_obj_t* b2 = s_zero_btn[2] = w_button(zeros, "Z ZERO", "G10 L20 P0", C_SURFACE, C_TEXT, zero_cb, (void*)(intptr_t)2);
+    lv_obj_t* b3 = s_motors_btn = w_button(zeros, "STEPPERS ON", "$MD", C_OK, C_BG, motors_cb, nullptr);
+    motors_paint();
     lv_obj_set_grid_cell(b0, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
     lv_obj_set_grid_cell(b1, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
     lv_obj_set_grid_cell(b2, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
@@ -424,8 +445,24 @@ void page_jog_build(lv_obj_t* p) {
 // stops the press ever reaching an event handler -- no press, no long press, no
 // timer. And a key that cannot work must not look like it can.
 void page_jog_tick() {
+    // Motion (or a fresh link after reset) means FluidNC has the steppers on.
+    if (!s_motors_on && (state == Jog || state == Cycle || state == Homing || state == Disconnected)) {
+        s_motors_on = true;
+        motors_paint();
+    }
+
+    // Zeroing is G10: refused in Alarm like any other G-code. STEPPERS stays
+    // live -- $MD is allowed in Alarm, and freeing the gantry to push it by
+    // hand is exactly what an alarm can call for.
+    static int was_locked = -1;
+    const bool locked = w_locked();
+    if (locked != was_locked) {
+        was_locked = locked;
+        for (lv_obj_t* b : s_zero_btn) w_gate(b, !locked, LOCK_REASON);
+    }
+
     static bool was_off = false;
-    bool off = (state == Disconnected);
+    bool off = (state == Disconnected) || locked;
     if (off == was_off) return;
     was_off = off;
 

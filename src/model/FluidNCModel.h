@@ -82,7 +82,6 @@ const char* axisNumToCStr(int axis);
 char        axisNumToChar(int axis);
 
 state_t     decode_state_string(const char* state_string);
-const char* decode_error_number(int error_num);
 const char* mode_string();
 
 bool fnc_is_connected();

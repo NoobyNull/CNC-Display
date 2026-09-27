@@ -2,87 +2,123 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "ui/shell.h"
-#include "model/gcode_path.h"
+#include "model/gcode_stats.h"
+#include "model/path_loader.h"
 #include "model/console_log.h"
 #include "model/FluidNCModel.h"
 #include "e4math.h"
-#include <Arduino.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 
 // Full width, everything above the safety bar. Hold/resume/reset are the
 // controls you hit in a hurry and possibly without looking, so they keep their
-// full height and the canvas takes whatever is left rather than a percentage.
-static const lv_coord_t CANVAS_W  = SCREEN_W;
-static const lv_coord_t CANVAS_H  = SCREEN_H - SAFETY_H;
+// full height and the view takes whatever is left rather than a percentage.
+static const lv_coord_t VIEW_W    = SCREEN_W;
+static const lv_coord_t VIEW_H    = SCREEN_H - SAFETY_H;
 static const lv_coord_t LOG_ROW_H = 24;
-static const int        LOG_LINES = (CANVAS_H - U * 4) / LOG_ROW_H;
+static const int        LOG_LINES = (VIEW_H - U * 4) / LOG_ROW_H;
 
 static lv_obj_t* s_root;
-static lv_obj_t* s_tp_page;
+static lv_obj_t* s_st_page;
 static lv_obj_t* s_con_page;
-static lv_obj_t* s_canvas;
-static lv_obj_t* s_marker;
-static lv_obj_t* s_tp_info;
-static lv_obj_t* s_tp_dro;
+static lv_obj_t* s_st_title;
+static lv_obj_t* s_st_dro;
+static lv_obj_t* s_st_keys;
+static lv_obj_t* s_st_job;
+static lv_obj_t* s_st_setup;
 static lv_obj_t* s_log_lbl[LOG_LINES];
 static lv_obj_t* s_filter_lbl;
 
 static bool s_open = false;
-static expanded_face_t s_face = EXPANDED_TOOLPATH;
-static lv_color_t* s_cbuf = nullptr;
-
-static float s_sx = 1.0f, s_sy = 1.0f, s_ox = 0.0f, s_oy = 0.0f;
+static expanded_face_t s_face = EXPANDED_STATS;
 
 bool expanded_is_open() { return s_open; }
 
-static void fit_transform() {
-    gextents_t e = gpath_extents();
-    float w = e.max_x - e.min_x, h = e.max_y - e.min_y;
-    if (w <= 0.0f) w = 1.0f;
-    if (h <= 0.0f) h = 1.0f;
-    const float M = 24.0f;
-    float sx = (CANVAS_W - 2 * M) / w;
-    float sy = (CANVAS_H - 2 * M) / h;
-    float s  = sx < sy ? sx : sy;
-    s_sx = s;
-    s_sy = s;
-    s_ox = M + ((CANVAS_W - 2 * M) - w * s) * 0.5f - e.min_x * s;
-    s_oy = M + ((CANVAS_H - 2 * M) - h * s) * 0.5f + e.max_y * s;
+// "1 h 12 min", "14 min", "40 s": minutes are the unit that matters at the
+// machine, so seconds only appear when there is nothing bigger to say.
+static void fmt_time(char* b, size_t n, float sec) {
+    int m = (int)(sec / 60.0f + 0.5f);
+    if (sec < 60.0f)  snprintf(b, n, "%d s", (int)(sec + 0.5f));
+    else if (m < 60)  snprintf(b, n, "%d min", m);
+    else              snprintf(b, n, "%d h %d min", m / 60, m % 60);
 }
 
-static inline lv_coord_t px(float x) { return (lv_coord_t)(s_ox + x * s_sx); }
-static inline lv_coord_t py(float y) { return (lv_coord_t)(s_oy - y * s_sy); }
+static const char* file_name() {
+    const char* p = pathload_path();
+    const char* slash = strrchr(p, '/');
+    return slash ? slash + 1 : p;
+}
 
-void toolpath_redraw() {
-    if (!s_canvas || !s_cbuf) return;
-    lv_canvas_fill_bg(s_canvas, C_BG, LV_OPA_COVER);
-    size_t n = gpath_count();
-    if (n < 2) return;
-    fit_transform();
+void stats_summary(char* out, size_t n) {
+    const gstats_t& s = gstats();
+    if (!s.lines) { snprintf(out, n, "no file scanned"); return; }
+    char t[24];
+    fmt_time(t, sizeof(t), s.cut_sec);
+    if (s.have_cut)
+        snprintf(out, n, "%.1f x %.1f mm\n%.2f mm deep\n%u lines, %d tool%s\n~%s cutting\ntap for details",
+                 (double)(s.max_x - s.min_x), (double)(s.max_y - s.min_y), (double)-s.min_z,
+                 (unsigned)s.lines, s.n_tools, s.n_tools == 1 ? "" : "s", t);
+    else
+        snprintf(out, n, "%u lines\nno cutting moves\ntap for details", (unsigned)s.lines);
+}
 
-    lv_draw_line_dsc_t feed, rapid;
-    lv_draw_line_dsc_init(&feed);
-    feed.color = C_ACCENT;
-    feed.width = 2;
-    feed.opa   = LV_OPA_COVER;
-    lv_draw_line_dsc_init(&rapid);
-    rapid.color = C_LINE;
-    rapid.width = 1;
-    rapid.opa   = LV_OPA_COVER;
-
-    lv_point_t seg[2];
-    for (size_t i = 1; i < n; i++) {
-        gpoint_t a = gpath_point(i - 1), b = gpath_point(i);
-        seg[0].x = px(a.x); seg[0].y = py(a.y);
-        seg[1].x = px(b.x); seg[1].y = py(b.y);
-        lv_canvas_draw_line(s_canvas, seg, 2, b.rapid ? &rapid : &feed);
+void stats_refresh() {
+    if (!s_st_job) return;
+    const gstats_t& s = gstats();
+    lv_label_set_text(s_st_title, s.lines ? file_name() : "no file scanned");
+    if (!s.lines) {
+        lv_label_set_text(s_st_keys, "");
+        lv_label_set_text(s_st_job, "");
+        lv_label_set_text(s_st_setup, "");
+        return;
     }
-}
 
-void toolpath_set_marker(float x, float y) {
-    if (!s_marker || !s_open || s_face != EXPANDED_TOOLPATH) return;
-    lv_obj_set_pos(s_marker, px(x) - 8, py(y) - 8);
+    // Two labels, keys and values: the font is proportional, so padding with
+    // spaces never lines a column up.
+    static char keys[256], job[640];
+    int kk = 0, k = 0;
+    auto row = [&](const char* key, const char* fmt, ...) {
+        kk += snprintf(keys + kk, sizeof(keys) - kk, "%s\n", key);
+        va_list va;
+        va_start(va, fmt);
+        k += vsnprintf(job + k, sizeof(job) - k, fmt, va);
+        va_end(va);
+        k += snprintf(job + k, sizeof(job) - k, "\n");
+    };
+    char t[24];
+    fmt_time(t, sizeof(t), s.cut_sec);
+    row("Lines", "%u   (%u moves)", (unsigned)s.lines, (unsigned)s.moves);
+    if (s.have_cut) {
+        row("Size X", "%.2f   (%.2f to %.2f)", (double)(s.max_x - s.min_x), (double)s.min_x, (double)s.max_x);
+        row("Size Y", "%.2f   (%.2f to %.2f)", (double)(s.max_y - s.min_y), (double)s.min_y, (double)s.max_y);
+        row("Deepest Z", "%.2f", (double)s.min_z);
+    } else {
+        row("Cutting", "none in this file");
+    }
+    if (s.moves) row("Clearance Z", "%.2f", (double)s.top_z);
+    row("Cut length", "%.0f mm", (double)s.cut_mm);
+    row("Cut time", "~%s  (rapids not counted)", t);
+    if (s.feed_max > 0.0f) row("Feed", "%.0f - %.0f mm/min", (double)s.feed_min, (double)s.feed_max);
+    if (s.spindle_max > 0.0f) row("Spindle max", "%.0f", (double)s.spindle_max);
+    row("Tool changes", "%d", s.tool_changes);
+    if (s.inches) row("Units", "file is inches, shown in mm");
+    lv_label_set_text(s_st_keys, keys);
+    lv_label_set_text(s_st_job, job);
+
+    static char setup[GSTATS_NOTES * GSTATS_NOTE_LEN + GSTATS_TOOLS * 48 + 64];
+    k = 0;
+    if (s.n_tools) {
+        k += snprintf(setup + k, sizeof(setup) - k, "TOOLS\n");
+        for (int i = 0; i < s.n_tools; i++)
+            k += snprintf(setup + k, sizeof(setup) - k, "T%d  %s\n", s.tools[i].num, s.tools[i].desc);
+        k += snprintf(setup + k, sizeof(setup) - k, "\n");
+    }
+    k += snprintf(setup + k, sizeof(setup) - k, "FROM THE FILE HEADER\n");
+    if (!s.n_notes) k += snprintf(setup + k, sizeof(setup) - k, "(none)\n");
+    for (int i = 0; i < s.n_notes; i++)
+        k += snprintf(setup + k, sizeof(setup) - k, "%s\n", s.notes[i]);
+    lv_label_set_text(s_st_setup, setup);
 }
 
 static void filter_cb(lv_event_t*) {
@@ -106,53 +142,54 @@ void expanded_build() {
     s_root = lv_obj_create(lv_scr_act());
     w_flatten(s_root);
     lv_obj_set_pos(s_root, 0, 0);
-    lv_obj_set_size(s_root, CANVAS_W, CANVAS_H);
+    lv_obj_set_size(s_root, VIEW_W, VIEW_H);
     lv_obj_set_style_bg_color(s_root, C_BG, 0);
     lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
     lv_obj_add_flag(s_root, LV_OBJ_FLAG_HIDDEN);
 
-    // --- toolpath face ---
-    s_tp_page = lv_obj_create(s_root);
-    w_flatten(s_tp_page);
-    lv_obj_set_size(s_tp_page, CANVAS_W, CANVAS_H);
+    // --- stats face ---
+    s_st_page = lv_obj_create(s_root);
+    w_flatten(s_st_page);
+    lv_obj_set_size(s_st_page, VIEW_W, VIEW_H);
+    lv_obj_set_style_pad_all(s_st_page, U + 2, 0);
 
-    // 1024*520*2 bytes is just over 1MB — far past internal RAM, so PSRAM it is.
-    s_cbuf = (lv_color_t*)ps_malloc(LV_CANVAS_BUF_SIZE_TRUE_COLOR(CANVAS_W, CANVAS_H));
-    s_canvas = lv_canvas_create(s_tp_page);
-    if (s_cbuf) {
-        lv_canvas_set_buffer(s_canvas, s_cbuf, CANVAS_W, CANVAS_H, LV_IMG_CF_TRUE_COLOR);
-        lv_canvas_fill_bg(s_canvas, C_BG, LV_OPA_COVER);
-    } else {
-        Serial.println("[expanded] canvas buffer alloc FAILED");
-    }
-    lv_obj_set_pos(s_canvas, 0, 0);
-
-    s_marker = lv_obj_create(s_tp_page);
-    lv_obj_set_size(s_marker, 16, 16);
-    lv_obj_set_style_radius(s_marker, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_marker, C_WARN, 0);
-    lv_obj_set_style_bg_opa(s_marker, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_marker, 0, 0);
-    lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_SCROLLABLE);
-
-    s_tp_info = w_label(s_tp_page, "no file loaded", &lv_font_montserrat_12, C_DIM);
-    lv_obj_align(s_tp_info, LV_ALIGN_TOP_LEFT, U + 2, U + 2);
+    s_st_title = w_label(s_st_page, "no file scanned", &lv_font_montserrat_16, C_ACCENT);
+    lv_obj_align(s_st_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // The DRO does not vanish when the view expands, it moves. Losing position
     // readout on the screen you watch during a cut is a bad trade.
-    s_tp_dro = w_label(s_tp_page, "X 0.000  Y 0.000  Z 0.000", &lv_font_montserrat_14, C_TEXT);
-    lv_obj_align(s_tp_dro, LV_ALIGN_TOP_RIGHT, -(U + 2), U + 2);
+    s_st_dro = w_label(s_st_page, "X 0.000  Y 0.000  Z 0.000", &lv_font_montserrat_14, C_TEXT);
+    lv_obj_align(s_st_dro, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+    const lv_coord_t top = U * 4, col_w = (VIEW_W - U * 5) / 2, col_h = VIEW_H - top - U * 3;
+    const lv_coord_t key_w = U * 14;
+    s_st_keys = w_label(s_st_page, "", &lv_font_montserrat_14, C_DIM);
+    lv_obj_set_pos(s_st_keys, 0, top);
+    s_st_job = w_label(s_st_page, "", &lv_font_montserrat_14, C_TEXT);
+    lv_obj_set_pos(s_st_job, key_w, top);
+    lv_obj_set_width(s_st_job, col_w - key_w);
+
+    // The header can run long (VCarve lists every toolpath), so this column
+    // scrolls rather than clipping what the CAM program wrote.
+    lv_obj_t* right = lv_obj_create(s_st_page);
+    w_flatten(right);
+    lv_obj_set_pos(right, col_w + U * 2, top);
+    lv_obj_set_size(right, col_w, col_h);
+    lv_obj_add_flag(right, LV_OBJ_FLAG_SCROLLABLE);
+    s_st_setup = w_label(right, "", &lv_font_montserrat_12, C_DIM);
+    lv_obj_set_width(s_st_setup, LV_PCT(100));
+    lv_label_set_long_mode(s_st_setup, LV_LABEL_LONG_WRAP);
 
     // --- console face ---
     s_con_page = lv_obj_create(s_root);
     w_flatten(s_con_page);
-    lv_obj_set_size(s_con_page, CANVAS_W, CANVAS_H);
+    lv_obj_set_size(s_con_page, VIEW_W, VIEW_H);
     lv_obj_add_flag(s_con_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_flex_flow(s_con_page, LV_FLEX_FLOW_COLUMN);
 
     lv_obj_t* head = lv_obj_create(s_con_page);
     w_flatten(head);
-    lv_obj_set_size(head, CANVAS_W, U * 4);
+    lv_obj_set_size(head, VIEW_W, U * 4);
     lv_obj_set_style_bg_color(head, C_SURFACE, 0);
     lv_obj_set_style_bg_opa(head, LV_OPA_COVER, 0);
     lv_obj_t* ht = w_label(head, "CONSOLE - UART 1 Mbaud", &lv_font_montserrat_10, C_DIM);
@@ -169,7 +206,7 @@ void expanded_build() {
 
     lv_obj_t* logbox = lv_obj_create(s_con_page);
     w_flatten(logbox);
-    lv_obj_set_size(logbox, CANVAS_W, LOG_LINES * LOG_ROW_H);
+    lv_obj_set_size(logbox, VIEW_W, LOG_LINES * LOG_ROW_H);
     lv_obj_set_style_pad_left(logbox, U + 4, 0);
     lv_obj_set_flex_flow(logbox, LV_FLEX_FLOW_COLUMN);
     for (int i = 0; i < LOG_LINES; i++) {
@@ -185,18 +222,18 @@ void expanded_open(expanded_face_t face) {
     lv_obj_clear_flag(s_root, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_root);
 
-    if (face == EXPANDED_TOOLPATH) {
-        lv_obj_clear_flag(s_tp_page, LV_OBJ_FLAG_HIDDEN);
+    if (face == EXPANDED_STATS) {
+        lv_obj_clear_flag(s_st_page, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_con_page, LV_OBJ_FLAG_HIDDEN);
-        toolpath_redraw();
+        stats_refresh();
     } else {
-        lv_obj_add_flag(s_tp_page, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_st_page, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_con_page, LV_OBJ_FLAG_HIDDEN);
     }
 
     // Last: this reparents the safety bar to the screen and raises it, so it
     // must run after s_root has already come forward or the stop controls end
-    // up behind the canvas.
+    // up behind the view.
     shell_set_expanded(true);
 }
 
@@ -208,21 +245,17 @@ void expanded_close() {
 
 void expanded_flip() {
     if (!s_open) return;
-    expanded_open(s_face == EXPANDED_TOOLPATH ? EXPANDED_CONSOLE : EXPANDED_TOOLPATH);
+    expanded_open(s_face == EXPANDED_STATS ? EXPANDED_CONSOLE : EXPANDED_STATS);
 }
 
 void expanded_tick() {
     if (!s_open) return;
 
-    if (s_face == EXPANDED_TOOLPATH) {
+    if (s_face == EXPANDED_STATS) {
         char b[80];
         snprintf(b, sizeof(b), "X %s  Y %s  Z %s",
                  e4_to_cstr(myAxes[0], 3), e4_to_cstr(myAxes[1], 3), e4_to_cstr(myAxes[2], 3));
-        lv_label_set_text(s_tp_dro, b);
-
-        char info[64];
-        snprintf(info, sizeof(info), "%u points", (unsigned)gpath_count());
-        lv_label_set_text(s_tp_info, gpath_count() ? info : "no file loaded");
+        lv_label_set_text(s_st_dro, b);
         return;
     }
 

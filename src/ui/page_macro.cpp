@@ -47,6 +47,7 @@ void page_macro_build(lv_obj_t* p) {
         lv_obj_set_style_border_width(s_btn[i], 1, 0);
         lv_obj_set_style_radius(s_btn[i], 3, 0);
         lv_obj_set_style_shadow_width(s_btn[i], 0, 0);
+        lv_obj_set_style_opa(s_btn[i], OPA_DISABLED, LV_STATE_DISABLED);
         // Two across, half the page high: a macro is a deliberate action, so
         // the target stays well above the discrete-tap floor.
         lv_obj_set_size(s_btn[i], (CONTENT_W - U * 5) / 2, TOUCH_HOLD);
@@ -71,14 +72,20 @@ void page_macro_build(lv_obj_t* p) {
 }
 
 void page_macro_tick() {
+    // A macro is G-code, refused in Alarm; its preview line carries the
+    // reason while locked and gets the macro body back after.
+    static int was_locked = -1;
+    const bool locked = w_locked();
     size_t n = caps_macro_count();
-    if (n == s_shown) return;
+    if (n == s_shown && locked == was_locked) return;
     s_shown = n;
+    was_locked = locked;
 
     for (int i = 0; i < CAPS_MACRO_MAX; i++) {
         if ((size_t)i < n) {
             lv_label_set_text(s_name[i], caps_macro_name(i));
-            lv_label_set_text(s_body[i], caps_macro_body(i));
+            lv_label_set_text(s_body[i], locked ? LOCK_REASON : caps_macro_body(i));
+            w_gate(s_btn[i], !locked, nullptr);
             lv_obj_clear_flag(s_btn[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s_btn[i], LV_OBJ_FLAG_HIDDEN);

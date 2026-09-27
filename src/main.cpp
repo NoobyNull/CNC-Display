@@ -14,14 +14,14 @@
 #include "hw/touch.h"
 #include "hw/sdcard.h"
 #include "hw/imu.h"
+#include "hw/status_led.h"
+#include "esp32-hal-periman.h"
 #include "model/vibration.h"
-#include "model/file_upload.h"
 #include "transport/uart.h"
 #include "transport/transport.h"
 #include "model/settings.h"
 #include "model/screensaver.h"
 #include "transport/xmodem_rx.h"
-#include "transport/xmodem_tx.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
 #include "model/model_compat.h"
@@ -49,7 +49,14 @@ void setup() {
     settings_load();
     // Console and FluidNC link share UART0's pins — see the header comment.
     // Un-begun, every Serial.print is a safe no-op.
+    // FORCE_CONSOLE (build flag): boot log on regardless, for a panel whose
+    // Setup page cannot be reached. The link reopens these pins later, so it
+    // only covers boot up to transport_init() -- which is where touch comes up.
+#ifdef FORCE_CONSOLE
+    Serial.begin(115200);
+#else
     if (!settings_uart_enabled()) Serial.begin(115200);
+#endif
     Serial.println("\n=== CNC Console ===");
 
     // The GT911 and the STC8 share one bus, and the STC8 owns the touch reset
@@ -62,6 +69,15 @@ void setup() {
     gt911_reset();         // address strap is latched here, before any probing
     display_init();        // RGB panel
     gt911_discover();
+#ifdef FORCE_CONSOLE
+    // Who answers on the bus: GT911 0x5D/0x14, STC8 0x30, RTC 0x51, IMU 0x68/69.
+    Serial.print("[i2c] scan:");
+    for (uint8_t a = 0x08; a < 0x78; a++) {
+        Wire.beginTransmission(a);
+        if (Wire.endTransmission() == 0) Serial.printf(" 0x%02X", a);
+    }
+    Serial.println();
+#endif
     gt911_dump_config();   // read-only; the stall lead lives at 0x804D and 0x8055
     lvgl_init();
     // A high saved brightness can sag a thin 5V feed (UART-connector power)
@@ -94,6 +110,11 @@ void setup() {
     // tuning this machine was actually given.
     vib_set_thresholds(settings_vib_hold(), settings_vib_peak(), settings_vib_jerk());
     imu_begin();
+    status_led_begin();
+    // Where a dark status bar is diagnosed: the pin must belong to RMT_TX.
+    // SPI_MASTER_MISO means the SD card still holds it (DIP on MIC & TF).
+    bootlog_printf("SD %s; status bar IO%d owned by %s", sd_present() ? "mounted" : "absent",
+                   status_led_pin(), perimanGetTypeName(perimanGetPinBusType(status_led_pin())));
 
     shell_build();
     lv_timer_create(ui_tick_cb, 50, nullptr);      // 20 Hz UI
@@ -206,15 +227,7 @@ static void prime_link_if_up() {
 }
 
 void loop() {
-    if (upload_busy()) {
-        // XModem owns the link while a file is going out; the Grbl parser must
-        // not see ACK/NAK bytes.
-        for (int i = 0; i < 512; i++) {
-            int c = fnc_getchar();
-            if (c < 0) break;
-            xmodem_tx_feed((uint8_t)c);
-        }
-    } else if (pathload_busy()) {
+    if (pathload_busy()) {
         // XModem owns the link during a transfer: the Grbl parser must never see
         // block headers, sequence bytes or CRCs.
         for (int i = 0; i < 512; i++) {
@@ -236,8 +249,8 @@ void loop() {
     }
     send_pump();   // queued controller lines; never sent from a UI callback
     imu_poll();
+    status_led_tick();
     vib_guard();
-    upload_poll();
     prime_link_if_up();
     caps_poll();
     link_watchdog();

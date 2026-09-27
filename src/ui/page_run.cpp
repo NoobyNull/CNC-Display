@@ -4,10 +4,7 @@
 #include "ui/view_expanded.h"
 #include "model/filelist.h"
 #include "model/FluidNCModel.h"
-#include "model/gcode_path.h"
 #include "model/path_loader.h"
-#include "model/file_upload.h"
-#include "hw/sdcard.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <string.h>
@@ -24,49 +21,31 @@ static lv_obj_t* s_row[ROWS];
 static lv_obj_t* s_row_name[ROWS];
 static lv_obj_t* s_row_size[ROWS];
 static lv_obj_t* s_preview_lbl;
+static lv_obj_t* s_run_btn;
+static lv_obj_t* s_dry_btn;
 static int  s_sel = -1;
 static int  s_scroll = 0;
 static char s_selected[FL_NAME_MAX] = { 0 };
 static bool s_redraw_pending = false;
 static bool s_list_dirty = true;
 
-// Which card we are browsing. The controller's SD is normally the right source,
-// but when the controller lives in a sealed box you cannot reach its card, so
-// the panel's own slot becomes the source and files are pushed across with $XR.
-static bool s_local = false;
-static lv_obj_t* s_src_btn;
-static lv_obj_t* s_src_lbl;
+// Files come from the controller's SD card only: that is where CAM output is
+// put (over WiFi, or by moving the card), and where $SD/Run reads it from.
+static size_t src_count()             { return filelist_count(); }
+static const char* src_name(size_t i) { const fl_entry_t* e = filelist_at(i); return e ? e->name : nullptr; }
+static bool src_is_dir(size_t i)      { const fl_entry_t* e = filelist_at(i); return e && e->is_dir; }
+static uint32_t src_size(size_t i)    { const fl_entry_t* e = filelist_at(i); return e ? e->size : 0; }
 
-static size_t src_count()            { return s_local ? sd_count() : filelist_count(); }
-static const char* src_name(size_t i) {
-    if (s_local) { const sd_entry_t* e = sd_at(i); return e ? e->name : nullptr; }
-    const fl_entry_t* e = filelist_at(i); return e ? e->name : nullptr;
-}
-static bool src_is_dir(size_t i) {
-    if (s_local) { const sd_entry_t* e = sd_at(i); return e && e->is_dir; }
-    const fl_entry_t* e = filelist_at(i); return e && e->is_dir;
-}
-static uint32_t src_size(size_t i) {
-    if (s_local) { const sd_entry_t* e = sd_at(i); return e ? e->size : 0; }
-    const fl_entry_t* e = filelist_at(i); return e ? e->size : 0;
-}
+// FluidNC calls its card "/sd"; the header says what it is instead, and shows
+// the folder only once you are in one. The listing has no ".." entry, so the
+// header is also the way back out.
+static const char SD_ROOT[] = "/sd";
+static bool in_subfolder() { return strcmp(filelist_path(), SD_ROOT) != 0; }
 
-static void src_toggle_cb(lv_event_t*) {
-    s_local = !s_local;
-    if (s_local) sd_list("/");
-    else         filelist_request();
-    lv_label_set_text(s_src_lbl, s_local ? "PANEL SD" : "CONTROLLER");
+static void header_cb(lv_event_t*) {
+    if (!in_subfolder()) return;
+    filelist_enter("..");
     s_scroll = 0; s_sel = -1; s_selected[0] = 0;
-    s_list_dirty = true;
-}
-
-// Copy the selected local file to the controller, then it runs like any other.
-static void upload_cb(lv_event_t*) {
-    if (!s_local || !s_selected[0]) return;
-    char local[160], remote[160];
-    snprintf(local,  sizeof(local),  "/%s", s_selected);
-    snprintf(remote, sizeof(remote), "/sd/%s", s_selected);
-    upload_start(local, remote);
     s_list_dirty = true;
 }
 
@@ -77,7 +56,7 @@ static void row_cb(lv_event_t* e) {
     if (!nm) return;
 
     if (src_is_dir(idx)) {
-        if (!s_local) { filelist_enter(nm); s_scroll = 0; s_sel = -1; s_list_dirty = true; }
+        filelist_enter(nm); s_scroll = 0; s_sel = -1; s_list_dirty = true;
         return;
     }
     s_sel = s_scroll + r;
@@ -85,11 +64,9 @@ static void row_cb(lv_event_t* e) {
     s_selected[sizeof(s_selected) - 1] = 0;
     s_list_dirty = true;
 
-    if (!s_local) {
-        char full[192];
-        snprintf(full, sizeof(full), "%s/%s", filelist_path(), s_selected);
-        if (pathload_start(full)) s_redraw_pending = true;
-    }
+    char full[192];
+    snprintf(full, sizeof(full), "%s/%s", filelist_path(), s_selected);
+    if (pathload_start(full)) s_redraw_pending = true;
 }
 
 static void scroll_cb(lv_event_t* e) {
@@ -114,10 +91,10 @@ static void run_cb(lv_event_t*) {
 // and out-of-travel moves surface before the cutter is near the work.
 static void dry_cb(lv_event_t*)    { send_line("$C"); }
 static void reload_cb(lv_event_t*) {
-    if (s_local) sd_list("/"); else filelist_request();
+    filelist_request();
     s_list_dirty = true;
 }
-static void expand_cb(lv_event_t*) { expanded_open(EXPANDED_TOOLPATH); }
+static void expand_cb(lv_event_t*) { expanded_open(EXPANDED_STATS); }
 
 void page_run_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW);
@@ -135,11 +112,16 @@ void page_run_build(lv_obj_t* p) {
     lv_obj_set_size(cb, LV_PCT(100), U * 5);
     lv_obj_set_flex_flow(cb, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(cb, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    s_src_btn = w_button(cb, "CONTROLLER", nullptr, C_RAISE, C_ACCENT, src_toggle_cb, nullptr);
-    lv_obj_set_size(s_src_btn, U * 15, LV_PCT(100));
-    s_src_lbl = lv_obj_get_child(lv_obj_get_child(s_src_btn, 0), 0);
-    s_crumb = w_label(cb, "/sd", &lv_font_montserrat_10, C_DIM);
-    lv_obj_set_flex_grow(s_crumb, 1);
+    lv_obj_t* hdr = lv_obj_create(cb);
+    w_flatten(hdr);
+    lv_obj_set_height(hdr, LV_PCT(100));
+    lv_obj_set_flex_grow(hdr, 1);
+    lv_obj_add_flag(hdr, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(hdr, header_cb, LV_EVENT_CLICKED, nullptr);
+    s_crumb = w_label(hdr, "CONTROLLER SD CARD", &lv_font_montserrat_12, C_ACCENT);
+    lv_label_set_long_mode(s_crumb, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_crumb, LV_PCT(100));
+    lv_obj_align(s_crumb, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_t* su = w_button(cb, LV_SYMBOL_UP, nullptr, C_RAISE, C_DIM, scroll_cb, (void*)(intptr_t)-1);
     lv_obj_set_size(su, U * 5, LV_PCT(100));
     lv_obj_t* sd = w_button(cb, LV_SYMBOL_DOWN, nullptr, C_RAISE, C_DIM, scroll_cb, (void*)(intptr_t)1);
@@ -175,7 +157,7 @@ void page_run_build(lv_obj_t* p) {
     lv_obj_set_style_radius(preview, 3, 0);
     lv_obj_set_style_shadow_width(preview, 0, 0);
     lv_obj_add_event_cb(preview, expand_cb, LV_EVENT_CLICKED, nullptr);
-    s_preview_lbl = w_label(preview, "TOOLPATH\ntap to expand", &lv_font_montserrat_12, C_DIM);
+    s_preview_lbl = w_label(preview, "select a file\nto see its stats", &lv_font_montserrat_12, C_DIM);
     lv_obj_set_style_text_align(s_preview_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(s_preview_lbl);
 
@@ -188,31 +170,36 @@ void page_run_build(lv_obj_t* p) {
     lv_obj_set_style_pad_row(acts, U, 0);
 
     // RUN absorbs the slack rather than every button growing equally: it is the
-    // primary action on the page and the size hierarchy over DRY/SEND/RELOAD is
+    // primary action on the page and the size hierarchy over DRY/RELOAD is
     // deliberate, so the extra height reinforces it instead of flattening it.
-    lv_obj_t* run = w_button(acts, "RUN", "$SD/Run", C_OK, C_BG, run_cb, nullptr);
+    lv_obj_t* run = s_run_btn = w_button(acts, "RUN", "$SD/Run", C_OK, C_BG, run_cb, nullptr);
     lv_obj_set_width(run, LV_PCT(100));
     lv_obj_set_flex_grow(run, 1);
-    lv_obj_t* dry = w_button(acts, "DRY", "$C", C_RAISE, C_TEXT, dry_cb, nullptr);
+    lv_obj_t* dry = s_dry_btn = w_button(acts, "DRY", "$C", C_RAISE, C_TEXT, dry_cb, nullptr);
     lv_obj_set_size(dry, LV_PCT(100), U * 6);
-    lv_obj_t* snd = w_button(acts, "SEND", "$XR", C_ACCENT, C_BG, upload_cb, nullptr);
-    lv_obj_set_size(snd, LV_PCT(100), U * 7);
     lv_obj_t* rel = w_button(acts, "RELOAD", nullptr, C_RAISE, C_TEXT, reload_cb, nullptr);
     lv_obj_set_size(rel, LV_PCT(100), U * 7);
 }
 
 void page_run_tick() {
-    if (upload_busy()) {
-        char b[64];
-        snprintf(b, sizeof(b), "SENDING\n%d%%\n%s", upload_percent(), upload_status());
+    static int was_locked = -1;
+    const bool locked = w_locked();
+    if (locked != was_locked) {
+        was_locked = locked;
+        w_gate(s_run_btn, !locked, LOCK_REASON);
+        w_gate(s_dry_btn, !locked, LOCK_REASON);
+    }
+
+    if (s_redraw_pending && pathload_busy()) {
+        char b[48];
+        snprintf(b, sizeof(b), "SCANNING FILE\n%u KB", (unsigned)(pathload_bytes() / 1024));
         lv_label_set_text(s_preview_lbl, b);
-        return;
     }
     if (s_redraw_pending && !pathload_busy()) {
         s_redraw_pending = false;
-        toolpath_redraw();
-        char b[48];
-        snprintf(b, sizeof(b), "TOOLPATH\n%u points\ntap to expand", (unsigned)gpath_count());
+        stats_refresh();
+        char b[160];
+        stats_summary(b, sizeof(b));
         lv_label_set_text(s_preview_lbl, b);
     }
 
@@ -220,7 +207,13 @@ void page_run_tick() {
     if (!s_list_dirty) return;
     s_list_dirty = false;
 
-    lv_label_set_text(s_crumb, s_local ? "panel /" : filelist_path());
+    if (in_subfolder()) {
+        char b[96];
+        snprintf(b, sizeof(b), LV_SYMBOL_LEFT " SD CARD%s", filelist_path() + strlen(SD_ROOT));
+        lv_label_set_text(s_crumb, b);
+    } else {
+        lv_label_set_text(s_crumb, "CONTROLLER SD CARD");
+    }
     for (int r = 0; r < ROWS; r++) {
         size_t idx = (size_t)(s_scroll + r);
         const char* nm = src_name(idx);
@@ -236,7 +229,8 @@ void page_run_tick() {
         uint32_t sz = src_size(idx);
         if (src_is_dir(idx))         snprintf(b, sizeof(b), "DIR");
         else if (sz >= 1024 * 1024)  snprintf(b, sizeof(b), "%.1f MB", sz / 1048576.0);
-        else                         snprintf(b, sizeof(b), "%u KB", (unsigned)(sz / 1024));
+        else if (sz >= 1024)         snprintf(b, sizeof(b), "%u KB", (unsigned)(sz / 1024));
+        else                         snprintf(b, sizeof(b), "%u B", (unsigned)sz);   // "0 KB" read as empty
         lv_label_set_text(s_row_size[r], b);
 
         bool sel = ((s_scroll + r) == s_sel) && !src_is_dir(idx);

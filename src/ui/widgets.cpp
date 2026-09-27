@@ -1,5 +1,6 @@
 #include "ui/widgets.h"
 #include <string.h>
+#include "model/FluidNCModel.h"
 
 void w_flatten(lv_obj_t* o) {
     lv_obj_set_style_pad_all(o, 0, 0);
@@ -85,6 +86,10 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
     // to remember what the button looked like. Style opacity covers the
     // children too, which is what dims the labels along with the fill.
     lv_obj_set_style_opa(b, OPA_DISABLED, LV_STATE_DISABLED);
+    // Neutral when disabled: a greyed RUN must not still read as green, and
+    // the reason w_gate() writes has to be legible, which it is not on a
+    // dimmed accent fill.
+    lv_obj_set_style_bg_color(b, C_RAISE, LV_STATE_DISABLED);
     if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
 
     lv_obj_t* col = lv_obj_create(b);
@@ -133,6 +138,22 @@ void w_gate(lv_obj_t* btn, bool enabled, const char* reason) {
         lv_label_set_text(sub, (!enabled && reason) ? reason : orig);
     }
 
+    // Label colours are local styles on the children, which do not follow the
+    // button's state, so they are swapped here: caption dimmed, reason in
+    // amber. The caption's own colour is stashed in its user_data (free on a
+    // w_button caption) the first time, and the sub colour is rebuilt from it
+    // the way w_button() made it.
+    lv_obj_t* col = lv_obj_get_child(btn, 0);
+    lv_obj_t* cap = col ? lv_obj_get_child(col, 0) : nullptr;
+    if (cap && lv_obj_check_type(cap, &lv_label_class)) {
+        if (!lv_obj_get_user_data(cap))
+            lv_obj_set_user_data(cap, (void*)(uintptr_t)lv_color_to32(
+                lv_obj_get_style_text_color(cap, LV_PART_MAIN)));
+        const lv_color_t fg = lv_color_hex((uint32_t)(uintptr_t)lv_obj_get_user_data(cap) & 0xFFFFFF);
+        lv_obj_set_style_text_color(cap, enabled ? fg : C_DIM, 0);
+        if (sub) lv_obj_set_style_text_color(sub, enabled ? lv_color_mix(fg, C_DIM, 128) : C_WARN, 0);
+    }
+
     if (enabled) {
         lv_obj_clear_state(btn, LV_STATE_DISABLED);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
@@ -154,3 +175,5 @@ lv_obj_t* w_keyboard() {
     }
     return kb;
 }
+
+bool w_locked() { return state == Alarm || state == ConfigAlarm; }

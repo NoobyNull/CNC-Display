@@ -137,6 +137,15 @@ static uint32_t    s_started = 0;
 static bool        s_moving  = true;
 
 void sim_set_state(const char* st) { s_state = st; }
+
+// Put the fake into Alarm the way FluidNC does: the ALARM:N message, then the
+// state reports say Alarm.
+void sim_raise_alarm(int n) {
+    char b[24];
+    snprintf(b, sizeof(b), "ALARM:%d\n", n);
+    q_push(b);
+    s_state = "Alarm";
+}
 void sim_toggle_motion() { s_moving = !s_moving; }
 
 static void axis_positions(float* out, int n) {
@@ -145,6 +154,29 @@ static void axis_positions(float* out, int n) {
     const float span[6] = { 120.0f, 80.0f, 25.0f, 360.0f, 90.0f, 90.0f };
     const float rate[6] = { 0.31f, 0.21f, 0.13f, 0.07f, 0.05f, 0.03f };
     for (int i = 0; i < n; i++) out[i] = span[i] * sinf(t * rate[i] * 6.2831853f);
+}
+
+// Feed, rapid, spindle override, applied from the realtime bytes the way
+// FluidNC does (Config.h limits) so the faders round-trip through Ov:.
+static int s_ov[3] = { 100, 100, 100 };
+
+static void apply_override(uint8_t c) {
+    auto clamp = [](int v) { return v < 10 ? 10 : v > 200 ? 200 : v; };
+    switch (c) {
+        case 0x90: s_ov[0] = 100; break;
+        case 0x91: s_ov[0] = clamp(s_ov[0] + 10); break;
+        case 0x92: s_ov[0] = clamp(s_ov[0] - 10); break;
+        case 0x93: s_ov[0] = clamp(s_ov[0] + 1); break;
+        case 0x94: s_ov[0] = clamp(s_ov[0] - 1); break;
+        case 0x95: s_ov[1] = 100; break;
+        case 0x96: s_ov[1] = 50; break;
+        case 0x97: s_ov[1] = 25; break;
+        case 0x99: s_ov[2] = 100; break;
+        case 0x9A: s_ov[2] = clamp(s_ov[2] + 10); break;
+        case 0x9B: s_ov[2] = clamp(s_ov[2] - 10); break;
+        case 0x9C: s_ov[2] = clamp(s_ov[2] + 1); break;
+        case 0x9D: s_ov[2] = clamp(s_ov[2] - 1); break;
+    }
 }
 
 static void push_status_report() {
@@ -161,7 +193,7 @@ static void push_status_report() {
     k += snprintf(rpt + k, sizeof(rpt) - k, "|WCO:");
     for (int i = 0; i < SIM_AXES; i++)
         k += snprintf(rpt + k, sizeof(rpt) - k, "%s%.3f", i ? "," : "", i == 2 ? -5.0f : -10.0f);
-    if (running) k += snprintf(rpt + k, sizeof(rpt) - k, "|Ov:100,100,100");
+    k += snprintf(rpt + k, sizeof(rpt) - k, "|Ov:%d,%d,%d", s_ov[0], s_ov[1], s_ov[2]);
     snprintf(rpt + k, sizeof(rpt) - k, ">\n");
     q_push(rpt);
 }
@@ -172,11 +204,13 @@ static size_t s_len = 0;
 static void canned_putchar(uint8_t c) {
     if (c == '?') { push_status_report(); return; }
     if (c == 0x11 || c == 0x13) return;
-    if (c >= 0x80 || c == 0x18) return;
+    if (c >= 0x80) { apply_override(c); return; }
+    if (c == 0x18) return;
 
     if (c == '\n' || c == '\r') {
         if (!s_len) return;
         s_line[s_len] = 0;
+        if (strcmp(s_line, "$X") == 0 && strcmp(s_state, "Alarm") == 0) s_state = "Idle";
         if (strcmp(s_line, "$#") != 0) q_push("ok\n");
         else                           q_push("[G54:0.000,0.000,0.000]\nok\n");
         s_len = 0;
@@ -248,7 +282,7 @@ void transport_settings_changed() {}
 const char* transport_label()  { return s_fd >= 0 ? "SIM LIVE" : "SIM FAKE"; }
 const char* transport_detail() { return s_detail; }
 
-void init_fnc_uart() {}
+bool init_fnc_uart() { return true; }
 void reinit_fnc_uart() {}
 
 // Both live in the real uart.cpp, which this file replaces. milliseconds() is

@@ -31,7 +31,6 @@
 #include "model/console_log.h"
 #include "model/offsets.h"
 #include "model/filelist.h"
-#include "model/file_upload.h"
 #include "model/path_loader.h"
 #include "model/vibration.h"
 #include "model/model_events.h"
@@ -40,6 +39,7 @@
 #include "model/fnc_settings.h"
 #include "model/FluidNCModel.h"
 #include "transport/transport.h"
+#include "transport/xmodem_rx.h"
 #include "ui/shell.h"
 #include "ui/splash.h"
 #include "GrblParserC.h"
@@ -47,6 +47,7 @@
 // From sim_transport.cpp / sim_hw.cpp.
 void sim_transport_tick();
 void sim_set_state(const char* st);
+void sim_raise_alarm(int n);
 void sim_toggle_motion();
 bool sim_link_open(const char* path);
 
@@ -148,7 +149,7 @@ static bool s_pressed = false;
 // Which page --shot captures. -1 leaves whatever the shell opened on.
 static int s_shot_page = -1;
 
-// --tap "x,y[;x,y...]": inject presses before capturing. This is how input is
+// --tap "x,y[;x,y>x2,y2...]": inject presses (or drags) before capturing. This is how input is
 // regression-tested without a human and without a window manager — the same
 // path a real press takes, driven from a script.
 static const char* s_tap = nullptr;
@@ -156,6 +157,9 @@ static const char* s_tap = nullptr;
 // --gesture: hold two fingers before capturing, exercising the real gesture
 // path rather than reaching into the shell's mode directly.
 static bool s_gesture = false;
+
+// --alarm N: canned fake only; raised after settle, before any taps.
+static int s_alarm = 0;
 
 // Hold long enough that LVGL's indev timer (LV_INDEV_DEF_READ_PERIOD, 30ms)
 // cannot miss the press, then release and let the click event dispatch.
@@ -243,20 +247,30 @@ static void prime_link_if_up() {
     send_line("$#");
     filelist_request();
     fncset_request_all();
-    caps_request();
+    caps_request_config();
 }
 
 static void step() {
     sim_transport_tick();
-    for (int i = 0; i < 512; i++) {
-        fnc_poll();
-        if (!fnc_rx_waiting()) break;
+    // Same routing as loop() in main.cpp: while an XModem transfer owns the
+    // link, its bytes must go to XModem, never the Grbl parser.
+    if (pathload_busy()) {
+        for (int i = 0; i < 512; i++) {
+            int c = fnc_getchar();
+            if (c < 0) break;
+            xmodem_rx_feed((uint8_t)c);
+        }
+        pathload_poll();
+    } else {
+        for (int i = 0; i < 512; i++) {
+            fnc_poll();
+            if (!fnc_rx_waiting()) break;
+        }
     }
     send_pump();
     prime_link_if_up();
-    caps_tick();
+    caps_poll();
     imu_poll();
-    upload_poll();
     service_action();
     lv_timer_handler();
 }
@@ -268,8 +282,10 @@ static void run_taps(const char* spec) {
     snprintf(buf, sizeof(buf), "%s", spec);
 
     for (char* tok = strtok(buf, ";"); tok; tok = strtok(nullptr, ";")) {
-        int x = 0, y = 0;
-        if (sscanf(tok, "%d,%d", &x, &y) != 2) continue;
+        // "x,y" taps; "x,y>x2,y2" presses at x,y and drags to x2,y2.
+        int x = 0, y = 0, x2 = 0, y2 = 0;
+        const int n = sscanf(tok, "%d,%d>%d,%d", &x, &y, &x2, &y2);
+        if (n != 2 && n != 4) continue;
 
         s_px = x;
         s_py = y;
@@ -277,6 +293,14 @@ static void run_taps(const char* spec) {
         sim_touch_scans++;
         uint32_t until = millis() + TAP_HOLD_MS;
         while (millis() < until) { step(); SDL_Delay(5); }
+        if (n == 4) {
+            for (int k = 1; k <= 20; k++) {
+                s_px = x + (x2 - x) * k / 20;
+                s_py = y + (y2 - y) * k / 20;
+                until = millis() + 20;
+                while (millis() < until) { step(); SDL_Delay(5); }
+            }
+        }
 
         s_pressed = sim_touch_down = false;
         until = millis() + TAP_RELEASE_MS;
@@ -308,6 +332,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--tap") && i + 1 < argc)    s_tap = argv[++i];
         else if (!strcmp(argv[i], "--no-devwin"))               want_devwin = false;
         else if (!strcmp(argv[i], "--gesture"))                 s_gesture = true;
+        else if (!strcmp(argv[i], "--alarm") && i + 1 < argc)  s_alarm = atoi(argv[++i]);
     }
 
     if (link) sim_link_open(link);
@@ -350,6 +375,11 @@ int main(int argc, char** argv) {
             sim_touch_pts = 0;
             g = millis() + 300;
             while (millis() < g) { step(); SDL_Delay(5); }
+        }
+        if (s_alarm) {                  // --alarm N: the fake raises ALARM:N
+            sim_raise_alarm(s_alarm);
+            uint32_t until = millis() + 600;
+            while (millis() < until) { step(); SDL_Delay(5); }
         }
         if (s_tap) run_taps(s_tap);
         const bool ok = write_bmp(shot);

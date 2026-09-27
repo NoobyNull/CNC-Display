@@ -21,7 +21,6 @@
 #include "model/settings.h"
 #include "model/screensaver.h"
 #include "model/vibration.h"
-#include "model/file_upload.h"
 #include "model/FluidNCModel.h"
 #include "model/model_compat.h"
 #include "model/console_log.h"
@@ -33,7 +32,6 @@
 #include "transport/transport.h"
 #include "transport/uart.h"
 #include "transport/xmodem_rx.h"
-#include "transport/xmodem_tx.h"
 #include "ui/shell.h"
 #include "ui/splash.h"
 #include "GrblParserC.h"
@@ -149,13 +147,7 @@ int main(int argc, char** argv) {
     bool shot_done = false;
 
     while (!sim_should_quit) {
-        if (upload_busy()) {
-            for (int i = 0; i < 512; i++) {
-                int c = fnc_getchar();
-                if (c < 0) break;
-                xmodem_tx_feed((uint8_t)c);
-            }
-        } else if (pathload_busy()) {
+        if (pathload_busy()) {
             for (int i = 0; i < 512; i++) {
                 int c = fnc_getchar();
                 if (c < 0) break;
@@ -170,7 +162,6 @@ int main(int argc, char** argv) {
         }
         send_pump();
         imu_poll();
-        upload_poll();
         prime_link_if_up();
         link_watchdog();
         service_action();

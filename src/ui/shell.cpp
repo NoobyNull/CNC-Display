@@ -2,6 +2,7 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "ui/view_expanded.h"
+#include "model/fnc_codes.h"
 #include "ui/goto_popup.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
@@ -68,8 +69,11 @@ static lv_obj_t* s_flip_btn;
 static lv_obj_t* s_close_btn;
 static lv_obj_t* s_ovr_box;
 static lv_obj_t* s_ovr_val[3];
+static lv_obj_t* s_ovr_fill[3];
 static lv_obj_t* s_hold_btn;
 static lv_obj_t* s_hold_lbl;
+static lv_obj_t* s_unlock_btn;
+static lv_obj_t* s_unlock_lbl;
 
 static int       s_nav_start = 0;
 static page_id_t s_page = PAGE_JOG;
@@ -323,6 +327,124 @@ static void hold_resume_paint() {
     lv_obj_set_style_bg_color(s_hold_btn, lv_color_lighten(bg, 40), LV_STATE_PRESSED);
 }
 
+// ---- override faders --------------------------------------------------------
+// Each override tile is a vertical fader: press, drag up or down, release to
+// send; long-press snaps back to 100%. The tile is only ~64px tall, so the drag
+// is relative to where the finger landed and may run off the tile -- 1% per
+// pixel gives the full 10..200% over a comfortable thumb stroke. Feed and
+// spindle span FluidNC's 10..200% (Config.h FeedOverride); rapid only has
+// three real settings, so it steps 25/50/100 every OVR_RAPID_PX.
+static const int  OVR_MIN[3] = { 10, 0, 10 };
+static const int  OVR_MAX[3] = { 200, 100, 200 };
+static const int  OVR_DETENT = 4;         // +-% around 100 that snaps to 100
+static const int  OVR_RAPID_PX = 30;      // drag per rapid step
+static const uint32_t OVR_HOLD_MS = 1500; // show the sent value until Ov: catches up
+static int      s_ovr_target[3] = { -1, -1, -1 };   // -1 = not being set
+static int      s_ovr_start[3];                     // value under the finger at press
+static lv_coord_t s_ovr_y0[3];
+static bool     s_ovr_moved[3];                     // finger travelled: not a long-press
+static const lv_coord_t OVR_STILL_PX = 8;           // travel under this is "held still"
+static uint32_t s_ovr_sent_ms[3];
+
+static int ovr_now(int i) {
+    return i == 0 ? (int)myFro : i == 1 ? (int)myRro : (int)mySro;
+}
+
+static void ovr_fill(int i, int v) {
+    int span = OVR_MAX[i] - OVR_MIN[i];
+    int f = (v - OVR_MIN[i]) * 100 / span;
+    lv_obj_set_height(s_ovr_fill[i], LV_PCT(f < 0 ? 0 : f > 100 ? 100 : f));
+}
+
+static void ovr_show(int i, int v, lv_color_t col) {
+    char b[12];
+    snprintf(b, sizeof(b), "%d%%", v);
+    lv_label_set_text(s_ovr_val[i], b);
+    lv_obj_set_style_text_color(s_ovr_val[i], col, 0);
+    ovr_fill(i, v);
+}
+
+static int ovr_from_drag(int i, lv_coord_t dy) {   // dy > 0 = finger moved up
+    if (i == 1) {
+        static const int R[3] = { 25, 50, 100 };
+        int k = s_ovr_start[i] >= 100 ? 2 : s_ovr_start[i] >= 50 ? 1 : 0;
+        k += dy / OVR_RAPID_PX;
+        return R[k < 0 ? 0 : k > 2 ? 2 : k];
+    }
+    int v = s_ovr_start[i] + dy;
+    if (v < OVR_MIN[i]) v = OVR_MIN[i];
+    if (v > OVR_MAX[i]) v = OVR_MAX[i];
+    return (v > 100 - OVR_DETENT && v < 100 + OVR_DETENT) ? 100 : v;
+}
+
+// Reset first, then step from a known 100%: the result never depends on how
+// stale the last Ov: report was. The bytes land in one burst, well inside a
+// single planner tick, so the momentary 100% never reaches the cutter.
+static void ovr_send(int i, int v) {
+    if (i == 1) {
+        fnc_realtime(v == 100 ? RapidOvrReset : v == 50 ? RapidOvrMedium : RapidOvrLow);
+        return;
+    }
+    const realtime_cmd_t rst = i == 0 ? FeedOvrReset         : SpindleOvrReset;
+    const realtime_cmd_t cp  = i == 0 ? FeedOvrCoarsePlus    : SpindleOvrCoarsePlus;
+    const realtime_cmd_t cm  = i == 0 ? FeedOvrCoarseMinus   : SpindleOvrCoarseMinus;
+    const realtime_cmd_t fp  = i == 0 ? FeedOvrFinePlus      : SpindleOvrFinePlus;
+    const realtime_cmd_t fm  = i == 0 ? FeedOvrFineMinus     : SpindleOvrFineMinus;
+    fnc_realtime(rst);
+    int d = v - 100;
+    for (; d >= 10; d -= 10)  fnc_realtime(cp);
+    for (; d <= -10; d += 10) fnc_realtime(cm);
+    for (; d > 0; d--)        fnc_realtime(fp);
+    for (; d < 0; d++)        fnc_realtime(fm);
+}
+
+static void ovr_cb(lv_event_t* e) {
+    const int i = (int)(intptr_t)lv_event_get_user_data(e);
+    const lv_event_code_t code = lv_event_get_code(e);
+
+    // A slow drag outlasts the long-press time too; only a finger that has
+    // held still means "reset".
+    if (code == LV_EVENT_LONG_PRESSED && !s_ovr_moved[i]) {
+        s_ovr_target[i] = -1;          // the release must not send the drag value
+        ovr_send(i, 100);
+        ovr_show(i, 100, C_ACCENT);
+        s_ovr_sent_ms[i] = lv_tick_get();
+    } else if (code == LV_EVENT_PRESSED) {
+        lv_point_t pt;
+        lv_indev_get_point(lv_indev_get_act(), &pt);
+        s_ovr_y0[i] = pt.y;
+        s_ovr_start[i] = ovr_now(i);
+        s_ovr_target[i] = s_ovr_start[i];
+        s_ovr_moved[i] = false;
+    } else if (code == LV_EVENT_PRESSING && s_ovr_target[i] >= 0) {
+        lv_point_t pt;
+        lv_indev_get_point(lv_indev_get_act(), &pt);
+        const lv_coord_t dy = s_ovr_y0[i] - pt.y;
+        if (LV_ABS(dy) >= OVR_STILL_PX) s_ovr_moved[i] = true;
+        s_ovr_target[i] = ovr_from_drag(i, dy);
+        ovr_show(i, s_ovr_target[i], C_ACCENT);
+    } else if (code == LV_EVENT_RELEASED && s_ovr_target[i] >= 0) {
+        // A plain tap (no travel) changes nothing and sends nothing.
+        if (s_ovr_target[i] != s_ovr_start[i]) ovr_send(i, s_ovr_target[i]);
+        s_ovr_target[i] = -1;
+        s_ovr_sent_ms[i] = lv_tick_get();
+    }
+}
+
+// $X clears the alarm lock. An alarm can land on any page, so this lives in
+// the bar rather than only on HOME. Same three-look idea as HOLD: amber while
+// the machine is in Alarm and the button is the way out, dim otherwise ($X on
+// an idle machine is a harmless "ok", so it stays pressable).
+static void unlock_cb(lv_event_t*) { send_line("$X"); }
+
+static void unlock_paint() {
+    const bool alarm = state == Alarm;
+    const lv_color_t bg = alarm ? C_WARN : C_RAISE;
+    lv_obj_set_style_text_color(s_unlock_lbl, alarm ? C_BG : C_DIM, 0);
+    lv_obj_set_style_bg_color(s_unlock_btn, bg, 0);
+    lv_obj_set_style_bg_color(s_unlock_btn, lv_color_lighten(bg, 40), LV_STATE_PRESSED);
+}
+
 static void build_safety(lv_obj_t* parent) {
     s_safety = lv_obj_create(parent);
     w_flatten(s_safety);
@@ -343,6 +465,10 @@ static void build_safety(lv_obj_t* parent) {
     lv_obj_t* rst = w_button(s_safety, "RESET", nullptr, C_CRIT, C_BG, reset_cb, nullptr);
     lv_obj_set_size(rst, U * 19, LV_PCT(100));
 
+    s_unlock_btn = w_button(s_safety, "UNLOCK", "$X", C_RAISE, C_DIM, unlock_cb, nullptr);
+    lv_obj_set_size(s_unlock_btn, U * 12, LV_PCT(100));
+    s_unlock_lbl = lv_obj_get_child(lv_obj_get_child(s_unlock_btn, 0), 0);
+
     // Overrides fill the remainder in normal mode; FLIP/CLOSE replace them when
     // the expanded view is open.
     s_ovr_box = lv_obj_create(s_safety);
@@ -357,6 +483,22 @@ static void build_safety(lv_obj_t* parent) {
         lv_obj_t* cell = w_panel(s_ovr_box, C_RAISE);
         lv_obj_set_flex_grow(cell, 1);
         lv_obj_set_height(cell, LV_PCT(100));
+        // A drag must stay with the fader, not scroll or swipe the page.
+        lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(cell, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLL_CHAIN);
+        lv_obj_add_event_cb(cell, ovr_cb, LV_EVENT_ALL, (void*)(intptr_t)i);
+
+        // Created before the labels so it draws behind them.
+        s_ovr_fill[i] = lv_obj_create(cell);
+        w_flatten(s_ovr_fill[i]);
+        lv_obj_set_style_bg_color(s_ovr_fill[i], C_ACCENT, 0);
+        lv_obj_set_style_bg_opa(s_ovr_fill[i], LV_OPA_30, 0);
+        lv_obj_set_width(s_ovr_fill[i], LV_PCT(100));
+        lv_obj_align(s_ovr_fill[i], LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_clear_flag(s_ovr_fill[i], LV_OBJ_FLAG_CLICKABLE);
+        ovr_fill(i, 100);
+
         lv_obj_t* k = w_label(cell, OVR_K[i], &lv_font_montserrat_10, C_DIM);
         lv_obj_align(k, LV_ALIGN_CENTER, 0, -11);
         s_ovr_val[i] = w_label(cell, "100%", &lv_font_montserrat_16, C_TEXT);
@@ -646,10 +788,16 @@ void shell_tick() {
     page_home_tick();
     page_probe_tick();
     if (model_take_state() || take_redisplay()) {
-        lv_label_set_text(s_state_lbl, state_word(state));
+        // The alarm number rides on the chip; its name takes the link line
+        // below, which says nothing useful while the machine is locked.
+        char w[16];
+        if (state == Alarm && lastAlarm > 0) snprintf(w, sizeof(w), "ALARM %d", lastAlarm);
+        else                                 snprintf(w, sizeof(w), "%s", state_word(state));
+        lv_label_set_text(s_state_lbl, w);
         lv_obj_set_style_bg_color(s_state_chip, state_colour(state), 0);
         lv_obj_set_style_text_color(s_state_lbl, state == Disconnected ? C_DIM : C_BG, 0);
         hold_resume_paint();
+        unlock_paint();
     }
     if (model_take_dro()) {
         char b[32];
@@ -670,7 +818,9 @@ void shell_tick() {
             lv_label_set_text(s_axis_mach[a], m);
         }
     }
-    lv_label_set_text(s_link_lbl, transport_label());
+    const char* an = state == Alarm ? fnc_alarm_name(lastAlarm) : nullptr;
+    lv_label_set_text(s_link_lbl, an ? an : transport_label());
+    lv_obj_set_style_text_color(s_link_lbl, an ? C_WARN : C_DIM, 0);
 
     // Driver badges + the A gate, every tick: pin changes ride status
     // reports that may not move the DRO, and two string scans are cheap.
@@ -701,10 +851,10 @@ void shell_tick() {
     // never look the same as one at 100%.
     const int ovr[3] = { (int)myFro, (int)myRro, (int)mySro };
     for (int i = 0; i < 3; i++) {
-        char b[12];
-        snprintf(b, sizeof(b), "%d%%", ovr[i]);
-        lv_label_set_text(s_ovr_val[i], b);
-        lv_obj_set_style_text_color(s_ovr_val[i], ovr[i] == 100 ? C_TEXT : C_WARN, 0);
+        // Hands off while the finger is on it, and briefly after a send until
+        // the next Ov: report can reflect it -- otherwise the fader snaps back.
+        if (s_ovr_target[i] >= 0 || lv_tick_elaps(s_ovr_sent_ms[i]) < OVR_HOLD_MS) continue;
+        ovr_show(i, ovr[i], ovr[i] == 100 ? C_TEXT : C_WARN);
     }
 
     switch (s_page) {

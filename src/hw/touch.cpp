@@ -163,6 +163,11 @@ void gt911_reset() {
 }
 
 // Probe 0x5D and 0x14. Call AFTER gt911_reset().
+//
+// A miss re-runs the whole reset, not just the probe. Elecrow's factory code
+// loops the same way (STC8 cmd 250 + INT pulse until 0x5D answers), and on
+// this panel even the factory firmware needs a second pass: probing again
+// without resetting again never finds a GT911 that missed the first wake.
 void gt911_discover() {
     uint8_t addrs[] = { 0x5D, 0x14 };
     for (int attempt = 0; attempt < 10; attempt++) {
@@ -178,7 +183,7 @@ void gt911_discover() {
                 return;
             }
         }
-        delay(100);
+        gt911_reset();
     }
     Serial.println("GT911 not found!");
 }

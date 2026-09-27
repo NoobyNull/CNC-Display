@@ -87,34 +87,6 @@ void set_disconnected_state() {
     jog_window_reset();
 }
 
-// clang-format off
-std::map<int, const char*> error_map = {  // Do here so abreviations are right for the dial
-    { 0, "None"},
-    { 1, "GCode letter"},
-    { 2, "GCode format"},
-    { 3, "Bad $ command"},
-    { 4, "Negative value"},
-    { 5, "Setting Diabled"},
-    { 10, "Soft limit error"},
-    { 13, "Check door"},
-    { 18, "No Homing Cycles"},
-    { 20, "Unsupported GCode"},
-    { 22, "Undefined feedrate"},
-    { 19, "No single axis"},
-    { 34, "Arc radius error"},
-    { 39, "P Param Exceeded"},
-};
-// clang-format on
-
-const char* decode_error_number(int error_num) {
-    if (error_map.find(error_num) != error_map.end()) {
-        return error_map[error_num];
-    }
-    static char retval[33];
-    sprintf(retval, "%d", error_num);
-    return retval;
-}
-
 extern "C" void begin_status_report() {
     myPercent = 0;
 }
@@ -410,6 +382,9 @@ extern "C" void show_state(const char* state_string) {
         if (state == Disconnected) {
             schedule_action(connect_init);
         }
+        // Leaving Alarm retires its number: the next alarm must be fetched
+        // or reported afresh, never shown with the last one's.
+        if (state == Alarm) lastAlarm = 0;
         state = new_state;
         if (state == Alarm && lastAlarm == 0) {  // Unknown
             send_line("$A");                     // Get last alarm

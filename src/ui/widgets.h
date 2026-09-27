@@ -31,3 +31,10 @@ lv_obj_t* w_keyboard();
 
 // Strip padding, border and scrollbars so a container is pure layout.
 void w_flatten(lv_obj_t* o);
+
+// FluidNC refuses G-code and motion while in Alarm (error:9). Controls that
+// would send either are disabled with this reason rather than left looking
+// live and answering with errors. UNLOCK, RESET, HOME, STEPPERS, the
+// overrides, settings and the console stay usable.
+bool w_locked();
+static const char* const LOCK_REASON = "home or unlock";   // the chip already says ALARM
