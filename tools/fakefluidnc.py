@@ -40,8 +40,6 @@ while time.time() < end:
     now = time.time()
     if now >= next_auto:
         next_auto = now + 0.2
-        # Walk A slowly so the 4th DRO column is visibly live, not just present.
-        MPOS[3] = round((MPOS[3] + 0.5) % 360.0, 3)
         s.write(status()); s.flush()
         sent += 1
 

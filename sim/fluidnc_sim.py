@@ -28,6 +28,7 @@ import atexit
 import copy
 import json
 import math
+import queue
 import os
 import re
 import socket
@@ -435,8 +436,12 @@ GCODE_EXT = (".g", ".gc", ".gco", ".gcode", ".ngc", ".nc", ".txt", ".cnc", ".tap
 # The bench's stand-in filesystems. localfs holds the same non-gcode files the
 # real Corgi has, which is the point: $Files/ListGCode filters them all out.
 LOCALFS = [("config.yaml", 6815), ("favicon.ico", 1150), ("index.html.gz", 107835)]
-SDFS = [("Merged Toolpath 1.tap", 82360), ("bracket.nc", 14022),
-        ("spoilboard surface.gcode", 5310), ("logo.svg", 2201)]
+SDDIR = os.path.join(HERE, "sdcard")
+# Real files where sim/sdcard has them, so $XS can send actual G-code; the
+# listed size is then the true size. logo.svg stays a name only.
+SDFS = [(n, os.path.getsize(os.path.join(SDDIR, n)) if os.path.exists(os.path.join(SDDIR, n)) else sz)
+        for n, sz in [("Merged Toolpath 1.tap", 82360), ("bracket.nc", 14022),
+                      ("spoilboard surface.gcode", 5310), ("logo.svg", 2201)]]
 
 
 class Session:
@@ -449,12 +454,18 @@ class Session:
         self.woken = False
         self.limits_monitor = False
         self.buf = ""
+        self.xm = None          # queue of raw bytes while an XModem send owns the link
 
     def out(self, s):
         self.send(s + "\r\n")
 
     def feed(self, data):
         for ch in data:
+            # Checked per byte: the receiver's 'C' can arrive in the same read
+            # as the $XS line that started the transfer.
+            if self.xm is not None:
+                self.xm.put(ch)
+                continue
             c = bytes([ch])
             if c in b"?~!\x18\x84\x85\x11\x13" or 0x90 <= ch <= 0x9D:
                 self.realtime(ch)
@@ -551,6 +562,9 @@ class Session:
         if body == "" or up == "HELP":
             self.out("[MSG: Commands: $$ $# $S $CD $H $X $J= $Files/ListGCode $SD/List]")
             return False
+
+        if up.startswith("XS="):
+            return self.xmodem_send(body[3:])
 
         if up == "I":
             self.out("[VER:4.0 FluidNC v4.0.3 (esp32-wifi) :]")
@@ -708,6 +722,65 @@ class Session:
         for n, s in files:
             self.out(f"[FILE: {n}|SIZE:{s}]")
         self.out(f"[{mount} Free:{free} Used:{used} Total:{total}]")
+
+    def xmodem_send(self, path):
+        """$XS: FluidNC's xmodemTransmit. Waits for the receiver's 'C', sends
+        1K CRC blocks, then EOT, then the command's ok. Runs on its own thread
+        so the link handler keeps feeding ACKs into the queue."""
+        name = path.split("/")[-1]
+        f = os.path.join(SDDIR, name)
+        if not os.path.exists(f):
+            self.out("error:65")          # FsFileNotFound
+            return True
+        data = open(f, "rb").read()
+        self.xm = queue.Queue()
+
+        def crc16(b):
+            c = 0
+            for x in b:
+                c ^= x << 8
+                for _ in range(8):
+                    c = ((c << 1) ^ 0x1021) if c & 0x8000 else c << 1
+                    c &= 0xFFFF
+            return c
+
+        def get(t):
+            try:
+                return self.xm.get(timeout=t)
+            except queue.Empty:
+                return None
+
+        def run():
+            ok = False
+            try:
+                for _ in range(16):              # 16 x 2 s, as FluidNC
+                    if get(2.0) == ord("C"):
+                        break
+                else:
+                    return
+                blocks = [data[i:i + 1024] for i in range(0, len(data), 1024)] or [b""]
+                for n, blk in enumerate(blocks, 1):
+                    blk = blk.ljust(1024, b"\x1a")
+                    pkt = bytes([0x02, n & 0xFF, 0xFF - (n & 0xFF)]) + blk + crc16(blk).to_bytes(2, "big")
+                    for _ in range(10):
+                        self.send(pkt.decode("latin1"))
+                        if get(2.0) == 0x06:
+                            break
+                    else:
+                        return
+                for _ in range(10):
+                    self.send("\x04")
+                    if get(2.0) == 0x06:
+                        ok = True
+                        break
+            finally:
+                self.xm = None
+                m.note(f"$XS {name}: {'sent' if ok else 'failed'} {len(data)} bytes")
+                self.out("ok" if ok else "error:66")
+
+        m = self.m
+        threading.Thread(target=run, daemon=True).start()
+        return True
 
     def sd_run(self, path):
         m = self.m
