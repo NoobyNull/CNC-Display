@@ -38,3 +38,6 @@ compile_commands.json
 sim/deps/
 sim/build/
 sim/cncsim
+
+# Vendor STEP (40 MB), mockup only - see cad/lean_to.py
+cad/ref/

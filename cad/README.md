@@ -211,3 +211,95 @@ screen ends up at twice it above horizontal — 40° gives a near-vertical scree
   with reach — do not stretch the arm without redoing that sum.
 - **Nothing has been printed or test-fitted.** Everything above is measured off
   the model.
+
+---
+
+# Lean-to cabinet — `lean_to.py` (CrowPanel Advance 7.0)
+
+A fixed wedge bolted to the table top, with the face leaning back 30°. The
+panel's stock front bezel frame **comes off** and is not used. The front wall is
+a plain 5.58 mm plate, the LCD module's thickness, with a window for the LCD.
+The PCB bears on the back of the plate and the LCD fills the window flush with
+the face. Nothing else on the PCB's front side reaches the plate; this was
+checked against the vendor STEP.
+
+```python
+exec(open("cad/lean_to.py").read())
+```
+
+It writes `lean_to.step` (model pose) and `print/lean_to_*.stl` (print pose).
+Drop `ref/crowpanel_advance7.stp` (Elecrow's STEP, gitignored, 40 MB) in place
+and the panel shows up as a mockup and is included in the clash check.
+
+| Part | Qty | Print |
+|---|---|---|
+| `lean_to_shell_x1` | 1 | **face down**, 205 × 132 × 96, no supports |
+| `lean_to_cover_x1` | 1 | flat, back face down (hinge tabs and hairpin up) |
+| `lean_to_lens_x1_clear` | 1 | **transparent PLA**, flange down |
+
+Hardware: 4 × 1/4-20 bolts + hex nuts (table). Nothing else: the panel and
+the back flap both snap in.
+
+- **Panel.** Remove the four stock corner screws and lift off the front bezel
+  frame (discard it). Drop the LCD into the window with the PCB against the back
+  of the plate, then press the middle frame and acrylic back on behind them. The
+  front wall carries **four snap pins** at the panel's corner holes. They are
+  Ø3.0 with a split Ø3.8 barb, printed with the shell, and their tips spring
+  open 0.1 mm behind the acrylic. **Drill the corner holes in the middle frame
+  and acrylic back out to 1/8"** (they are 2.7 mm stock; the PCB is already
+  3.2 mm). To release, squeeze the split tips with pliers. Print the shell in
+  PETG so the tines flex instead of snapping. `SNAP_GAP` takes up stack
+  tolerance if the barbs don't catch or the panel rattles.
+- **Table.** 4 × 1/4-20 from underneath into nuts that slide sideways into the
+  two floor rails. Bolt centres are 181.26 mm apart across and 49.14 mm apart
+  front to back. The front pair is 10.6 mm behind the foot's front edge.
+- **Cables.** The bottom is open, so the wires leave under the lean-to. The
+  back cover is plain.
+- **Status bar.** The 8-px SK6812 stick sits under a slot in the roof, centred
+  across the width. Only the lit strip shows: 50.0 × 5.35 mm, which is
+  49.4 × 4.75 plus 0.3 per side. A clear PLA lens fills the slot flush with the
+  roof. Its flange sits in a pocket on the inside, clamped between the roof and
+  the LEDs. The board (51 × 10.2) goes in behind the lens, LEDs first, and is
+  held with glue or tape. `SLOT_AT` slides it along the roof (0.35: it has to stay forward of the
+  flap latch's catch ledge).
+- **Inside corners.** Every concave edge has an R1.5 fillet (`R_FILLET`),
+  applied by an edge finder rather than picked by hand. Corners where a square
+  part has to seat stay sharp: the LCD window, the snap-pin roots, the nut
+  pockets and slots, the insert holes, the LED window and pocket, and the
+  rail/lug ends that the cover stops against. An audit pass confirms that no
+  other concave edge is left sharp. The cover's top corners are cut at 45° to
+  clear the wall/roof fillets.
+- **Outside edges.** Every external edge of the shell (on the outer skin) has a
+  1 mm chamfer (`CHAMFER`), with the same fit features left sharp. The flap is
+  not chamfered. Every fillet and chamfer batch must still mesh watertight or
+  it is refused. A fillet OCC refuses at R1.5 is retried at R1.0, then R0.5; the
+  build report lists which.
+- **Back flap.** No screws. It hinges at the bottom on two Ø3 pins, on tabs
+  inside the rails, that spring into Ø3.4 bores in the rails' inner faces. Bow
+  the flap slightly to snap them in. It is held shut by a **hairpin spring**
+  at the top centre. The lower leg comes off the flap's inner face and runs
+  forward, U-turns at a rounded nose in front of a catch ledge under the roof,
+  and the upper leg runs back under the ledge to a thumb tab that fills a notch
+  in the flap's top edge, flush with the back face. Closing, the ledge rides the
+  nose's 45° lead-in and deflects the hairpin, and the nose's barb snaps up in
+  front of the 75° catch face (0.9 mm engagement). **To open, press the tab
+  in** (about 2 mm of the 4 mm before it meets the ledge, 1.7% strain): that
+  bends both legs and drops the nose 0.6 mm past the barb. It needs the margin
+  because the nose sits forward of the hinge axis and rises about 0.7 mm as the
+  flap opens. The leg gap runs out through the back face, so the upper leg and
+  tab are free and the lower leg is the only root. The bottom corners are notched over the rails, and the bottom edge
+  sits 4.3 mm off the table, so the flap clears the table and the rail ends all
+  the way to 90° open, where it lies on the table. Checked: shut, in 5–90°
+  steps, and a 0.6 mm pull (the barb must hit the ledge). The hairpin is also
+  swept through the swing: at rest it binds on the ledge for the first 5° (the
+  latch) and is clear from there; with the tab pressed it clears the whole way.
+- **USB-C** (flashing) is reached through a slot in the side wall.
+  **BOOT/RST** are reached from the back with the cover off.
+
+Checked: zero interference with the vendor STEP. Elecrow's model places the
+LCD 0.2 mm into the PCB, so in the mockup the LCD shows 0.2 mm below the face.
+On the real part it is flush if the LCD is 5.58 mm, as measured. Positive controls, the stack pushed forward 1 mm and the STEP
+pushed forward 0.5 mm, both register a clash. Both STLs mesh closed and
+manifold.
+
+Not printed or test-fitted yet.
