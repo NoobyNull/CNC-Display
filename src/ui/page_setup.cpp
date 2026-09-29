@@ -66,6 +66,10 @@ static void scroff_cb(lv_event_t* e) {
     lv_label_set_text(s_scroff_lbl, b);
 }
 
+static void led_sw_cb(lv_event_t* e) {
+    settings_set_status_led(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
 static void uart_sw_cb(lv_event_t* e) {
     settings_set_uart_enabled(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
     transport_settings_changed();
@@ -256,14 +260,14 @@ static void page_cb(lv_event_t* e) {
 
 static lv_obj_t* toggle_row(lv_obj_t* parent, const char* name, const char* sub,
                             bool on, lv_event_cb_t cb, lv_obj_t** sw_out) {
-    // Grows with the column. Fixed at 56px these stacked at the top of the
-    // taller page; sharing the height keeps the switch rows evenly spaced.
+    // Shares its parent strip with the other switch: stacked, two rows cost
+    // the PAGES box below its second line of checkboxes.
     lv_obj_t* row = w_panel(parent, C_SURFACE);
-    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_PCT(100));
     lv_obj_set_flex_grow(row, 1);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(row, U + 4, 0);
+    lv_obj_set_style_pad_left(row, U, 0);
 
     lv_obj_t* col = lv_obj_create(row);
     w_flatten(col);
@@ -271,16 +275,25 @@ static lv_obj_t* toggle_row(lv_obj_t* parent, const char* name, const char* sub,
     lv_obj_set_height(col, LV_PCT(100));
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    w_label(col, name, &lv_font_montserrat_16, C_TEXT);
+    w_label(col, name, &lv_font_montserrat_14, C_TEXT);
     if (sub) w_label(col, sub, &lv_font_montserrat_10, C_DIM);
 
     lv_obj_t* sw = lv_switch_create(row);
-    lv_obj_set_size(sw, U * 9, U * 5);
-    lv_obj_set_style_pad_right(row, U + 4, 0);
+    lv_obj_set_size(sw, U * 6, U * 4);
+    lv_obj_set_style_pad_right(row, U, 0);
     lv_obj_set_style_bg_color(sw, C_RAISE, 0);
     lv_obj_set_style_bg_color(sw, C_ACCENT, LV_PART_INDICATOR | LV_STATE_CHECKED);
     if (on) lv_obj_add_state(sw, LV_STATE_CHECKED);
     lv_obj_add_event_cb(sw, cb, LV_EVENT_VALUE_CHANGED, nullptr);
+    // The whole card is the switch: the slider itself is smaller than the
+    // touch floor now that two share a strip.
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(row, [](lv_event_t* e) {
+        lv_obj_t* s = (lv_obj_t*)lv_event_get_user_data(e);
+        if (lv_obj_has_state(s, LV_STATE_CHECKED)) lv_obj_clear_state(s, LV_STATE_CHECKED);
+        else                                       lv_obj_add_state(s, LV_STATE_CHECKED);
+        lv_event_send(s, LV_EVENT_VALUE_CHANGED, nullptr);
+    }, LV_EVENT_CLICKED, sw);
     *sw_out = sw;
     return row;
 }
@@ -319,8 +332,16 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(left, U, 0);
 
-    toggle_row(left, "Wired UART", "off frees the USB debug console",
+    lv_obj_t* sws = lv_obj_create(left);
+    w_flatten(sws);
+    lv_obj_set_size(sws, LV_PCT(100), U * 9);
+    lv_obj_set_flex_flow(sws, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(sws, U, 0);
+    toggle_row(sws, "Wired UART", "off: USB debug",
                settings_uart_enabled(), uart_sw_cb, &s_uart_sw);
+    static lv_obj_t* s_led_sw;
+    toggle_row(sws, "Status lights", "light bar",
+               settings_status_led(), led_sw_cb, &s_led_sw);
 
     // Rail contents. One switch per optional page, because which pages a
     // machine needs is a property of how it is used, not something the panel

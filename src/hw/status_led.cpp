@@ -31,7 +31,7 @@ void status_led_tick() {
     if (STATUS_LED_PIN < 0) return;
     uint8_t  b = settings_brightness();
     if (b < STATUS_LED_MIN_BRIGHT) b = STATUS_LED_MIN_BRIGHT;
-    uint32_t c = status_color(state);
+    uint32_t c = settings_status_led() ? status_color(state) : 0;   // off: dark bar
     if (c == s_shown && b == s_bright) return;
     s_shown = c; s_bright = b;
     s_px.setBrightness(b);

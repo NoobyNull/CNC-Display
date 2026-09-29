@@ -7,6 +7,7 @@
 static Preferences prefs;
 
 static bool     s_uart_en = true;
+static bool     s_status_led = true;
 static uint8_t  s_bright   = 200;
 static uint8_t  s_vibmode  = 0;   // monitor until deliberately armed
 static float    s_vib_hold = 0.5f;    // CNC-TW THRESHOLD_HOLD_RMS_G
@@ -38,6 +39,7 @@ static char s_url[161] = "https://git.yax.family/api/v1/repos/matthew/CNC-Disply
 void settings_load() {
     prefs.begin("cncdisp", /*readOnly=*/true);
     s_uart_en = prefs.getBool("uart_en", true);
+    s_status_led = prefs.getBool("statusled", true);
     s_bright  = prefs.getUChar("bright", 200);
     s_vibmode  = prefs.getUChar("vibmode", 0);
     s_vib_hold = prefs.getFloat("vibhold", 0.5f);
@@ -92,6 +94,12 @@ void settings_set_update_url(const char* url) {
     if (!url || !*url) return;
     strncpy(s_url, url, sizeof(s_url) - 1); s_url[sizeof(s_url) - 1] = 0;
     nvs_put_str("upd_url", s_url);
+}
+
+bool settings_status_led() { return s_status_led; }
+void settings_set_status_led(bool on) {
+    if (on == s_status_led) return;
+    s_status_led = on; nvs_put_bool("statusled", on);
 }
 
 bool settings_uart_enabled() { return s_uart_en; }

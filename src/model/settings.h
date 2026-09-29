@@ -9,6 +9,10 @@ void settings_load();
 bool settings_uart_enabled();
 void settings_set_uart_enabled(bool on);
 
+// The machine-status light bar (hw/status_led). On by default; off blanks it.
+bool settings_status_led();
+void settings_set_status_led(bool on);
+
 // 0 = monitor, 1 = soft (feed hold), 2 = hard (feed hold + soft reset on impact)
 uint8_t settings_vib_mode();
 void    settings_set_vib_mode(uint8_t m);
