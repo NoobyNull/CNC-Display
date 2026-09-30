@@ -101,3 +101,7 @@ enum caps_field_t { CAPS_STEPS = 0, CAPS_RATE, CAPS_ACCEL, CAPS_TRAVEL, CAPS_FIE
 const char* caps_field_name(caps_field_t f);
 const char* caps_setting_for(caps_field_t f, int axis);
 float       caps_axis_value(caps_field_t f, int axis);
+
+// ok / error:N from the controller, which the parser consumes itself: ends a
+// config dump in progress.
+void caps_reply_end();

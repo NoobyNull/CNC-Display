@@ -138,6 +138,28 @@ void test_scanner_never_eats_the_settings_reply() {
 }
 
 // Firmware without $CD must not leave the scanner armed forever.
+// On the panel the parser consumes "ok" itself and reports it through
+// caps_reply_end(); the scanner must then let plain lines go again. It used to
+// stay in dump mode for the whole session and eat every reply after it.
+void test_dump_ended_by_parser_ok_releases_later_lines() {
+    caps_request_config();
+    TEST_ASSERT_TRUE(caps_feed_line("name: corgi"));
+    TEST_ASSERT_TRUE(caps_feed_line("probe:"));
+    TEST_ASSERT_TRUE(caps_feed_line("  pin: NO_PIN"));
+    caps_reply_end();                               // the ok, via show_ok()
+    TEST_ASSERT_TRUE(caps_settled());
+    TEST_ASSERT_FALSE(caps_feed_line("0 GPIO0"));   // $GD output reaches the console
+    TEST_ASSERT_FALSE(caps_feed_line("Input Matrix"));
+}
+
+// An ok that arrives before the YAML starts belongs to an earlier command.
+void test_ok_before_dump_starts_does_not_end_it() {
+    caps_request_config();
+    caps_reply_end();                               // $#'s ok, queued ahead of $CD
+    TEST_ASSERT_FALSE(caps_settled());
+    TEST_ASSERT_TRUE(caps_feed_line("probe:"));     // still collecting
+}
+
 void test_config_request_gives_up() {
     caps_request_config();
     stub_set_millis(20000);
@@ -154,6 +176,8 @@ void test_config_request_is_actually_sent() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_dump_ended_by_parser_ok_releases_later_lines);
+    RUN_TEST(test_ok_before_dump_starts_does_not_end_it);
     RUN_TEST(test_bringup_machine_reports_no_homing);
     RUN_TEST(test_homing_enabled_is_present);
     RUN_TEST(test_unreported_capability_stays_usable);

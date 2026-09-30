@@ -11,6 +11,7 @@
 static clog_line_t s_ring[CLOG_CAPACITY];
 static size_t s_head  = 0;      // index of the oldest retained line
 static size_t s_count = 0;
+static uint32_t s_total = 0;   // lines ever stored; never wraps back with the ring
 static bool   s_show_status = false;
 static bool   s_dirty = false;
 
@@ -53,6 +54,7 @@ void clog_add(const char* line) {
     char named[CLOG_LINE_MAX];
     line = with_name(line, k, named, sizeof(named));
 
+    s_total++;
     size_t slot;
     if (s_count < CLOG_CAPACITY) {
         slot = (s_head + s_count) % CLOG_CAPACITY;
@@ -79,4 +81,12 @@ bool clog_dirty_take() {
     bool d = s_dirty;
     s_dirty = false;
     return d;
+}
+
+uint32_t clog_total() { return s_total; }
+
+const clog_line_t* clog_line_abs(uint32_t n) {
+    const uint32_t first = s_total - (uint32_t)s_count;   // oldest still held
+    if (n < first || n >= s_total) return nullptr;
+    return clog_line((size_t)(n - first));
 }

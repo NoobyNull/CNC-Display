@@ -210,6 +210,20 @@ static const char* yaml_value(const char* line, const char* key) {
     return p;
 }
 
+// The dump's terminator. GrblParserC swallows "ok"/"error:N" (show_ok /
+// show_error) before handle_other ever sees them, so without this call the
+// scanner never learned the dump had ended: s_dumping stayed set for the whole
+// session and swallowed every plain reply line after it -- $GD's GPIO dump
+// arrived as a bare "ok" -- and caps never settled. Only a dump whose YAML has
+// actually started is ended: $CD is queued behind other commands, whose own
+// oks arrive first.
+void caps_reply_end() {
+    if (!s_dumping || !s_started) return;
+    s_dumping = false;
+    s_settled = true;
+    s_gen++;
+}
+
 bool caps_feed_line(const char* line) {
     if (!s_dumping || !line || !*line) return false;
 
@@ -234,11 +248,11 @@ bool caps_feed_line(const char* line) {
     }
 
     // FluidNC terminates command output with ok / error. Anything after that
-    // belongs to the console again.
+    // belongs to the console again. (On the panel the parser consumes those
+    // itself and reports them through caps_reply_end(); matching them here
+    // covers a feed that passes them through.)
     if (strcmp(line, "ok") == 0 || strncmp(line, "error", 5) == 0) {
-        s_dumping = false;
-        s_settled = true;
-        s_gen++;
+        caps_reply_end();
         return true;
     }
 

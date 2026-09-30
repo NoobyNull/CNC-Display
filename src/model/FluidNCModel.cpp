@@ -1,6 +1,8 @@
 // Copyright (c) 2023 Mitch Bradley
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
+#include "model/console_log.h"
+#include "model/caps.h"
 #include "FluidNCModel.h"
 #include "model/filelist.h"
 #include <map>
@@ -433,6 +435,12 @@ extern "C" void handle_other(char* line) {
 }
 
 extern "C" void show_error(int error) {
+    {
+        char b[16];
+        snprintf(b, sizeof(b), "error:%d", error);
+        clog_add(b);   // named by console_log
+    }
+    caps_reply_end();
 #ifdef FNC_RX_TRACE
     dbg_printf("[rx-err] error:%d\n", error);
 #endif
@@ -456,7 +464,19 @@ extern "C" void show_timeout() {
     s_ack_deadline = 0;   // parser just cleared _ackwait; keep the queue moving
     dbg_println("Timeout");
 }
+// The parser consumes ok / error:N / ALARM:N itself, so they never reached the
+// console log as plain lines -- the console showed no replies at all, and the
+// FluidNC names console_log gives error and alarm codes never appeared.
+// [MSG:...] lines. GrblParserC's default handle_msg() is an empty weak stub,
+// and nothing here overrode it, so every FluidNC message -- INFO, WARN, ERR,
+// the $CI channel list, the Airedale's "BOARD:" banner -- was dropped unseen.
+extern "C" void handle_msg(char* command, char* arguments) {
+    model_flag_message(command, arguments);
+}
+
 extern "C" void show_ok() {
+    clog_add("ok");
+    caps_reply_end();
     s_ack_deadline = 0;   // parser just cleared _ackwait; keep the queue moving
 #ifdef FNC_RX_TRACE
     dbg_printf("[rx-ok]\n");
@@ -475,6 +495,11 @@ extern "C" void end_status_report() {
 }
 
 extern "C" void show_alarm(int alarm) {
+    {
+        char b[16];
+        snprintf(b, sizeof(b), "ALARM:%d", alarm);
+        clog_add(b);
+    }
     lastAlarm = alarm;
     request_redisplay();
 }
