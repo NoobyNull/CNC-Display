@@ -243,11 +243,6 @@ void expanded_close() {
     shell_set_expanded(false);
 }
 
-void expanded_flip() {
-    if (!s_open) return;
-    expanded_open(s_face == EXPANDED_STATS ? EXPANDED_CONSOLE : EXPANDED_STATS);
-}
-
 void expanded_tick() {
     if (!s_open) return;
 

@@ -65,7 +65,6 @@ static lv_obj_t* s_axis_mach[MAX_AXES];
 static lv_obj_t* s_axis_dot[MAX_AXES];    // driver online: green dot
 static lv_obj_t* s_axis_bang[MAX_AXES];   // driver dropped: red !
 static int       s_axes_shown = 0;   // 0 = nothing laid out yet
-static lv_obj_t* s_flip_btn;
 static lv_obj_t* s_close_btn;
 static lv_obj_t* s_ovr_box;
 static lv_obj_t* s_ovr_val[3];
@@ -191,6 +190,12 @@ static int nav_max_start() {
     return m > 0 ? m : 0;
 }
 
+static void nav_arrow_show(lv_obj_t* b, bool more) {
+    lv_obj_set_style_opa(b, more ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    if (more) lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    else      lv_obj_clear_flag(b, LV_OBJ_FLAG_CLICKABLE);
+}
+
 static void nav_refresh() {
     if (s_nav_start > nav_max_start()) s_nav_start = nav_max_start();
 
@@ -215,11 +220,12 @@ static void nav_refresh() {
         lv_obj_set_style_bg_color(s_nav_btn[i], on ? C_ACCENT : C_SURFACE, 0);
         lv_obj_set_style_text_color(s_nav_lbl[i], on ? C_BG : C_DIM, 0);
     }
-    // Grey out at each end so the rail never lies about whether there is more.
-    lv_obj_set_style_text_color(s_rail_up,
-        s_nav_start > 0 ? C_DIM : C_LINE, 0);
-    lv_obj_set_style_text_color(s_rail_down,
-        s_nav_start < nav_max_start() ? C_DIM : C_LINE, 0);
+    // An arrow only shows while there is more that way. Transparent rather than
+    // hidden, so its slot keeps its height and the page buttons do not jump.
+    // (This used to recolour the button's text, which never reached the
+    // w_button label -- both arrows stayed lit at the ends.)
+    nav_arrow_show(s_rail_up,   s_nav_start > 0);
+    nav_arrow_show(s_rail_down, s_nav_start < nav_max_start());
 }
 
 static void nav_scroll_cb(lv_event_t* e) {
@@ -312,7 +318,6 @@ static void hold_resume_cb(lv_event_t*) {
     fnc_realtime(paused(state) ? CycleStart : FeedHold);
 }
 static void reset_cb(lv_event_t*)  { fnc_realtime(Reset); }
-static void flip_cb(lv_event_t*)   { expanded_flip(); }
 static void close_cb(lv_event_t*)  { expanded_close(); }
 
 // Three looks: RESUME green while paused, HOLD amber while there is motion to
@@ -469,7 +474,7 @@ static void build_safety(lv_obj_t* parent) {
     lv_obj_set_size(s_unlock_btn, U * 12, LV_PCT(100));
     s_unlock_lbl = lv_obj_get_child(lv_obj_get_child(s_unlock_btn, 0), 0);
 
-    // Overrides fill the remainder in normal mode; FLIP/CLOSE replace them when
+    // Overrides fill the remainder in normal mode; CLOSE replaces them when
     // the expanded view is open.
     s_ovr_box = lv_obj_create(s_safety);
     w_flatten(s_ovr_box);
@@ -505,9 +510,6 @@ static void build_safety(lv_obj_t* parent) {
         lv_obj_align(s_ovr_val[i], LV_ALIGN_CENTER, 0, 9);
     }
 
-    s_flip_btn = w_button(s_safety, "FLIP", "view", C_ACCENT, C_BG, flip_cb, nullptr);
-    lv_obj_set_size(s_flip_btn, U * 11, LV_PCT(100));
-    lv_obj_add_flag(s_flip_btn, LV_OBJ_FLAG_HIDDEN);
 
     s_close_btn = w_button(s_safety, "CLOSE", "back", C_RAISE, C_TEXT, close_cb, nullptr);
     lv_obj_set_size(s_close_btn, U * 11, LV_PCT(100));
@@ -740,7 +742,6 @@ void shell_set_expanded(bool on) {
         lv_obj_add_flag(s_rail, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_content, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_flip_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_close_btn, LV_OBJ_FLAG_HIDDEN);
         // The safety bar is never covered: the controls you hit in a hurry keep
         // their full height and the expanded view takes what is left.
@@ -752,7 +753,6 @@ void shell_set_expanded(bool on) {
         lv_obj_clear_flag(s_rail, LV_OBJ_FLAG_HIDDEN);
         if (page_wants_dro(s_page)) lv_obj_clear_flag(s_dro, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_content, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_flip_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_close_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_parent(s_safety, s_right);
         lv_obj_set_size(s_safety, CONTENT_W, SAFETY_H);

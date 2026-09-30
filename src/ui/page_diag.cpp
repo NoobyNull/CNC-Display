@@ -1,12 +1,13 @@
 #include "ui/pages.h"
+#include "model/console_log.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
-#include "ui/view_expanded.h"
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
 #include "model/caps.h"
 #include "GrblParserC.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -125,7 +126,27 @@ static void scan_probe_config() {
 
 static void refresh();
 
+// Command output (CHANNELS, GPIO, anything typed) is shown in the list itself,
+// not in the full-screen console: the list switches to the lines the console
+// log received since the command went out. ALL / CHANGED switch back.
+static bool     s_out_mode = false;
+static uint32_t s_out_from = 0;
+static char     s_out_cmd[40];
+static uint32_t s_out_seen = 0;       // clog_total() at the last output refresh
+static uint32_t s_out_idx[CLOG_CAPACITY];
+
+static int out_collect() {            // absolute clog numbers worth showing
+    int n = 0;
+    for (uint32_t a = s_out_from; a < clog_total() && n < CLOG_CAPACITY; a++) {
+        const clog_line_t* l = clog_line_abs(a);
+        if (l && l->kind != CLOG_OK && l->kind != CLOG_STATUS && l->kind != CLOG_SENT)
+            s_out_idx[n++] = a;
+    }
+    return n;
+}
+
 static void row_cb(lv_event_t* e) {
+    if (s_out_mode) return;
     int r = (int)(intptr_t)lv_event_get_user_data(e);
     const fnc_setting_t* st = fncset_at((size_t)(s_scroll + r));
     if (!st) return;
@@ -136,7 +157,7 @@ static void row_cb(lv_event_t* e) {
 
 static void scroll_cb(lv_event_t* e) {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
-    int max = (int)fncset_count() - ROWS;
+    int max = (s_out_mode ? out_collect() : (int)fncset_count()) - ROWS;
     if (max < 0) max = 0;
     s_scroll += dir * ROWS;          // page at a time; there are ~150 of these
     if (s_scroll < 0) s_scroll = 0;
@@ -149,8 +170,8 @@ static void scroll_cb(lv_event_t* e) {
 // sit until the monitor exits. The tick re-arms it right behind the command.
 static void mon_stop();
 
-static void all_cb(lv_event_t*)     { mon_stop(); s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_all(); }
-static void changed_cb(lv_event_t*) { mon_stop(); s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_changed(); }
+static void all_cb(lv_event_t*)     { mon_stop(); s_out_mode = false; s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_all(); }
+static void changed_cb(lv_event_t*) { mon_stop(); s_out_mode = false; s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_changed(); }
 
 static void edit_focus_cb(lv_event_t*) {
     // With a setting selected this edits its value; with nothing selected it is
@@ -160,9 +181,81 @@ static void edit_focus_cb(lv_event_t*) {
     lv_obj_move_foreground(s_kb);
 }
 
-// Writing sends "$name=value". FluidNC validates and answers ok or error:N,
-// which lands in the console view — so a rejected value is visible rather than
-// silently ignored. Re-reading afterwards confirms what actually stuck.
+// Replies to our own writes are shown on this page, not in the full-screen
+// console: note where the console log stood when the command went out, then
+// take the first ok / error:N after it. On ok the setting is re-read so the
+// list shows what actually stuck, not what was typed.
+static lv_obj_t* s_result;
+static bool      s_waiting = false;
+static uint32_t  s_wait_from = 0, s_wait_ms = 0;
+static char      s_wait_what[72];
+static char      s_wait_reread[FS_NAME_MAX];
+static const char* s_wait_ok_note = "";
+
+static void show_result(const char* text, lv_color_t col) {
+    lv_label_set_text(s_result, text);
+    lv_obj_set_style_text_color(s_result, col, 0);
+}
+
+static void await_reply(const char* what, const char* reread, const char* ok_note) {
+    s_waiting   = true;
+    s_wait_from = clog_total();
+    s_wait_ms   = (uint32_t)milliseconds();
+    snprintf(s_wait_what, sizeof(s_wait_what), "%s", what);
+    snprintf(s_wait_reread, sizeof(s_wait_reread), "%s", reread ? reread : "");
+    s_wait_ok_note = ok_note;
+    char b[96];
+    snprintf(b, sizeof(b), "%s ...", what);
+    show_result(b, C_DIM);
+}
+
+static void reply_tick() {
+    if (!s_waiting) return;
+    char b[140];
+    for (uint32_t n = s_wait_from; n < clog_total(); n++) {
+        const clog_line_t* l = clog_line_abs(n);
+        if (!l) continue;
+        if (l->kind == CLOG_OK) {
+            snprintf(b, sizeof(b), "%s - ok%s", s_wait_what, s_wait_ok_note);
+            show_result(b, C_OK);
+            if (s_wait_reread[0]) send_linef("$%s", s_wait_reread);
+            s_waiting = false;
+            return;
+        }
+        if (l->kind == CLOG_ERROR) {
+            // 162: FluidNC's Grbl/ number settings (HomingDirections, the
+            // limit and homing enables, spindle max, laser mode) are read-only
+            // views of config.yaml; the value has to change in the config.
+            const bool ro = strtol(l->text + 6, nullptr, 10) == 162;
+            snprintf(b, sizeof(b), "%s - REJECTED: %s%s", s_wait_what, l->text + 6,
+                     ro ? " - a view of config.yaml; change it there" : "");
+            show_result(b, C_CRIT);
+            s_waiting = false;
+            return;
+        }
+    }
+    if ((uint32_t)milliseconds() - s_wait_ms > 5000) {
+        snprintf(b, sizeof(b), "%s - no reply from the controller", s_wait_what);
+        show_result(b, C_WARN);
+        s_waiting = false;
+    }
+}
+
+static void run_command(const char* cmd) {
+    mon_stop();
+    s_out_mode = true;
+    s_out_from = clog_total();
+    s_out_seen = s_out_from;
+    s_scroll   = 0;
+    s_sel      = -1;
+    snprintf(s_out_cmd, sizeof(s_out_cmd), "%s", cmd);
+    send_line(cmd);
+    lv_textarea_set_text(s_edit_ta, "");
+    await_reply(cmd, nullptr, " - output on the left; ALL returns to settings");
+    refresh();
+}
+
+// Writing sends "$name=value"; the reply lands on the status line above.
 static void kb_done_cb(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code != LV_EVENT_READY && code != LV_EVENT_CANCEL) return;
@@ -173,30 +266,42 @@ static void kb_done_cb(lv_event_t* e) {
     mon_stop();
     const fnc_setting_t* st = fncset_at((size_t)s_sel);
     if (st) {
-        fncset_write(st->name, lv_textarea_get_text(s_edit_ta));
-        // The reply is the only evidence the write landed — error:N or ok
-        // arrives as a console line, so show the console rather than letting
-        // a rejected write look identical to a successful one.
-        expanded_open(EXPANDED_CONSOLE);
+        const char* v = lv_textarea_get_text(s_edit_ta);
+        // "Resolution/X", not "X": drop only the Grbl/ prefix every row shares.
+        const char* nm = strncmp(st->name, "Grbl/", 5) == 0 ? st->name + 5 : st->name;
+        char what[72];
+        snprintf(what, sizeof(what), "%s = %s", nm, v);
+        fncset_write(st->name, v);
+        await_reply(what, st->name, " (live now; hold SAVE CFG to keep it)");
         return;
     }
     // No selection: the box is a command line. Replies are plain lines, so
     // show the console to make ok/error visible.
     const char* t = lv_textarea_get_text(s_edit_ta);
-    if (t && *t) {
-        send_line(t);
-        expanded_open(EXPANDED_CONSOLE);
-    }
+    if (t && *t) run_command(t);
 }
 
 static void diag_cmd_cb(lv_event_t* e) {
-    mon_stop();
-    send_line((const char*)lv_event_get_user_data(e));
-    expanded_open(EXPANDED_CONSOLE);      // replies are plain lines; show them
+    run_command((const char*)lv_event_get_user_data(e));
 }
 
 static void refresh() {
-    char b[24];
+    char b[64];
+    if (s_out_mode) {
+        const int n = out_collect();
+        s_out_seen = clog_total();
+        snprintf(b, sizeof(b), "%s: %d lines", s_out_cmd, n);
+        lv_label_set_text(s_count_lbl, b);
+        for (int r = 0; r < ROWS; r++) {
+            const int i = s_scroll + r;
+            const clog_line_t* l = i < n ? clog_line_abs(s_out_idx[i]) : nullptr;
+            lv_label_set_text(s_name[r], l ? l->text : "");
+            lv_label_set_text(s_val[r], "");
+            lv_obj_set_style_bg_color(s_row[r], C_SURFACE, 0);
+            lv_obj_set_style_border_color(s_row[r], C_LINE, 0);
+        }
+        return;
+    }
     snprintf(b, sizeof(b), "%u settings", (unsigned)fncset_count());
     lv_label_set_text(s_count_lbl, b);
 
@@ -271,6 +376,10 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_set_style_border_color(s_edit_ta, C_LINE, 0);
     lv_obj_add_event_cb(s_edit_ta, edit_focus_cb, LV_EVENT_CLICKED, nullptr);
 
+    s_result = w_label(right, "tap a setting, type a value, press the check mark", &lv_font_montserrat_12, C_DIM);
+    lv_obj_set_width(s_result, LV_PCT(100));
+    lv_label_set_long_mode(s_result, LV_LABEL_LONG_WRAP);
+
     // The two button rows take the slack. The nav bar and the one-line editor
     // have a natural size and look wrong stretched; taller command buttons are
     // a straight win on a panel operated with a gloved hand.
@@ -307,10 +416,14 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_t* sv = w_button(diag, "SAVE CFG", "hold", C_RAISE, C_WARN, nullptr, nullptr);
     lv_obj_set_flex_grow(sv, 1);
     lv_obj_set_height(sv, LV_PCT(100));
+    // A tap says why nothing happened; only a hold writes.
+    lv_obj_add_event_cb(sv, [](lv_event_t*) {
+        show_result("Hold SAVE CFG to write config.yaml", C_WARN);
+    }, LV_EVENT_SHORT_CLICKED, nullptr);
     lv_obj_add_event_cb(sv, [](lv_event_t*) {
         mon_stop();
         send_line("$CD=config.yaml");
-        expanded_open(EXPANDED_CONSOLE);
+        await_reply("Save config.yaml", nullptr, " - survives a reboot");
     }, LV_EVENT_LONG_PRESSED, nullptr);
 
     // --- live limit/probe lamps ---
@@ -339,6 +452,8 @@ void page_diag_build(lv_obj_t* p) {
 }
 
 void page_diag_tick() {
+    reply_tick();
+    if (s_out_mode && clog_total() != s_out_seen) refresh();   // output still arriving
     if (fncset_dirty_take()) {
         refresh();
         scan_probe_config();

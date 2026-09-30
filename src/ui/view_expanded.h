@@ -6,7 +6,6 @@ enum expanded_face_t { EXPANDED_STATS, EXPANDED_CONSOLE };
 void expanded_build();
 void expanded_open(expanded_face_t face);
 void expanded_close();
-void expanded_flip();
 bool expanded_is_open();
 void expanded_tick();
 
