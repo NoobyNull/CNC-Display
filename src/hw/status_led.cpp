@@ -1,6 +1,7 @@
 #include "hw/status_led.h"
 #include "model/status_color.h"
 #include "model/settings.h"
+#include "model/screensaver.h"
 #include <Adafruit_NeoPixel.h>
 
 #ifndef STATUS_LED_PIN
@@ -31,7 +32,11 @@ void status_led_tick() {
     if (STATUS_LED_PIN < 0) return;
     uint8_t  b = settings_brightness();
     if (b < STATUS_LED_MIN_BRIGHT) b = STATUS_LED_MIN_BRIGHT;
-    uint32_t c = settings_status_led() ? status_color(state) : 0;   // off: dark bar
+    // Follows the display: dark when switched off in Setup, and dark while the
+    // screen sleeps. The screen only sleeps with the machine at rest, and any
+    // state change wakes it, so an alarm always lights the bar.
+    const bool lit = settings_status_led() && !screensaver_is_off();
+    uint32_t c = lit ? status_color(state) : 0;
     if (c == s_shown && b == s_bright) return;
     s_shown = c; s_bright = b;
     s_px.setBrightness(b);
