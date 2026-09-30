@@ -278,6 +278,10 @@ class Machine:
 
     def write_setting(self, name, value):
         """$Grbl/... writes. Returns None on success or an error string."""
+        # FluidNC's INT_PROXY settings are read-only views of config.yaml.
+        if name in ("Grbl/LaserMode", "Grbl/MaxSpindleSpeed", "Grbl/HomingDirections",
+                    "Grbl/HomingCycleEnable", "Grbl/HardLimitsEnable", "Grbl/SoftLimitsEnable"):
+            return "error:162"
         m = re.match(r"^Grbl/(Resolution|MaxRate|Acceleration|MaxTravel)/([XYZABC])$", name)
         if m:
             field = {"Resolution": "steps_per_mm", "MaxRate": "max_rate",
@@ -573,9 +577,48 @@ class Session:
             self.out("[MSG:Mode=STA:SSID=YAX-Net:Status=Connected:IP=127.0.0.1:MAC=SIM]")
             return False
 
+        if up in ("GD", "GPIO/DUMP"):
+            # FluidNC's gpio_dump: "<n> GPIO<n>[ I<level>]" per pin, then the
+            # input matrix. Levels come from the config's input pins: 1 idle
+            # (they are active-low), 0 while the bench switch is pressed.
+            pins = {}
+            def walk(n, path=""):
+                if isinstance(n, dict):
+                    for k, v in n.items(): walk(v, f"{path}/{k}")
+                elif isinstance(n, str) and n.startswith("gpio."):
+                    num = int(re.match(r"gpio\.(\d+)", n).group(1))
+                    pins[num] = path
+            walk(m.cfg)
+            for g in [0, 1, 2, 3, 4, 5] + list(range(12, 20)) + [21, 22, 23, 25, 26, 27] + list(range(32, 40)):
+                path = pins.get(g, "")
+                if "limit" in path or "probe" in path or "control" in path:
+                    self.out(f"{g} GPIO{g} I1")
+                else:
+                    self.out(f"{g} GPIO{g}")
+            self.out("Input Matrix")
+            return False
+
+        if up in ("CI", "CHANNEL/INFO"):
+            for name in ("USB", "uart_channel2"):
+                self.out(f"[MSG:INFO: {name}]")
+            return False
+
         if up in ("S", "SC", "$"):
             for l in m.settings_lines():
                 self.out(l)
+            return False
+
+        if "=" not in body:
+            # $<name> reads one setting back, as FluidNC does: "$name=value".
+            for l in m.settings_lines():
+                if l.lower().startswith("$" + body.lower() + "="):
+                    self.out(l)
+                    return False
+
+        if up.startswith(("CD=", "CONFIG/DUMP=")):
+            # $CD=<file>: FluidNC writes the live config tree over <file>.
+            # Nothing to write here; acknowledge like the real thing.
+            m.note(f"config saved to {body.split('=', 1)[1]}")
             return False
 
         if up in ("CD", "CONFIG/DUMP"):
