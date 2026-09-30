@@ -14,9 +14,14 @@
 #define GT911_SDA_PIN 15
 #define GT911_SCL_PIN 16
 
+// Bus clock; override with -DI2C_HZ=... (Elecrow's factory code uses 100 kHz).
+#ifndef I2C_HZ
+#define I2C_HZ 400000
+#endif
+
 void touch_init();       // Create I2C mutex
 void gt911_reset();      // Pulse RST (via the STC8) with INT held low -- call before discover
-void gt911_discover();   // Discover GT911 address -- call after gt911_reset()
+void gt911_discover();   // Find the GT911, resetting it between misses
 void touch_poll();       // Poll GT911 with mutex protection -- call from loop() at 20Hz
 void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);  // LVGL callback
 

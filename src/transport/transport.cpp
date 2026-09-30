@@ -20,6 +20,9 @@ static char s_detail[64] = "no link";
 static bool s_uart_ready = false;
 
 void transport_init() {
+#ifdef FORCE_CONSOLE
+    return;   // the boot console keeps these pins; see main.cpp
+#endif
     if (settings_uart_enabled()) s_uart_ready = init_fnc_uart();
 }
 

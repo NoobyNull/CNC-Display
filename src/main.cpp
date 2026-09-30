@@ -51,7 +51,8 @@ void setup() {
     // Un-begun, every Serial.print is a safe no-op.
     // FORCE_CONSOLE (build flag): boot log on regardless, for a panel whose
     // Setup page cannot be reached. The link reopens these pins later, so it
-    // only covers boot up to transport_init() -- which is where touch comes up.
+    // With FORCE_CONSOLE the link is not started at all (transport.cpp), so the
+    // console stays readable for the whole run.
 #ifdef FORCE_CONSOLE
     Serial.begin(115200);
 #else
@@ -62,13 +63,14 @@ void setup() {
     // The GT911 and the STC8 share one bus, and the STC8 owns the touch reset
     // line. Nothing below may touch Wire before this line.
     Wire.begin(GT911_SDA_PIN, GT911_SCL_PIN);
-    Wire.setClock(400000);
+    Wire.setClock(I2C_HZ);
 
     touch_init();          // create the I2C mutex before anything uses the bus
     stc8_init();           // wait for the housekeeping MCU to answer
-    gt911_reset();         // address strap is latched here, before any probing
-    display_init();        // RGB panel
+    // Probe first, reset only on a miss, before the display comes up -- the
+    // factory's order. A GT911 that is already up is not reset needlessly.
     gt911_discover();
+    display_init();        // RGB panel
 #ifdef FORCE_CONSOLE
     // Who answers on the bus: GT911 0x5D/0x14, STC8 0x30, RTC 0x51, IMU 0x68/69.
     Serial.print("[i2c] scan:");

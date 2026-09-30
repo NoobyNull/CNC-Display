@@ -39,7 +39,7 @@ void i2c_give() {
 void i2c_bus_recover() {
     Wire.end();
     Wire.begin(GT911_SDA_PIN, GT911_SCL_PIN);
-    Wire.setClock(400000);
+    Wire.setClock(I2C_HZ);
 }
 
 // ============================================================
@@ -143,9 +143,8 @@ void touch_init() {
 // The GT911 latches its I2C address from the INT pin at the moment reset is
 // released: INT low picks 0x5D, INT high picks 0x14. On this board RST is a
 // port pin of the STC8, pulsed by command 250 ("activate touch"), while INT is
-// GPIO 1 — so the strap is: hold INT low, ask the STC8 to pulse reset, keep
-// holding through the release edge, then hand INT back to the controller.
-// This mirrors Elecrow's factory retry loop exactly. Must run before
+// GPIO 1 — so the strap is: ask the STC8 to pulse reset, drive INT low across
+// the release edge, then hand INT back to the controller. Must run before
 // gt911_discover() and before anything else on the bus expects an answer from
 // the touch controller.
 void gt911_reset() {
@@ -154,38 +153,58 @@ void gt911_reset() {
     gt911_int_detach();
     pinMode(GT911_INT_PIN, OUTPUT);
     digitalWrite(GT911_INT_PIN, LOW);
-    stc8_cmd(250);                          // STC8 pulses TP_RST
-    delay(120);                             // factory value: covers the pulse + release
-    gt911_int_attach();                     // let the controller drive it again
+    const bool sent = stc8_cmd(250);        // STC8 pulses TP_RST
+#ifdef FORCE_CONSOLE
+    Serial.printf("[gt911] reset: stc8 cmd 250 %s\n", sent ? "acked" : "FAILED");
+#else
+    (void)sent;
+#endif
+    delay(120);
+    // Plain input; the interrupt is attached only once the chip answers
+    // (gt911_discover / the background retry).
+    pinMode(GT911_INT_PIN, INPUT);
     delay(100);                             // datasheet wants >50ms before I2C
     s_int_flag = true;                      // read once now, do not wait for an edge
     s_frame_log = 8;
 }
 
-// Probe 0x5D and 0x14. Call AFTER gt911_reset().
-//
-// A miss re-runs the whole reset, not just the probe. Elecrow's factory code
-// loops the same way (STC8 cmd 250 + INT pulse until 0x5D answers), and on
-// this panel even the factory firmware needs a second pass: probing again
-// without resetting again never finds a GT911 that missed the first wake.
-void gt911_discover() {
-    uint8_t addrs[] = { 0x5D, 0x14 };
-    for (int attempt = 0; attempt < 10; attempt++) {
-        for (int i = 0; i < 2; i++) {
-            if (!i2c_take(50)) continue;
-            Wire.beginTransmission(addrs[i]);
-            uint8_t err = Wire.endTransmission();
-            i2c_give();
+static bool gt911_probe() {
+    static const uint8_t addrs[] = { 0x5D, 0x14 };
+    for (uint8_t a : addrs) {
+        if (!i2c_take(50)) continue;
+        Wire.beginTransmission(a);
+        uint8_t err = Wire.endTransmission();
+        i2c_give();
+#ifdef FORCE_CONSOLE
+        Serial.printf("[gt911] probe 0x%02X -> err %u\n", a, err);
+#endif
+        if (err == 0) { gt911_addr = a; return true; }
+    }
+    return false;
+}
 
-            if (err == 0) {
-                gt911_addr = addrs[i];
-                Serial.printf("GT911 found at 0x%02X (attempt %d)\n", gt911_addr, attempt);
-                return;
-            }
+// Probe 0x5D and 0x14, resetting between misses. A chip that is already up
+// is left alone -- no reset unless it fails to answer.
+//
+// When nothing answers, the usual cause on this panel is the touch ribbon
+// (FPC2) working loose: 2026-09-29 the GT911 vanished from the bus under every
+// firmware, factory included, and came back on reseating the cable.
+void gt911_discover() {
+    for (int attempt = 0; attempt < 10; attempt++) {
+        if (gt911_probe()) {
+            Serial.printf("GT911 found at 0x%02X (attempt %d)\n", gt911_addr, attempt);
+            // Found without a reset means INT was never handed back to the
+            // interrupt; do it now either way.
+            gt911_int_detach();
+            gt911_int_attach();
+            s_int_flag = true;
+            return;
         }
         gt911_reset();
     }
-    Serial.println("GT911 not found!");
+    // Not fatal: touch_poll() keeps waking it (every GT911_RETRY_MS) until it
+    // answers, so a slow chip costs a few seconds of touch, not a reboot.
+    Serial.println("GT911 not found at boot; retrying in the background");
 }
 
 // Read `len` bytes from 16-bit register `reg`, in Wire-buffer-sized chunks.
@@ -253,8 +272,26 @@ void gt911_dump_config() {
     }
 }
 
+static const uint32_t GT911_RETRY_MS = 2000;
+
 void touch_poll() {
-    if (gt911_addr == 0) return;
+    if (gt911_addr == 0) {
+        // Missed at boot: one full wake + probe every GT911_RETRY_MS. Blocks
+        // ~220 ms per try, and only while there is no touch to lose anyway.
+        static uint32_t last_try = 0;
+        if (millis() - last_try < GT911_RETRY_MS) return;
+        gt911_reset();
+        last_try = millis();
+        if (gt911_probe()) {
+            Serial.printf("GT911 found at 0x%02X (background retry)\n", gt911_addr);
+            gt911_int_attach();
+            s_int_flag = true;
+        }
+#ifdef FORCE_CONSOLE
+        else Serial.println("[gt911] background retry: no answer");
+#endif
+        return;
+    }
 
     // Read on an edge, or on the idle heartbeat. Nothing else.
     const uint32_t now = millis();
