@@ -6,6 +6,7 @@
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
 #include "model/caps.h"
+#include "ui/goto_popup.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <strings.h>
@@ -26,6 +27,8 @@ static lv_obj_t* s_val[ROWS];
 static lv_obj_t* s_count_lbl;
 static lv_obj_t* s_edit_ta;
 static lv_obj_t* s_kb;
+static lv_obj_t* s_check;    // true/false and ON/OFF settings
+static lv_obj_t* s_dd;       // FluidNC enum settings
 static int s_scroll = 0;
 static int s_sel = -1;
 
@@ -147,13 +150,88 @@ static int out_collect() {            // absolute clog numbers worth showing
     return n;
 }
 
+// The option lists of FluidNC's non-ON/OFF enum settings; $S prints only the
+// current label. ponytail: copied from FluidNC's enum_opt_t tables, so a new
+// enum there falls back to the keyboard here; $ESP400 json=yes carries the
+// lists live if that ever matters. The dynamic ones (AP/Country, Sta/MinSecurity,
+// WiFi/PsMode) are left to the keyboard.
+static const struct { const char* name; const char* opts; } ENUMS[] = {
+    { "Message/Level",     "None\nError\nWarning\nInfo\nDebug\nVerbose" },
+    { "WiFi/Mode",         "Off\nSTA\nAP\nSTA>AP" },
+    { "Sta/IPMode",        "DHCP\nStatic" },
+    { "Ethernet/IPMode",   "DHCP\nStatic" },
+    { "network/type",      "WiFi\nEthernet" },
+    { "Notification/Type", "NONE\nLINE\nPUSHOVER\nEMAIL\nTG" },
+};
+
+static const char* enum_opts(const char* name) {
+    for (auto& e : ENUMS) if (!strcasecmp(name, e.name)) return e.opts;
+    return nullptr;
+}
+
+static bool is_bool(const char* v) {
+    return !strcasecmp(v, "true") || !strcasecmp(v, "false")
+        || !strcasecmp(v, "on")   || !strcasecmp(v, "off");
+}
+
+static bool is_number(const char* v) {
+    char* end;
+    strtod(v, &end);
+    return *v && end != v && *end == 0;
+}
+
+static void await_reply(const char* what, const char* reread, const char* ok_note);
+
+static void write_setting(const fnc_setting_t* st, const char* v) {
+    mon_stop();
+    // "Resolution/X", not "X": drop only the Grbl/ prefix every row shares.
+    const char* nm = strncmp(st->name, "Grbl/", 5) == 0 ? st->name + 5 : st->name;
+    char what[72];
+    snprintf(what, sizeof(what), "%s = %s", nm, v);
+    fncset_write(st->name, v);
+    // Grbl/ numbers and $/ paths live in the config tree; the rest are NVS,
+    // which FluidNC stores on the write itself.
+    const bool tree = nm != st->name || st->name[0] == '/';
+    await_reply(what, st->name, tree ? " (live now; hold SAVE CFG to keep it)" : " (stored)");
+}
+
+// One editor slot, three faces: the text box (numbers open the number pad
+// from it, anything else the keyboard), a checkbox, or a dropdown.
+static void show_editor(lv_obj_t* which) {
+    lv_obj_t* all[3] = { s_edit_ta, s_check, s_dd };
+    for (lv_obj_t* o : all) {
+        if (o == which) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+        else            lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// Also run on a rejected write, so a ticked box or a picked option does not
+// keep showing what the controller refused.
+static void load_editor(const fnc_setting_t* st) {
+    lv_textarea_set_text(s_edit_ta, st->value);
+    if (is_bool(st->value)) {
+        const bool on = !strcasecmp(st->value, "true") || !strcasecmp(st->value, "on");
+        lv_checkbox_set_text(s_check, st->name);
+        if (on) lv_obj_add_state(s_check, LV_STATE_CHECKED);
+        else    lv_obj_clear_state(s_check, LV_STATE_CHECKED);
+        show_editor(s_check);
+    } else if (const char* opts = enum_opts(st->name)) {
+        lv_dropdown_set_options(s_dd, opts);
+        const int i = lv_dropdown_get_option_index(s_dd, st->value);
+        lv_dropdown_set_selected(s_dd, i < 0 ? 0 : (uint16_t)i);
+        show_editor(s_dd);
+    } else {
+        show_editor(s_edit_ta);
+    }
+}
+
 static void row_cb(lv_event_t* e) {
     if (s_out_mode) return;
     int r = (int)(intptr_t)lv_event_get_user_data(e);
     const fnc_setting_t* st = fncset_at((size_t)(s_scroll + r));
     if (!st) return;
     s_sel = s_scroll + r;
-    lv_textarea_set_text(s_edit_ta, st->value);
+    load_editor(st);
     refresh();
 }
 
@@ -172,12 +250,28 @@ static void scroll_cb(lv_event_t* e) {
 // sit until the monitor exits. The tick re-arms it right behind the command.
 static void mon_stop();
 
-static void all_cb(lv_event_t*)     { mon_stop(); s_out_mode = false; s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_all(); }
-static void changed_cb(lv_event_t*) { mon_stop(); s_out_mode = false; s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); fncset_request_changed(); }
+static void show_editor(lv_obj_t* which);
+static void all_cb(lv_event_t*)     { mon_stop(); s_out_mode = false; s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); show_editor(s_edit_ta); fncset_request_all(); }
+static void changed_cb(lv_event_t*) { mon_stop(); s_out_mode = false; s_scroll = 0; s_sel = -1; lv_textarea_set_text(s_edit_ta, ""); show_editor(s_edit_ta); fncset_request_changed(); }
+
+static void write_setting(const fnc_setting_t* st, const char* v);
+static bool is_number(const char* v);
 
 static void edit_focus_cb(lv_event_t*) {
     // With a setting selected this edits its value; with nothing selected it is
     // a free command line — anything typed goes to the controller verbatim.
+    // A number gets the number pad, not the whole keyboard.
+    const fnc_setting_t* st = fncset_at((size_t)s_sel);
+    if (st && is_number(st->value)) {
+        numpad_open(strncmp(st->name, "Grbl/", 5) == 0 ? st->name + 5 : st->name,
+                    st->value, st->value, [](float) {
+            const fnc_setting_t* cur = fncset_at((size_t)s_sel);
+            if (!cur) return;
+            lv_textarea_set_text(s_edit_ta, numpad_text());
+            write_setting(cur, numpad_text());
+        });
+        return;
+    }
     lv_keyboard_set_textarea(s_kb, s_edit_ta);
     lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_kb);
@@ -232,6 +326,7 @@ static void reply_tick() {
             snprintf(b, sizeof(b), "%s - REJECTED: %s%s", s_wait_what, l->text + 6,
                      ro ? " - a view of config.yaml; change it there" : "");
             show_result(b, C_CRIT);
+            if (s_wait_reread[0] && fncset_at((size_t)s_sel)) load_editor(fncset_at((size_t)s_sel));
             s_waiting = false;
             return;
         }
@@ -250,6 +345,7 @@ static void run_command(const char* cmd) {
     s_out_seen = s_out_from;
     s_scroll   = 0;
     s_sel      = -1;
+    show_editor(s_edit_ta);
     snprintf(s_out_cmd, sizeof(s_out_cmd), "%s", cmd);
     send_line(cmd);
     lv_textarea_set_text(s_edit_ta, "");
@@ -268,13 +364,7 @@ static void kb_done_cb(lv_event_t* e) {
     mon_stop();
     const fnc_setting_t* st = fncset_at((size_t)s_sel);
     if (st) {
-        const char* v = lv_textarea_get_text(s_edit_ta);
-        // "Resolution/X", not "X": drop only the Grbl/ prefix every row shares.
-        const char* nm = strncmp(st->name, "Grbl/", 5) == 0 ? st->name + 5 : st->name;
-        char what[72];
-        snprintf(what, sizeof(what), "%s = %s", nm, v);
-        fncset_write(st->name, v);
-        await_reply(what, st->name, " (live now; hold SAVE CFG to keep it)");
+        write_setting(st, lv_textarea_get_text(s_edit_ta));
         return;
     }
     // No selection: the box is a command line. Replies are plain lines, so
@@ -393,6 +483,39 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_set_style_text_color(s_edit_ta, C_TEXT, 0);
     lv_obj_set_style_border_color(s_edit_ta, C_LINE, 0);
     lv_obj_add_event_cb(s_edit_ta, edit_focus_cb, LV_EVENT_CLICKED, nullptr);
+
+    // Same slot, same size as the text box; row_cb shows one of the three.
+    // A tap writes at once, the way the text box's check mark does.
+    s_check = lv_checkbox_create(right);
+    lv_obj_set_size(s_check, LV_PCT(100), U * 6);
+    lv_obj_set_style_text_color(s_check, C_TEXT, 0);
+    lv_obj_set_style_text_font(s_check, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_pad_all(s_check, U, LV_PART_INDICATOR);   // a box the size of a fingertip
+    lv_obj_set_style_bg_color(s_check, C_SURFACE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_check, C_ACCENT, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(s_check, [](lv_event_t*) {
+        const fnc_setting_t* st = fncset_at((size_t)s_sel);
+        if (!st) return;
+        const bool on = lv_obj_has_state(s_check, LV_STATE_CHECKED);
+        // Answer in the setting's own words: ON/OFF for NVS enums, true/false
+        // for the config tree.
+        const bool onoff = !strcasecmp(st->value, "on") || !strcasecmp(st->value, "off");
+        write_setting(st, onoff ? (on ? "ON" : "OFF") : (on ? "true" : "false"));
+    }, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    s_dd = lv_dropdown_create(right);
+    lv_obj_set_size(s_dd, LV_PCT(100), U * 6);
+    lv_obj_set_style_bg_color(s_dd, C_SURFACE, 0);
+    lv_obj_set_style_text_color(s_dd, C_TEXT, 0);
+    lv_obj_set_style_border_color(s_dd, C_LINE, 0);
+    lv_obj_add_event_cb(s_dd, [](lv_event_t*) {
+        const fnc_setting_t* st = fncset_at((size_t)s_sel);
+        if (!st) return;
+        char v[FS_VAL_MAX];
+        lv_dropdown_get_selected_str(s_dd, v, sizeof(v));
+        write_setting(st, v);
+    }, LV_EVENT_VALUE_CHANGED, nullptr);
+    show_editor(s_edit_ta);
 
     s_result = w_label(right, "tap a setting, type a value, press the check mark", &lv_font_montserrat_12, C_DIM);
     lv_obj_set_width(s_result, LV_PCT(100));

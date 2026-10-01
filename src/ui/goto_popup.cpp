@@ -228,6 +228,16 @@ void numpad_open(const char* title, const char* note, float initial,
     goto_open(-2);          // -2: build the card, skip the axis machinery
 }
 
+void numpad_open(const char* title, const char* note, const char* initial,
+                 void (*cb)(float)) {
+    if (s_root || !cb) return;
+    numpad_open(title, note, 0.0f, cb);
+    snprintf(s_buf, sizeof(s_buf), "%s", initial ? initial : "");
+    refresh();
+}
+
+const char* numpad_text() { return s_buf; }
+
 void goto_open(int axis) {
     // -2 is the numpad path, which has no axis to validate.
     if (axis != -2 && (s_root || axis < 0 || axis >= n_axes)) return;

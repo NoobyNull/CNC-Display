@@ -66,6 +66,30 @@ def is_pin(v):
     return bool(s) and s.upper() != "NO_PIN"
 
 
+# The non-Grbl NVS settings of the v4.0.3 $S set (live Corgi, 2026-08-25).
+# Writes are kept in Machine.nvs so the panel's re-read shows them.
+NVS_DEFAULTS = (
+    ("Notification/Type", "NONE"), ("Notification/T1", ""),
+    ("Notification/T2", ""), ("Notification/TS", ""),
+    ("Telnet/Enable", "ON"), ("Telnet/Port", "23"),
+    ("HTTP/BlockDuringMotion", "ON"), ("HTTP/Enable", "ON"),
+    ("HTTP/Port", "80"), ("MDNS/Enable", "ON"),
+    ("WiFi/PsMode", "None"), ("WiFi/Mode", "STA>AP"),
+    ("Sta/Password", "********"), ("Sta/MinSecurity", "WPA2-PSK"),
+    ("WiFi/FastScan", "OFF"), ("Sta/IPMode", "Static"),
+    ("Sta/IP", "192.168.0.5"), ("Sta/Gateway", "192.168.0.1"),
+    ("Sta/Netmask", "255.255.255.0"), ("AP/Country", "US"),
+    ("AP/SSID", "FluidNC"), ("AP/Password", "********"),
+    ("AP/IP", "192.168.0.5"), ("AP/Channel", "5"),
+    ("Hostname", "fluidnc"), ("Sta/SSID", "YAX-Net"),
+    ("GCode/Echo", "OFF"),
+    ("Start/Message", r"Grbl \V [FluidNC \B (\X) \H]"),
+    ("Firmware/Build", ""), ("SD/FallbackCS", "-1"),
+    ("Report/Status", "1"), ("Config/Filename", "config.yaml"),
+    ("Message/Level", "Info"),
+)
+
+
 class Machine:
     """Config-derived capabilities plus live motion state."""
 
@@ -247,27 +271,9 @@ class Machine:
         ):
             for a in self.axis_names:
                 A(f"Grbl/{key}/{a}", fmt.format(self.axis[a][field]))
-        for k, v in (
-            ("Notification/Type", "NONE"), ("Notification/T1", ""),
-            ("Notification/T2", ""), ("Notification/TS", ""),
-            ("Telnet/Enable", "ON"), ("Telnet/Port", "23"),
-            ("HTTP/BlockDuringMotion", "ON"), ("HTTP/Enable", "ON"),
-            ("HTTP/Port", "80"), ("MDNS/Enable", "ON"),
-            ("WiFi/PsMode", "None"), ("WiFi/Mode", "STA>AP"),
-            ("Sta/Password", "********"), ("Sta/MinSecurity", "WPA2-PSK"),
-            ("WiFi/FastScan", "OFF"), ("Sta/IPMode", "Static"),
-            ("Sta/IP", "192.168.0.5"), ("Sta/Gateway", "192.168.0.1"),
-            ("Sta/Netmask", "255.255.255.0"), ("AP/Country", "US"),
-            ("AP/SSID", "FluidNC"), ("AP/Password", "********"),
-            ("AP/IP", "192.168.0.5"), ("AP/Channel", "5"),
-            ("Hostname", "fluidnc"), ("Sta/SSID", "YAX-Net"),
-            ("GCode/Echo", "OFF"),
-            ("Start/Message", r"Grbl \V [FluidNC \B (\X) \H]"),
-            ("Firmware/Build", ""), ("SD/FallbackCS", "-1"),
-            ("Report/Status", "1"), ("Config/Filename", "config.yaml"),
-            ("Message/Level", "Info"),
-        ):
-            A(k, v)
+        nvs = getattr(self, "nvs", {})
+        for k, v in NVS_DEFAULTS:
+            A(k, nvs.get(k, v))
         return L
 
     def _max_rpm(self):
@@ -302,6 +308,10 @@ class Machine:
             return None
         if name == "Report/Interval":
             self.report_ms = max(10, int(float(value)))
+            return None
+        if name in dict(NVS_DEFAULTS):
+            self.__dict__.setdefault("nvs", {})[name] = value
+            self.note(f"set {name} = {value}")
             return None
         return "error:3"
 

@@ -10,5 +10,10 @@ void goto_open(int axis);
 // from this one. cb receives the typed value; cancelling calls nothing.
 void numpad_open(const char* title, const char* note, float initial,
                  void (*cb)(float));
+// Text prefill, for values a float would round (Diag settings). During cb,
+// numpad_text() is exactly what was typed.
+void numpad_open(const char* title, const char* note, const char* initial,
+                 void (*cb)(float));
+const char* numpad_text();
 void goto_close();
 bool goto_is_open();
