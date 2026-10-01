@@ -2,11 +2,13 @@
 #include "model/console_log.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
+#include "ui/view_expanded.h"
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
 #include "model/caps.h"
 #include "GrblParserC.h"
 #include <stdio.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -292,11 +294,26 @@ static void refresh() {
         s_out_seen = clog_total();
         snprintf(b, sizeof(b), "%s: %d lines", s_out_cmd, n);
         lv_label_set_text(s_count_lbl, b);
+        // $GD lists ESP32 pins with no word on what they are for; label each
+        // with its role in the running config (up to the "Input Matrix" part,
+        // whose numbers are signal ids, not pins).
+        const bool gd = strcasecmp(s_out_cmd, "$GD") == 0 || strcasecmp(s_out_cmd, "$GPIO/Dump") == 0;
+        bool matrix = false;
+        for (int i = 0; i < s_scroll && i < n; i++) {
+            const clog_line_t* l = clog_line_abs(s_out_idx[i]);
+            if (l && strncmp(l->text, "Input Matrix", 12) == 0) matrix = true;
+        }
         for (int r = 0; r < ROWS; r++) {
             const int i = s_scroll + r;
             const clog_line_t* l = i < n ? clog_line_abs(s_out_idx[i]) : nullptr;
             lv_label_set_text(s_name[r], l ? l->text : "");
-            lv_label_set_text(s_val[r], "");
+            const char* role = "";
+            if (l && strncmp(l->text, "Input Matrix", 12) == 0) matrix = true;
+            else if (l && gd && !matrix && isdigit((unsigned char)l->text[0])) {
+                role = caps_gpio_role(atoi(l->text));
+                if (!role) role = "free";
+            }
+            lv_label_set_text(s_val[r], role);
             lv_obj_set_style_bg_color(s_row[r], C_SURFACE, 0);
             lv_obj_set_style_border_color(s_row[r], C_LINE, 0);
         }
@@ -367,6 +384,7 @@ void page_diag_build(lv_obj_t* p) {
     s_count_lbl = w_label(nav, "0 settings", &lv_font_montserrat_10, C_DIM);
     lv_obj_set_flex_grow(s_count_lbl, 1);
 
+
     s_edit_ta = lv_textarea_create(right);
     lv_textarea_set_one_line(s_edit_ta, true);
     lv_textarea_set_placeholder_text(s_edit_ta, "setting value / $ command");
@@ -393,6 +411,11 @@ void page_diag_build(lv_obj_t* p) {
     lv_obj_set_flex_grow(a, 1); lv_obj_set_height(a, LV_PCT(100));
     lv_obj_t* c = w_button(btns, "CHANGED", "$SC", C_RAISE, C_TEXT, changed_cb, nullptr);
     lv_obj_set_flex_grow(c, 1); lv_obj_set_height(c, LV_PCT(100));
+    // The full-screen console: every line from the controller, including the
+    // ones Diag's list and status line do not show (and UART loss warnings).
+    lv_obj_t* con = w_button(btns, "CONSOLE", "full log", C_RAISE, C_ACCENT,
+                             [](lv_event_t*) { expanded_open(EXPANDED_CONSOLE); }, nullptr);
+    lv_obj_set_flex_grow(con, 1); lv_obj_set_height(con, LV_PCT(100));
 
     lv_obj_t* diag = lv_obj_create(right);
     w_flatten(diag);

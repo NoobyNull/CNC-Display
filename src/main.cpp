@@ -249,6 +249,15 @@ void loop() {
             if (!fnc_rx_waiting()) break;
         }
     }
+    if (uart_poll_events()) {
+        // Bytes lost below the parser: say so in the console, where a shredded
+        // settings line or reply would otherwise look like a parsing bug.
+        const uart_rx_losses_t& l = uart_rx_losses();
+        char b[96];
+        snprintf(b, sizeof(b), "[MSG:WARN: UART RX lost bytes: fifo_ovf=%lu buf_full=%lu frame_err=%lu parity=%lu]",
+                 l.fifo_ovf, l.buf_full, l.frame_err, l.parity_err);
+        clog_add(b);
+    }
     send_pump();   // queued controller lines; never sent from a UI callback
     imu_poll();
     status_led_tick();

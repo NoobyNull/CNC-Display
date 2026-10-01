@@ -36,6 +36,62 @@ static bool     s_started  = false;   // the YAML itself has begun arriving
 static uint32_t s_deadline = 0;       // give up waiting for it to begin
 static char     s_section[24] = "";
 
+// What the config uses each ESP32 GPIO for, e.g. 32 -> "x/motor0/limit_neg
+// (pu low)". Built from the same $CD dump by tracking the YAML key path, so it
+// follows whatever config the controller runs. Labels Diag's $GD output.
+static const int CAPS_GPIO_MAX = 49;
+static char s_gpio_role[CAPS_GPIO_MAX][44];
+static char s_path[6][24];                 // key per indent level (2 spaces)
+
+static void note_pin_role(const char* line) {
+    int indent = 0;
+    while (line[indent] == ' ') indent++;
+    const char* k = line + indent;
+    if (*k == '-' || *k == '#') return;
+    const char* colon = strchr(k, ':');
+    if (!colon) return;
+    const int depth = indent / 2;
+    if (depth >= 6) return;
+    size_t kl = (size_t)(colon - k);
+    if (kl >= sizeof(s_path[0])) kl = sizeof(s_path[0]) - 1;
+    memcpy(s_path[depth], k, kl);
+    s_path[depth][kl] = 0;
+
+    const char* v = colon + 1;
+    while (*v == ' ' || *v == '\'' || *v == '"') v++;   // YAML writers may quote "a:b"
+    if (strncmp(v, "gpio.", 5) != 0) return;
+    char* end;
+    const long n = strtol(v + 5, &end, 10);
+    if (end == v + 5 || n < 0 || n >= CAPS_GPIO_MAX) return;
+
+    // "axes/x/motor0/limit_neg_pin" -> "x/motor0/limit_neg"
+    char role[44] = "";
+    for (int d = 0; d <= depth; d++) {
+        if (d == 0 && strcmp(s_path[0], "axes") == 0) continue;
+        if (role[0]) strncat(role, "/", sizeof(role) - strlen(role) - 1);
+        strncat(role, s_path[d], sizeof(role) - strlen(role) - 1);
+    }
+    const size_t rl = strlen(role);
+    if (rl > 4 && strcmp(role + rl - 4, "_pin") == 0) role[rl - 4] = 0;
+    // Attributes (":pu:low") in brackets, colons as spaces.
+    if (*end == ':') {
+        char attrs[16];
+        snprintf(attrs, sizeof(attrs), "%s", end + 1);
+        for (char* c = attrs; *c; c++) {
+            if (*c == ':') *c = ' ';
+            if (*c == '\'' || *c == '"') { *c = 0; break; }
+        }
+        snprintf(s_gpio_role[n], sizeof(s_gpio_role[n]), "%s (%s)", role, attrs);
+    } else {
+        snprintf(s_gpio_role[n], sizeof(s_gpio_role[n]), "%s", role);
+    }
+}
+
+const char* caps_gpio_role(int gpio) {
+    if (gpio < 0 || gpio >= CAPS_GPIO_MAX || !s_gpio_role[gpio][0]) return nullptr;
+    return s_gpio_role[gpio];
+}
+
 static const char* AXIS_LETTERS = "XYZABC";
 
 void caps_reset() {
@@ -186,6 +242,7 @@ void caps_request_config() {
     s_probe = s_toolsetter = s_flood = s_mist = CAP_ABSENT;
     s_door = s_estop = CAP_ABSENT;
     s_mcount = 0;              // empty slots are the common case, dump proves otherwise
+    memset(s_gpio_role, 0, sizeof(s_gpio_role));
     send_line("$CD");
 }
 
@@ -255,6 +312,8 @@ bool caps_feed_line(const char* line) {
         caps_reply_end();
         return true;
     }
+
+    note_pin_role(line);
 
     if (top) {
         const char* colon = strchr(line, ':');

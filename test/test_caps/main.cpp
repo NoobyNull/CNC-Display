@@ -160,6 +160,30 @@ void test_ok_before_dump_starts_does_not_end_it() {
     TEST_ASSERT_TRUE(caps_feed_line("probe:"));     // still collecting
 }
 
+void test_gpio_roles_come_from_the_dump() {
+    caps_request_config();
+    const char* L[] = {
+        "axes:",
+        "  x:",
+        "    motor0:",
+        "      limit_neg_pin: gpio.32:pu:low",
+        "      hard_limits: false",
+        "  z:",
+        "    motor0:",
+        "      limit_pos_pin: 'gpio.26:low'",   // quoted, as some writers emit
+        "uart2:",
+        "  txd_pin: gpio.27",
+        "probe:",
+        "  pin: NO_PIN",
+    };
+    for (const char* l : L) caps_feed_line(l);
+    caps_reply_end();
+    TEST_ASSERT_EQUAL_STRING("x/motor0/limit_neg (pu low)", caps_gpio_role(32));
+    TEST_ASSERT_EQUAL_STRING("z/motor0/limit_pos (low)", caps_gpio_role(26));
+    TEST_ASSERT_EQUAL_STRING("uart2/txd", caps_gpio_role(27));
+    TEST_ASSERT_NULL(caps_gpio_role(13));              // unused -> "free" on Diag
+}
+
 void test_config_request_gives_up() {
     caps_request_config();
     stub_set_millis(20000);
@@ -176,6 +200,7 @@ void test_config_request_is_actually_sent() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_gpio_roles_come_from_the_dump);
     RUN_TEST(test_dump_ended_by_parser_ok_releases_later_lines);
     RUN_TEST(test_ok_before_dump_starts_does_not_end_it);
     RUN_TEST(test_bringup_machine_reports_no_homing);

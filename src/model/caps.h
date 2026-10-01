@@ -105,3 +105,7 @@ float       caps_axis_value(caps_field_t f, int axis);
 // ok / error:N from the controller, which the parser consumes itself: ends a
 // config dump in progress.
 void caps_reply_end();
+
+// What the running config uses ESP32 gpio.<n> for ("x/motor0/limit_neg (pu low)"),
+// from the $CD dump; nullptr when the config does not use it.
+const char* caps_gpio_role(int gpio);

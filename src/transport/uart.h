@@ -36,6 +36,14 @@ void reinit_fnc_uart();
 
 // Byte counters for the link diagnostic. Cheap, and the only way to tell
 // "wired wrong" (rx stays 0) from "wrong baud" (rx climbs, nothing parses).
+struct uart_rx_losses_t {
+    unsigned long fifo_ovf, buf_full, frame_err, parity_err;
+};
+// Drain the driver's event queue; true if any receive loss happened since the
+// last call. Call often (the queue is small). Totals in uart_rx_losses().
+bool uart_poll_events();
+const uart_rx_losses_t& uart_rx_losses();
+
 unsigned long fnc_rx_count();
 unsigned long fnc_tx_count();
 

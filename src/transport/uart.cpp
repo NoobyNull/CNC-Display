@@ -18,6 +18,14 @@ static unsigned long s_tx_count = 0;
 // where these errors matter — the glass is the only place they can land.
 static char s_init_err[32] = "";
 
+// Receive-side losses the driver can see: the 128-byte hardware FIFO
+// overflowing (the RX interrupt held off too long), the 16K ring filling, and
+// framing / parity errors (a baud mismatch or a noisy line). Counted from the
+// driver's event queue by uart_poll_events(); nonzero means bytes were lost
+// before the parser ever saw them.
+static QueueHandle_t s_evq = nullptr;
+static uart_rx_losses_t s_loss = {};
+
 const char* fnc_init_error() { return s_init_err; }
 
 uint32_t fnc_get_baud() { return s_baud; }
@@ -44,7 +52,7 @@ bool init_fnc_uart() {
     // 16K RX: a $S dump streams ~150 lines at 1 Mbaud (~100 bytes/ms) and the
     // main loop drains between LVGL frames — 4K overflowed mid-dump and the
     // shredded lines made the settings list come up with a random subset.
-    esp_err_t e_drv = uart_driver_install(fnc_uart_port, 16384, 0, 0, NULL, 0);
+    esp_err_t e_drv = uart_driver_install(fnc_uart_port, 16384, 0, 32, &s_evq, 0);
     Serial.printf("[uart] num=%d tx=%d rx=%d baud=%lu cfg=%d pin=%d drv=%d\n",
                   FNC_UART_NUM, FNC_TX_PIN, FNC_RX_PIN, (unsigned long)s_baud,
                   (int)e_cfg, (int)e_pin, (int)e_drv);
@@ -114,3 +122,21 @@ void resetFlowControl() {
 extern "C" int milliseconds() {
     return (int)millis();
 }
+
+bool uart_poll_events() {
+    if (!s_evq) return false;
+    bool lost = false;
+    uart_event_t ev;
+    while (xQueueReceive(s_evq, &ev, 0) == pdTRUE) {
+        switch (ev.type) {
+            case UART_FIFO_OVF:    s_loss.fifo_ovf++;  lost = true; break;
+            case UART_BUFFER_FULL: s_loss.buf_full++;  lost = true; break;
+            case UART_FRAME_ERR:   s_loss.frame_err++; lost = true; break;
+            case UART_PARITY_ERR:  s_loss.parity_err++; lost = true; break;
+            default: break;   // UART_DATA etc.: the ring already has the bytes
+        }
+    }
+    return lost;
+}
+
+const uart_rx_losses_t& uart_rx_losses() { return s_loss; }
