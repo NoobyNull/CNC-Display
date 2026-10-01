@@ -233,26 +233,27 @@ and the panel shows up as a mockup and is included in the clash check.
 
 | Part | Qty | Print |
 |---|---|---|
-| `lean_to_shell_x1` | 1 | **face down**, 205 × 132 × 96, no supports |
-| `lean_to_cover_x1` | 1 | flat, back face down (hinge tabs and hairpin up) |
+| `lean_to_shell_x1` | 1 | **face down**, 205 × 132 × 96; tree supports under the two back-wall sections only |
+| `lean_to_cover_x1` | 1 | the 120 mm door: flat, back face down (hinge tabs up). Let Orca support the two hinge pins. |
+| `lean_to_hairpin_x1` | 1 | **on its side**, so the spring bends along its layers. PETG. |
 | `lean_to_lens_x1_clear` | 1 | **transparent PLA**, flange down |
 
-Hardware: 4 × 1/4-20 bolts + hex nuts (table). Nothing else: the panel and
-the back flap both snap in.
+Hardware: 4 × 1/4-20 bolts + hex nuts (table) · 4 × #4-40 × 5/8 socket head +
+nuts (panel). CA glue: hairpin to door.
 
 - **Panel.** Remove the four stock corner screws and lift off the front bezel
   frame (discard it). Drop the LCD into the window with the PCB against the back
-  of the plate, then press the middle frame and acrylic back on behind them. The
-  front wall carries **four snap pins** at the panel's corner holes. They are
-  Ø3.0 with a split Ø3.8 barb, printed with the shell, and their tips spring
-  open 0.1 mm behind the acrylic. **Drill the corner holes in the middle frame
-  and acrylic back out to 1/8"** (they are 2.7 mm stock; the PCB is already
-  3.2 mm). To release, squeeze the split tips with pliers. Print the shell in
-  PETG so the tines flex instead of snapping. `SNAP_GAP` takes up stack
-  tolerance if the barbs don't catch or the panel rattles.
+  of the plate, then put the middle frame and acrylic back on behind them. Bolt
+  the stack through the panel's corner holes with 4 × #4-40 × 5/8 socket heads
+  from the front (heads sit proud on the face) and nuts behind. **Drill the
+  corner holes in the middle frame and acrylic back out to 1/8"** (they are
+  2.7 mm stock; the PCB is already 3.2 mm). The printed snap pins this replaced
+  broke across their layers.
 - **Table.** 4 × 1/4-20 from underneath into nuts that slide sideways into the
-  two floor rails. Bolt centres are 181.26 mm apart across and 49.14 mm apart
+  two floor rails. Bolt centres are 181.26 mm apart across and 48.10 mm apart
   front to back. The front pair is 10.6 mm behind the foot's front edge.
+  Drill template: `python3 cad/make_mount_template.py` writes
+  `lean_to_mount_template.pdf` (Letter landscape, print at 100%).
 - **Cables.** The bottom is open, so the wires leave under the lean-to. The
   back cover is plain.
 - **Status bar.** The 8-px SK6812 stick sits under a slot in the roof, centred
@@ -274,25 +275,33 @@ the back flap both snap in.
   not chamfered. Every fillet and chamfer batch must still mesh watertight or
   it is refused. A fillet OCC refuses at R1.5 is retried at R1.0, then R0.5; the
   build report lists which.
-- **Back flap.** No screws. It hinges at the bottom on two Ø3 pins, on tabs
-  inside the rails, that spring into Ø3.4 bores in the rails' inner faces. Bow
-  the flap slightly to snap them in. It is held shut by a **hairpin spring**
-  at the top centre. The lower leg comes off the flap's inner face and runs
-  forward, U-turns at a rounded nose in front of a catch ledge under the roof,
-  and the upper leg runs back under the ledge to a thumb tab that fills a notch
-  in the flap's top edge, flush with the back face. Closing, the ledge rides the
-  nose's 45° lead-in and deflects the hairpin, and the nose's barb snaps up in
-  front of the 75° catch face (0.9 mm engagement). **To open, press the tab
-  in** (about 2 mm of the 4 mm before it meets the ledge, 1.7% strain): that
-  bends both legs and drops the nose 0.6 mm past the barb. It needs the margin
-  because the nose sits forward of the hinge axis and rises about 0.7 mm as the
-  flap opens. The leg gap runs out through the back face, so the upper leg and
-  tab are free and the lower leg is the only root. The bottom corners are notched over the rails, and the bottom edge
-  sits 4.3 mm off the table, so the flap clears the table and the rail ends all
-  the way to 90° open, where it lies on the table. Checked: shut, in 5–90°
-  steps, and a 0.6 mm pull (the barb must hit the ledge). The hairpin is also
-  swept through the swing: at rest it binds on the ledge for the first 5° (the
-  latch) and is clear from there; with the tab pressed it clears the whole way.
+- **Back.** A 120 mm door in the shell's back wall. The wall either side of it
+  is part of the shell; face-down it overhangs at 30°, so those two sections
+  (with their knuckles and lips) need tree supports, which come out through the
+  door opening. Each section has a hinge knuckle at its inner bottom corner;
+  the door's Ø3 pins, on tabs at its edges, go into Ø3.4 bores in them. Each
+  tab is braced by a 45° gusset on its inner side, from its tip to the door. Bow the
+  door slightly to snap both pins in (about 1.2% strain at 120 mm). A 2 mm lip
+  along each section's inner edge reaches 2 mm over the door's edge, so the shut
+  door stops against it (checked: pushed 0.5 mm, it hits the lips). It is held shut by a **hairpin spring**
+  at the top centre. The hairpin is a separate part, printed on its side so it
+  bends along its layers (the one printed with the flap snapped across them),
+  and CA-glued by a 12 mm foot to the door's inner face; its tab sitting in the
+  door's notch locates it. The legs run into the thin U-bend on tangent flanks
+  (no steps), and the spring's root and the tab corner are filleted R1.5. It works as a lever: a stiff 3 mm lower leg,
+  a thin 1.2 mm U-bend as the hinge, and the upper leg plus the flush thumb tab
+  pivoting about it. The barb sits on the upper leg just in front of a shallow
+  3 mm catch ledge under the roof, near the flap, away from the bend. **To
+  open, pull the tab out by its fingernail groove.** That tips the upper leg
+  and drops the barb clear, and the same pull swings the flap open. Full travel
+  is 11.9°, where the upper leg bottoms on the lower leg: a built-in stop, 2.2%
+  strain in the bend. The barb drops 1.66 mm there; the catch is 75% of that
+  (1.25 mm, 75° face), and closing needs 1.55 mm, inside full travel. The door's
+  bottom edge sits 4.3 mm off the table, so it clears the table all the way to
+  90° open, where it lies on the table. Checked: shut, in 5–90° steps, a 0.6 mm pull
+  (the barb must hit the ledge), and the hairpin swept through the swing, at
+  rest (binds for the first 7°: the latch) and pulled to full travel (clear,
+  bar a 0.002 mm³ touch at the 0.1 mm margin).
 - **USB-C** (flashing) is reached through a slot in the side wall.
   **BOOT/RST** are reached from the back with the cover off.
 

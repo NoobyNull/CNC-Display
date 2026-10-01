@@ -4,12 +4,12 @@
 # The panel's stock front bezel frame is REMOVED and not used. The front wall
 # is a plain 5.58mm plate (the LCD module's thickness) with a window for the
 # LCD: the PCB bears on the back of the plate, the LCD fills the window flush.
-# Four snap pins stand off the back of the front wall at the panel's corner
-# holes. They pass through the PCB, middle frame and acrylic back (drill the
-# last two out to 1/8), and their split barbed tips spring open behind the
-# acrylic. No hardware on the panel or the face.
-# The back is a flap on a snap-in hinge (pins into the rails) with detents; no
-# heat-sets anywhere. The bottom is open: cables drop straight
+# Four #4-40 x 5/8 socket heads go in from the front, heads proud of the face,
+# through the panel's own corner holes (PCB, middle frame, acrylic
+# back; drill the last two out to 1/8), nuts behind.
+# The back is a flap on a snap-in hinge (pins into the rails), latched by a
+# hairpin spring that is a separate part, printed on its side so it bends along
+# its layers, and CA-glued to the flap. No heat-sets anywhere. The bottom is open: cables drop straight
 # through a hole in the table. Four 1/4-20 bolts come up from under the table
 # into hex nuts slid sideways into two floor rails.
 #
@@ -64,13 +64,7 @@ BACK_CLEAR = 30.0        # cable room behind the panel (plugs + bend radius)
 
 # ---- panel snap pins, printed with the shell (print it in PETG) -------------
 STACK_HOLE_D = 3.2       # PCB as made; middle frame + acrylic drilled to 1/8
-SNAP_D = 3.0             # shank
-SNAP_HEAD_D = 3.8        # barb: 0.3 of catch per side over the hole
-SNAP_TIP_D = 2.4
-SNAP_HEAD_H = 2.5        # lead-in cone
-SNAP_GAP = 0.1           # catch sits this far behind the acrylic; stack tolerance
-SNAP_SLOT_W = 0.8        # closes to 3.0 over the barb: passes a 3.2 hole
-SNAP_SLOT_L = 8.0        # split length down the shank from the catch
+N440_CLR = 3.2           # #4-40 free fit (1/8)
 
 # ---- table fixing: 1/4-20 up from underneath --------------------------------
 BOLT_CLR = 6.8
@@ -98,16 +92,27 @@ HINGE_Z = 8.0            # axis height, inside the rail
 HINGE_FWD = 3.5          # axis this far in front of the flap's inner face
 HINGE_TAB_T, HINGE_TAB_GAP = 2.5, 0.3
 SWING_CLEAR = 0.5        # flap's bottom corner over the table as it swings
-# hairpin latch, top centre: lower leg off the flap, U nose in front of the
-# catch ledge, upper leg back under it to a thumb tab that fills a notch in the
-# flap's top edge, flush with the back face
-HP_W, HP_T, HP_GAP = 12.0, 1.6, 2.0   # width (X), leg thickness, gap between legs
+DOOR_W = 120.0           # the door; the shell's back wall closes the rest
+KNUCKLE_W = 5.0          # hinge knuckle at each back-wall section's inner bottom corner
+LIP_T, LIP_OVER = 2.0, 2.0   # door stop on each back-wall section: thickness, reach over the door
+# hairpin latch, top centre. A lever: stiff lower leg off the flap, thin U-bend
+# as the hinge, upper leg + flush thumb tab pivot about it. Pull the tab out to
+# tip the upper leg and drop its barb from behind a shallow catch ledge.
+HP_W, HP_GAP = 12.0, 2.5 # width (X); gap between the legs (= the stop: full travel)
+HP_T_UP, HP_T_LOW, HP_T_BEND = 2.0, 3.0, 1.2   # upper leg, lower leg, U-bend
 HP_L = 12.0              # legs reach this far forward of the flap's inner face
+LEDGE_D = 3.0            # catch ledge depth (Y), shallow, close to the flap
+LEDGE_BACK_CLR = 0.8     # ledge back face to the flap's inner face
+CATCH_FRACTION = 0.75    # barb engagement, as a share of its drop at full travel
+GROOVE_R, GROOVE_DROP = 1.0, 1.6   # fingernail groove across the tab: radius, below its top
+BEND_LEAD_UP = 5.0       # upper leg's outer face runs from this far back of the bend
+                         # as a flank tangent to the U (the lower one runs to the foot)
+FOOT_T = 3.5             # hairpin's mounting foot under the lower leg, on the flap
+FOOT_H = 12.0            # glue pad below the lower leg (CA to the flap's inner face)
 LATCH_DROP = 4.0         # upper leg's top this far below the flap's top edge
 NOTCH_CLR = 0.5          # flap notch either side of the tab
-BARB_H = 1.2             # on the nose: 45 degree lead-in
-CATCH_DEG = 75.0         # press-to-release, so steep; 75 is the steepest the
-                         # ledge can be and still print face-down
+CATCH_DEG = 75.0         # steep: it only lets go when the tab is pulled; 75 is the
+                         # steepest the ledge can be and still print face-down
 LATCH_CLR = 0.3          # upper leg under the catch ledge; barb in front of it
 
 # ---- derived -----------------------------------------------------------------
@@ -296,17 +301,11 @@ adds, cuts = [], []
 cuts.append(place(rbox(LCD_X0 - LCD_CLR, LCD_Y0 - LCD_CLR, z_face - 1,
                        LCD_X1 + LCD_CLR, LCD_Y1 + LCD_CLR, PCB_Z_FRONT + 0.01, LCD_WIN_R)))
 
-# Snap pins at the corner holes, rooted in the back of the front wall.
-z_catch = UNIT_Z_BACK + SNAP_GAP
-snaps = []
+# Panel bolts: #4-40 through at the case corner holes, heads proud of the face.
 for sx in CASE_SCREW_X:
     for sy in CASE_SCREW_Y:
-        pin = Part.makeCylinder(SNAP_D / 2, z_catch - PCB_Z_FRONT + 0.5, App.Vector(sx, sy, PCB_Z_FRONT - 0.5))
-        pin = pin.fuse(Part.makeCone(SNAP_HEAD_D / 2, SNAP_TIP_D / 2, SNAP_HEAD_H, App.Vector(sx, sy, z_catch)))
-        pin = pin.cut(box(sx - SNAP_SLOT_W / 2, sy - SNAP_HEAD_D, z_catch - SNAP_SLOT_L,
-                          sx + SNAP_SLOT_W / 2, sy + SNAP_HEAD_D, z_catch + SNAP_HEAD_H + 1))
-        snaps.append(place(pin))
-adds.extend(snaps)
+        cuts.append(place(Part.makeCylinder(N440_CLR / 2, FACE_T + 2, App.Vector(sx, sy, z_face - 1))))
+snaps = []                                             # (the old printed snap pins; none now)
 
 # USB-C (flashing) through the side wall. Sized for the overmould.
 USB_SLOT_H, USB_SLOT_D = 14.0, 9.0
@@ -334,21 +333,45 @@ for sx in (-1, 1):
         cuts.append(hexagon(x, by, nut_z0, NUT_AF, NUT_H))
         sx0, sx1 = sorted((x, sx * (W / 2 - WALL - RAIL_W - 1)))
         cuts.append(box(sx0, by - NUT_AF / 2, nut_z0, sx1, by + NUT_AF / 2, nut_z0 + NUT_H))
-    cuts.append(Part.makeCylinder(HINGE_BORE_D / 2, HINGE_ENGAGE + 1.0,
-                                  App.Vector(sx * (rail_in - 0.5), hinge_y, HINGE_Z), App.Vector(sx, 0, 0)))
 
-# Catch ledges for the flap's snap hooks, hanging from the roof. The front face
-# is the catch, CATCH_DEG off horizontal (must be steeper than the roof or the
-# ledge never meets it); the back face stands off the flap by a fillet radius
-# so the root fillet can't reach it.
+# Back wall either side of the door, part of the shell: each section carries a
+# hinge knuckle (the door's pins go into its bore; bow the door to fit them) and
+# a lip along its inner edge that the shut door stops against. Face-down these
+# sections overhang at 30 degrees: the shell needs supports under them.
+dw = DOOR_W / 2
+tab_top = HINGE_Z + HINGE_PIN_D / 2 + 2.0          # top of the door's hinge tabs
+for sx in (-1, 1):
+    x_in = sx * (dw + HINGE_TAB_GAP)
+    bx0, bx1 = sorted((x_in, sx * (W / 2 - WALL + 0.5)))
+    adds.append(box(bx0, rail_y1, 0, bx1, Y_BACK, Z_TOP + 1).common(outer))
+    kx0, kx1 = sorted((x_in, x_in + sx * KNUCKLE_W))
+    adds.append(box(kx0, hinge_y - HINGE_BORE_D / 2 - 2.0, 0, kx1, rail_y1 + 0.5, HINGE_Z + HINGE_BORE_D / 2 + 2.0))
+    cuts.append(Part.makeCylinder(HINGE_BORE_D / 2, HINGE_ENGAGE + 1.0,
+                                  App.Vector(x_in - sx * 0.5, hinge_y, HINGE_Z), App.Vector(sx, 0, 0)))
+    lx0, lx1 = sorted((x_in + sx * 4.0, sx * (dw - LIP_OVER)))       # rooted 4mm onto the wall
+    adds.append(box(lx0, rail_y1 - LIP_T, tab_top + 1.0, lx1, rail_y1, cover_top - R_FILLET - 1.0))
+
+# Catch ledge for the flap's hairpin, hanging from the roof: shallow, close to
+# the flap. Its front face is the catch, CATCH_DEG off horizontal (steeper than
+# the roof, or it never meets it).
 hp_top = cover_top - LATCH_DROP                   # upper leg's top face
-nose_y = rail_y1 - HP_L
-barb_tip = nose_y
+bend_y = rail_y1 - HP_L                           # U-bend centre
+bend_z = hp_top - HP_T_UP - HP_GAP / 2
+hp_low = bend_z - HP_GAP / 2 - HP_T_LOW           # lower leg's bottom face
 ledge_z = hp_top + LATCH_CLR
-ledge_back = rail_y1 - 4.0                           # room for the tab to be pressed in
+ledge_back = rail_y1 - LEDGE_BACK_CLR
+ledge_fb = ledge_back - LEDGE_D                   # bottom-front corner
 cot_c = 1 / math.tan(math.radians(CATCH_DEG))
-barb_back = barb_tip + BARB_H + BARB_H * cot_c
-ledge_fb = barb_back + LATCH_CLR / math.sin(math.radians(CATCH_DEG)) - LATCH_CLR * cot_c
+barb_back = ledge_fb - LATCH_CLR / math.sin(math.radians(CATCH_DEG)) + LATCH_CLR * cot_c
+# Full travel: the upper leg tips about the bend until its rear bottoms on the
+# lower leg, HP_GAP down at HP_L out. The barb, nearer the bend, drops in
+# proportion; it engages CATCH_FRACTION of that, and closing needs all of
+# BARB_H (engagement + clearance), which must still fit inside full travel.
+theta_max = HP_GAP / HP_L
+barb_drop_max = theta_max * (barb_back - bend_y)
+latch_defl = CATCH_FRACTION * barb_drop_max
+BARB_H = latch_defl + LATCH_CLR
+barb_tip = barb_back - BARB_H * cot_c - BARB_H    # 45 degree lead-in ahead of the catch
 lz = roof_inner_z(ledge_fb) + WALL                     # well into the roof; outer clips it
 ledges = [prism([(ledge_fb, ledge_z), (ledge_back, ledge_z), (ledge_back, lz + 20),
                  (ledge_fb - (lz + 20 - ledge_z) * cot_c, lz + 20)],
@@ -408,63 +431,98 @@ fil_refused, fil_reduced = list(refused), list(reduced)
 shell, ch_ok, ch_bad = finish_edges(shell, CHAMFER, [h for h in cuts if h is not usb_cut] + snaps + ledges,
                                     concave=False, only_on=outer.Shells[0])
 
-# ---- back flap ---------------------------------------------------------------
-# Hinged on two pins that spring into the rails (bow the flap to fit them), held
-# shut by a hairpin spring at the top centre: the lower leg comes off the flap's
-# inner face, U-turns at a nose in front of the roof's catch ledge, and the
-# upper leg runs back under the ledge to a thumb tab that fills a notch in the
-# flap's top edge, flush with the back face. Closing, the ledge rides the nose's
-# lead-in and deflects the hairpin down; the barb snaps up in front of the
-# ledge. Press the tab IN: that bends both legs and drops the nose. The bottom
-# edge is
-# lifted just enough that its back corner clears the table through the swing.
+# ---- back door: DOOR_W wide, in the shell's back wall ------------------------
+# Its pins go into the knuckles on the back wall (bow the door to fit them). It is held
+# shut by the hairpin (a separate part, CA-glued to the door): the stiff lower
+# leg comes off the flap, U-turns at a thin bend, and the upper leg runs back
+# under the roof's shallow catch ledge to a flush thumb tab. Closing, the ledge
+# rides the barb's lead-in and tips the upper leg about the bend; the barb
+# snaps up in front of the ledge. Pull the tab out by its fingernail groove to
+# tip it again and open. The bottom edge is lifted just enough that its back corner clears the table through the swing.
 cover_lift = HINGE_Z - math.sqrt((HINGE_Z - SWING_CLEAR) ** 2 - (COVER_T + HINGE_FWD) ** 2)
-# Top corners cut at 45 degrees to clear the shell's wall/roof fillets.
-k = R_FILLET + 1.0
-outline = [(-cw, cover_lift), (cw, cover_lift), (cw, cover_top - k), (cw - k, cover_top),
-           (-cw + k, cover_top), (-cw, cover_top - k), (-cw, cover_lift)]
-cover = Part.Face(Part.makePolygon([App.Vector(x, rail_y1, z) for x, z in outline])).extrude(
-    App.Vector(0, COVER_T, 0))
-# Below the axis the flap swings forward, into the rail ends: notch its bottom
-# corners over the rails, rail height. The rail ends show as the feet.
-for sx in (-1, 1):
-    nx0, nx1 = sorted((sx * (rail_in - COVER_GAP), sx * (cw + 1)))
-    cover = cover.cut(box(nx0, rail_y1 - 1, cover_lift - 1, nx1, Y_BACK + 1, RAIL_H + COVER_GAP))
+cover = box(-dw, rail_y1, cover_lift, dw, Y_BACK, cover_top)
 tab_front = hinge_y - HINGE_PIN_D / 2 - 2.0
-tab_top = HINGE_Z + HINGE_PIN_D / 2 + 2.0
 pin_len = HINGE_TAB_GAP + HINGE_ENGAGE
 for sx in (-1, 1):
-    xo = sx * (rail_in - HINGE_TAB_GAP)                  # tab face towards the rail
+    # the door's hinge tab at its edge, pin outward into the knuckle
+    xo = sx * dw
     tx0, tx1 = sorted((xo, xo - sx * HINGE_TAB_T))
     cover = cover.fuse(box(tx0, tab_front, cover_lift, tx1, rail_y1 + 0.5, tab_top))
     cover = cover.fuse(Part.makeCylinder(HINGE_PIN_D / 2, pin_len - 0.6 + 0.3,
                                          App.Vector(xo - sx * 0.3, hinge_y, HINGE_Z), App.Vector(sx, 0, 0)))
+    # 45 degree gusset on the tab's inner side, from its tip down to the door:
+    # stiffens it against the pin loads and the bow when the door is snapped in
+    ti = xo - sx * HINGE_TAB_T
+    reach = rail_y1 - tab_front
+    gus = Part.Face(Part.makePolygon([App.Vector(ti + sx * 0.01, rail_y1 + 0.01, cover_lift),
+                                      App.Vector(ti + sx * 0.01, tab_front, cover_lift),
+                                      App.Vector(ti - sx * reach, rail_y1 + 0.01, cover_lift),
+                                      App.Vector(ti + sx * 0.01, rail_y1 + 0.01, cover_lift)])).extrude(
+        App.Vector(0, 0, tab_top - cover_lift))
+    cover = cover.fuse(gus)
     cover = cover.fuse(Part.makeCone(HINGE_PIN_D / 2, HINGE_PIN_D / 2 - 0.5, 0.6,        # lead-in tip
                                      App.Vector(xo + sx * (pin_len - 0.6), hinge_y, HINGE_Z),
                                      App.Vector(sx, 0, 0)))
 hx = HP_W / 2
-hp_low = hp_top - 2 * HP_T - HP_GAP                      # lower leg's bottom face
-cover = cover.cut(box(-hx - NOTCH_CLR, rail_y1 - 1, hp_low + HP_T,              # notch: the leg gap runs
+cover = cover.cut(box(-hx - NOTCH_CLR, rail_y1 - 1, hp_low + HP_T_LOW,          # notch: the leg gap runs
                       hx + NOTCH_CLR, Y_BACK + 1, cover_top + 1))              # out through the back
 cover_plain = cover.removeSplitter()                     # no latch: for the swing check
-r_o = (hp_top - hp_low) / 2
-zc = hp_low + r_o
-nose = Part.makeCylinder(r_o, HP_W, App.Vector(-hx, nose_y, zc), App.Vector(1, 0, 0)).cut(
-       Part.makeCylinder(r_o - HP_T, HP_W, App.Vector(-hx, nose_y, zc), App.Vector(1, 0, 0))).common(
-       box(-hx, nose_y - r_o - 1, hp_low - 1, hx, nose_y, hp_top + 1))
-hooks = [box(-hx, nose_y, hp_low, hx, rail_y1 + 0.5, hp_low + HP_T),                 # lower leg
-         box(-hx, nose_y, hp_top - HP_T, hx, rail_y1 + 0.5, hp_top),                 # upper leg
-         nose,
-         box(-hx, rail_y1, hp_top - HP_T, hx, Y_BACK, cover_top),                    # flush thumb tab
+r_i = HP_GAP / 2
+# The hairpin is its own part, CA-glued to the flap's inner face by its foot;
+# the tab sitting in the flap's notch locates it.
+groove = Part.makeCylinder(GROOVE_R, HP_W + 2, App.Vector(-hx - 1, Y_BACK, cover_top - GROOVE_DROP),
+                           App.Vector(1, 0, 0))
+# The spring (both legs and the U) is one side profile, extruded: each leg's
+# outer face runs back from the U as a flank tangent to its outer arc, so the
+# thin bend blends into the thicker legs with no step to start a crack. The
+# inside of the U is already tangent to the gap.
+r_bo = r_i + HP_T_BEND
+
+
+def tangent_pt(py, pz, upper):
+    """Where the line from (py, pz) touches the U's outer circle."""
+    d = math.hypot(py - bend_y, pz - bend_z)
+    phi, alpha = math.atan2(pz - bend_z, py - bend_y), math.acos(r_bo / d)
+    a = phi + alpha if upper else phi - alpha
+    return a, (bend_y + r_bo * math.cos(a), bend_z + r_bo * math.sin(a))
+
+
+a_up, t_up = tangent_pt(bend_y + BEND_LEAD_UP, hp_top, True)
+BEND_LEAD_LOW = HP_L - FOOT_T                     # lower flank runs all the way to the foot
+a_lo, t_lo = tangent_pt(bend_y + BEND_LEAD_LOW, hp_low, False)
+a_lo += 2 * math.pi
+arc = [(bend_y + r_bo * math.cos(a), bend_z + r_bo * math.sin(a))
+       for a in (a_up + (a_lo - a_up) * k / 48 for k in range(49))]
+spring = prism([(rail_y1 + 0.5, hp_top), (bend_y + BEND_LEAD_UP, hp_top)] + arc +
+               [(bend_y + BEND_LEAD_LOW, hp_low), (rail_y1, hp_low), (rail_y1, bend_z),
+                (rail_y1 + 0.5, bend_z)], -hx, hx)
+gap = prism([(bend_y + r_i * math.cos(a), bend_z + r_i * math.sin(a))
+             for a in (math.pi / 2 + math.pi * k / 32 for k in range(33))] +
+            [(Y_BACK + 1, bend_z - r_i), (Y_BACK + 1, bend_z + r_i)], -hx - 1, hx + 1)
+spring = spring.cut(gap)
+flank_deg = (math.degrees(math.atan2(hp_top - t_up[1], bend_y + BEND_LEAD_UP - t_up[0])),
+             math.degrees(math.atan2(t_lo[1] - hp_low, bend_y + BEND_LEAD_LOW - t_lo[0])))
+lever = [spring.common(box(-hx - 1, bend_y, bend_z, hx + 1, Y_BACK, cover_top + 1)),  # upper leg
+
+         box(-hx, rail_y1, hp_top - HP_T_UP, hx, Y_BACK, cover_top).cut(groove),     # flush tab
          prism([(barb_tip, hp_top - 0.01), (barb_tip + BARB_H, hp_top + BARB_H),     # barb
                 (barb_back, hp_top - 0.01)], -hx, hx)]
-cover = fuse_all([cover_plain] + hooks).removeSplitter()
+hooks = lever + [spring,                                                         # legs + U
+                 box(-hx, rail_y1 - FOOT_T, hp_low + HP_T_LOW - FOOT_H, hx, rail_y1,
+                     hp_low + HP_T_LOW)]                                             # foot
+hairpin = fuse_all(hooks).removeSplitter()
+# Round the hairpin's remaining inside corners (lower leg into the foot, upper
+# leg into the tab); the barb keeps its sharp catch.
+barb_zone = box(-hx - 1, barb_tip - 1, hp_top - 0.5, hx + 1, barb_back + 1, hp_top + BARB_H + 1)
+hairpin, hf_ok, hf_bad = finish_edges(hairpin, R_FILLET, [barb_zone])
+hf_reduced, hf_refused = list(reduced), list(refused)
+cover = cover_plain
 
 # ---- document ----------------------------------------------------------------
 if App.listDocuments().get("lean_to"):
     App.closeDocument("lean_to")
 doc = App.newDocument("lean_to")
-parts = {"Shell": shell, "Cover": cover, "Lens": lens}
+parts = {"Shell": shell, "Cover": cover, "Hairpin": hairpin, "Lens": lens}
 for name, sh in parts.items():
     doc.addObject("Part::Feature", name).Shape = sh
 
@@ -504,7 +562,7 @@ def clash(a, b):
     return a.common(b).Volume
 
 
-printed = [shell, cover, lens]
+printed = [shell, cover, hairpin, lens]
 # Behind the face: PCB, middle frame and back, with the corner holes as drilled.
 drilled = [place(Part.makeCylinder(STACK_HOLE_D / 2, 20, App.Vector(sx, sy, PCB_Z_FRONT - 5)))
            for sx in CASE_SCREW_X for sy in CASE_SCREW_Y]
@@ -518,6 +576,8 @@ report = {
     "stack envelope vs printed": sum(clash(env_shrunk, p) for p in printed),
     "control (1mm into face)": clash(control, shell),
     "flap vs shell (shut)": clash(cover, shell),
+    "control (door pushed 0.5 in: lips)": clash(shell, cover.translated(App.Vector(0, -0.5, 0))),
+    "hairpin vs shell / flap": clash(hairpin, shell) + clash(hairpin, cover),
     "lens vs shell": clash(lens, shell),
     "LED stick vs shell/lens": clash(stick, shell) + clash(stick, lens),
     "LED stick vs panel stack": clash(stick, env_shrunk),
@@ -525,8 +585,6 @@ report = {
 if mock is not None:
     as_drilled = [so.cut(Part.makeCompound(drilled)) for so in mock.Solids]
     report["vendor STEP vs printed"] = sum(clash(so, p) for so in as_drilled for p in printed)
-    report["control (snaps vs undrilled STEP)"] = sum(clash(so, sn) for so in mock.Solids for sn in snaps)
-    report["snap catch behind acrylic"] = "%.2f mm, %.2f mm per side" % (SNAP_GAP, (SNAP_HEAD_D - STACK_HOLE_D) / 2)
     fwd = mock.copy()
     fwd.translate(App.Vector(0, -0.5 * c, 0.5 * s))
     report["control (STEP 0.5mm fwd)"] = sum(clash(so, shell) for so in fwd.Solids)
@@ -548,22 +606,29 @@ pulled = [h.copy() for h in hooks]
 for h in pulled:
     h.translate(App.Vector(0, 0.6, 0))                 # flap top pulled 0.6mm open
 report["control (hooks pulled 0.6 open)"] = sum(clash(h, shell) for h in pulled)
-# Pressing the tab in puts a near-constant moment through both legs. The nose
-# drops kappa*L^2/2 while the tab swings kappa*2L*h, so the nose drops L/(4h)
-# of the tab's travel. Clear the barb by 0.6 more than it engages: the nose is
-# forward of the hinge axis, so it rises as the flap opens.
-h_tab = cover_top - hp_top                             # press point: the tab's top half
-nose_drop = latch_defl + 0.6
-kappa = 2 * nose_drop / HP_L ** 2
-report["latch"] = "%.2f mm engagement at %.0f deg; press tab %.1f mm of %.1f; %.1f%% strain" % (
-    latch_defl, CATCH_DEG, nose_drop * 4 * h_tab / HP_L, rail_y1 - ledge_back, 100 * kappa * HP_T / 2)
+# Bend strain at full travel: theta spread over the half-turn of the U.
+bend_strain = theta_max / (math.pi * (r_i + HP_T_BEND / 2)) * HP_T_BEND / 2
+report["bend blend"] = "legs run into the U on tangent flanks: %.1f / %.1f deg over %.0f / %.0f mm, no steps" % (
+    flank_deg[0], flank_deg[1], BEND_LEAD_UP, BEND_LEAD_LOW)
+report["hairpin fillets"] = "%d inside corners R%.1f%s, %d refused" % (
+    hf_ok, R_FILLET, " (smaller: %s)" % hf_reduced if hf_reduced else "", hf_bad) + (
+    " at %s" % [(round(q.y - rail_y1, 1), round(q.z - hp_top, 1)) for q in hf_refused] if hf_refused else "")
+report["latch travel"] = ("full: tab tips %.1f deg, its top pulls out %.1f mm, its foot drops %.1f mm "
+                          "onto the lower leg (the stop); barb drops %.2f mm" % (
+                              math.degrees(theta_max), theta_max * (cover_top - bend_z), HP_GAP, barb_drop_max))
+report["latch"] = "%.2f mm engagement (%.0f%% of that) at %.0f deg; closing needs %.2f of %.2f mm; bend %.1f%% strain" % (
+    latch_defl, 100 * CATCH_FRACTION, CATCH_DEG, BARB_H, barb_drop_max, 100 * bend_strain)
 # The hairpin through the swing: at rest it must bind for the first few degrees
 # (that is the latch) and then clear; pressed, it must clear all the way.
+# "Pressed" = pulled to full travel: the lever tipped about the bend.
+tipped = [s.copy() for s in lever]
+for s in tipped:
+    s.rotate(App.Vector(0, bend_y, bend_z), App.Vector(1, 0, 0), -math.degrees(theta_max))
+still = [s for s in hooks if not any(s is l for l in lever)]
 hp_rest, hp_pressed = [], []
 for ang in (0.5, 1, 2, 3, 5, 7, 10, 20, 45, 90):
-    for dz, acc in ((0.0, hp_rest), (-nose_drop, hp_pressed)):
-        hk = Part.makeCompound(hooks)
-        hk.translate(App.Vector(0, 0, dz))
+    for group, acc in ((hooks, hp_rest), (tipped + still, hp_pressed)):
+        hk = Part.makeCompound(group)
         hk.rotate(App.Vector(0, hinge_y, HINGE_Z), App.Vector(1, 0, 0), -ang)
         acc.append((ang, sum(clash(s, shell) for s in hk.Solids)))
 report["hairpin swing"] = "at rest binds to %s deg then clear%s; pressed max %.3f mm3" % (
@@ -577,6 +642,7 @@ report["inside fillets"] = "%d edges R%.1f (%d at a smaller R: %s), %d refused %
 report["outside chamfers"] = "%d edges x%.1f, %d refused" % (ch_ok, CHAMFER, ch_bad)
 
 # ---- export: STEP in model pose, STL seated in print pose --------------------
+
 LINEAR, ANGULAR = 0.05, 0.3
 
 
@@ -591,12 +657,13 @@ def seated(shape, axis=None, deg=0.0):
     return m
 
 
-Part.makeCompound([shell, cover, lens]).exportStep(os.path.join(HERE, "lean_to.step"))
+Part.makeCompound([shell, cover, hairpin, lens]).exportStep(os.path.join(HERE, "lean_to.step"))
 out = os.path.join(HERE, "print")
 if not os.path.isdir(out):
     os.mkdir(out)
 for fname, m in (("lean_to_shell_x1", seated(shell, (1, 0, 0), 90 + LEAN_DEG)),   # face down
                  ("lean_to_cover_x1", seated(cover, (1, 0, 0), -90)),             # flat, back face down
+                 ("lean_to_hairpin_x1", seated(hairpin, (0, 1, 0), 90)),         # on its side: bends along layers
                  ("lean_to_lens_x1_clear", seated(lens_local))):                     # flange down
     m.write(os.path.join(out, fname + ".stl"))
     bb = m.BoundBox
