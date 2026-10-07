@@ -50,6 +50,11 @@ void settings_set_page_enabled(int page_id, bool on);
 // Panel-side rather than the controller's overrides: RAPID has no +/- (three
 // fixed positions) and FEED governs cutting moves, so borrowing it would scale
 // the next G1 as a side effect of jogging. See docs/HANDOFF.md.
+// Jog ceiling, mm/min, applied before jog%. FluidNC has one rate per axis
+// (max_rate caps G0, G1 and $J alike), so "rapids 10K, jog 7K" can only be
+// enforced here. Covers this panel only, not the WebUI or other senders.
+// ponytail: constant; make it a Setup control if it needs changing often.
+static const float JOG_MAX_MM_MIN = 7000.0f;
 uint8_t settings_jog_pct();
 void    settings_set_jog_pct(uint8_t pct);
 

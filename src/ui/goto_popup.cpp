@@ -4,6 +4,7 @@
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
 #include "model/caps.h"
+#include "model/settings.h"
 #include "model/offsets.h"
 #include "GrblParserC.h"
 #include "e4math.h"
@@ -199,7 +200,8 @@ static void go_cb(lv_event_t*) {
         return;
     }
     if (state != Idle || !s_buf[0]) return;
-    const float feed = axis_setting("Grbl/MaxRate/", s_axis, GOTO_FALLBACK_FEED);
+    float feed = axis_setting("Grbl/MaxRate/", s_axis, GOTO_FALLBACK_FEED);
+    if (feed > JOG_MAX_MM_MIN) feed = JOG_MAX_MM_MIN;   // Go-To is a jog too
     char line[64];
     // G90 absolute / G91 incremental, stated inside the jog line so it cannot
     // be affected by whatever modal state the controller happens to hold.

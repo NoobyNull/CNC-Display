@@ -111,6 +111,7 @@ static float continuous_feed(const dir_t* d) {
     if (d->dy) { float r = axis_max_rate(1); if (!rate || r < rate) rate = r; }
     if (d->dz) { float r = axis_max_rate(2); if (!rate || r < rate) rate = r; }
     if (rate <= 0.0f) rate = JOG_FALLBACK_RATE;
+    if (rate > JOG_MAX_MM_MIN) rate = JOG_MAX_MM_MIN;
     return rate * (float)settings_jog_pct() / 100.0f;
 }
 
