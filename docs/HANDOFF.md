@@ -1,5 +1,34 @@
 # Handoff — CNC Console, 2026-08-11
 
+## Session 2026-10-07 — jog crawl, remote update, OTA fixed end to end — read this first
+
+- **Jog/Go-To crawled** (100 mm at ~250 mm/min, seemingly random axis/direction).
+  They read `Grbl/MaxRate/<axis>` from the `$S` table on every move, and Diag
+  (All/Changed) and Motion edits clear that table and re-request it. In that
+  window the lookup fell to `JOG_FALLBACK_RATE` (500 x jog%). Fixed: both keep
+  the last rate seen per axis (`page_jog.cpp`, `goto_popup.cpp`).
+- **Remote update trigger.** Telnet to FluidNC (192.168.0.5:23) and send
+  `$LM=*PANEL:UPDATE` (or `$Msg/Channel=uart_channel2,PANEL:UPDATE`). The panel
+  sees `[MSG:PANEL:UPDATE]` and runs `fwupd_net()` — the same function as the
+  Setup UPDATE NET button — only when Idle/Alarm; the tap-to-cancel countdown
+  still runs. Failures are broadcast back as `[MSG:PANEL-UPDATE FAILED: ...]`.
+  Verified live: app1 written, otadata switched to it, panel relinked.
+- **Network OTA had been broken twice over:**
+  1. Cloudflare's minimum TLS on yax.family had been raised to 1.3. The panel's
+     mbedTLS is TLS 1.2 only (`CONFIG_MBEDTLS_SSL_PROTO_TLS1_3` unset) -> HTTP -1
+     "fatal alert". Min TLS set back to 1.2 (1.3 stays enabled). **If OTA starts
+     failing with HTTP -1 again, check that setting first.**
+  2. `Update.begin()` was called before the download and again before flashing;
+     the second is refused with no error code ("No Error"). Now called once.
+- `display_release_internal_ram()` moves the LVGL draw buffer to PSRAM before
+  WiFi. Added on a wrong guess (internal heap turned out fine: 139K/61K free);
+  harmless because every radio-up update ends in a reboot.
+- **USB flashing via CNC101:** the panel is plugged into CNC101 (ssh alias
+  `cnc101`, user cnc, fish shell — wrap remote commands in `bash -c`).
+  `tools/flash_cnc101.sh` builds and flashes app0 at 115200 (460800 fails).
+  This machine cannot reach 192.168.0.5 directly; CNC101 can.
+- Seen in passing: FluidNC rapid override was at 5% (`Ov:100,5,100`).
+
 ## Session 2026-08-25 — the Corgi runs FluidNC **v4**, and $S changed — read this first
 
 The controller is **FluidNC v4.0.3**, not v3. This invalidates an assumption
