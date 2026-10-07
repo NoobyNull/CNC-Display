@@ -19,6 +19,7 @@ bool        model_take_dro();
 bool        model_take_state();
 bool        model_take_limits();
 const char* model_take_error();   // nullptr if none pending
+bool        model_take_update_request();   // [MSG:PANEL:UPDATE] arrived
 
 // The pendant passthrough board as FluidNC named it at boot ("Airedale v1.1"),
 // or nullptr if no banner has been seen. Latched, because the console ring

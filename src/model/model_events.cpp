@@ -5,6 +5,7 @@
 #include "model/fnc_settings.h"
 #include "model/caps.h"
 #include <string.h>
+#include <strings.h>   // strcasecmp
 #include <stdio.h>
 
 static bool s_dro = false, s_state = false, s_limits = false;
@@ -57,7 +58,15 @@ static void sniff_board(const char* line) {
     s_board[n] = 0;
 }
 
+// Remote "update yourself": [MSG:PANEL:UPDATE] from the controller, e.g.
+// telnet to FluidNC and send  $LM=*PANEL:UPDATE  (broadcast) or
+// $Msg/Channel=uart_channel2,PANEL:UPDATE. Only raised here; main.cpp decides
+// whether the machine is in a state to act on it.
+static bool s_update_req = false;
+bool model_take_update_request() { bool r = s_update_req; s_update_req = false; return r; }
+
 void model_flag_message(const char* cmd, const char* args) {
+    if (cmd && args && !strcasecmp(cmd, "PANEL") && !strcasecmp(args, "UPDATE")) s_update_req = true;
     char buf[CLOG_LINE_MAX];
     snprintf(buf, sizeof(buf), "[MSG:%s %s]", cmd ? cmd : "", args ? args : "");
     sniff_board(buf);

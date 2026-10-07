@@ -15,6 +15,7 @@
 #include "hw/sdcard.h"
 #include "hw/imu.h"
 #include "hw/status_led.h"
+#include "hw/fw_update.h"
 #include "esp32-hal-periman.h"
 #include "model/vibration.h"
 #include "transport/uart.h"
@@ -228,6 +229,20 @@ static void prime_link_if_up() {
     Serial.println("link up: primed config, offsets, file list and settings");
 }
 
+// [MSG:PANEL:UPDATE] from the controller runs the same network update as the
+// Setup button. Never mid-job: the update blanks the screen and reboots. The
+// update's own tap-to-cancel countdown still gives whoever is at the panel the
+// last word.
+static void remote_update() {
+    if (!model_take_update_request()) return;
+    if (!(state == Idle || state == Alarm)) {
+        clog_add("[MSG:WARN: remote update refused - machine not Idle]");
+        return;
+    }
+    clog_add("[MSG:INFO: remote update requested]");
+    fwupd_net();   // only returns on failure or cancel
+}
+
 void loop() {
     if (pathload_busy()) {
         // XModem owns the link during a transfer: the Grbl parser must never see
@@ -266,5 +281,6 @@ void loop() {
     caps_poll();
     link_watchdog();
     service_action();
+    remote_update();
     lv_timer_handler();
 }
