@@ -6,6 +6,7 @@
 #include "ui/theme.h"
 #include "model/console_log.h"
 #include "model/settings.h"
+#include "transport/transport.h"
 
 #include <Arduino.h>
 #include <Update.h>
@@ -177,6 +178,12 @@ static void fail(const char* what) {
     char e[96];
     snprintf(e, sizeof(e), "[MSG:UPDATE: %s]", what);
     clog_add(e);
+    // Also up the link as a broadcast, so a remote $LM=*PANEL:UPDATE sees why
+    // on telnet -- the glass is the only other place it shows, and the panel
+    // reboots 4s later. Raw bytes: the send queue is not pumped in here.
+    char up[128];
+    snprintf(up, sizeof(up), "$LM=*PANEL-UPDATE FAILED: %s\n", what);
+    for (const char* p = up; *p; ++p) fnc_putchar((uint8_t)*p);
     Update.abort();
     WiFi.mode(WIFI_OFF);
     // The reason goes on the glass: after a radio failure the panel reboots,
@@ -302,9 +309,9 @@ bool fwupd_net() {
     int total = http.getSize();                 // -1 when chunked
     if (total > 0 && total < 0x40000) { http.end(); fail("file too small to be firmware"); return false; }
 
-    if (!Update.begin(total > 0 ? (size_t)total : UPDATE_SIZE_UNKNOWN)) {
-        http.end(); fail(Update.errorString()); return false;
-    }
+    // No Update.begin() here: phase 2 opens the update once the size is known,
+    // and a second begin() on an open update is refused with no error code
+    // (the failure read "No Error").
     // Phase 1: download the whole image into PSRAM. No flash writes happen
     // here, so the screen stays essentially clean while the radio runs.
     size_t cap = total > 0 ? (size_t)total : 4 * 1024 * 1024;
