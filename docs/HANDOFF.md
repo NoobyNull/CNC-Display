@@ -27,7 +27,13 @@
   `cnc101`, user cnc, fish shell — wrap remote commands in `bash -c`).
   `tools/flash_cnc101.sh` builds and flashes app0 at 115200 (460800 fails).
   This machine cannot reach 192.168.0.5 directly; CNC101 can.
-- Seen in passing: FluidNC rapid override was at 5% (`Ov:100,5,100`).
+- Seen in passing: FluidNC rapid override was at 5% (`Ov:100,5,100`, byte 0x98 —
+  not the panel, which only sends 100/50/25); reset to 100.
+- **The machine is no longer the bring-up config.** Live (synced to
+  `CNC-Wiring/config.yaml`): limits, homing, probe/ETS, XY 10000 mm/min @ 800,
+  Z 1000 @ 800, 39.882 steps/mm XY, 400 Z. `sim/profiles/corgi_bringup.yaml`
+  is now a historical fixture (its tests need a no-homing machine), not the
+  live config the sim README describes.
 
 ## Session 2026-08-25 — the Corgi runs FluidNC **v4**, and $S changed — read this first
 
