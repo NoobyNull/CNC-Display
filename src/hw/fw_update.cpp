@@ -240,6 +240,7 @@ bool fwupd_net() {
     ui_note_set("joining wifi...", C_DIM);
 
     s_radio_used = true;
+    display_release_internal_ram();
     WiFi.mode(WIFI_STA);
     WiFi.begin(settings_wifi_ssid(), settings_wifi_pass());
     uint32_t t0 = millis();
@@ -289,7 +290,13 @@ bool fwupd_net() {
     http.setTimeout(15000);
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
-        char e[48]; snprintf(e, sizeof(e), "HTTP %d from update URL", code);
+        // -1 is "connect failed" and says nothing more; the TLS error and the
+        // internal heap are what tell DNS, handshake and out-of-RAM apart.
+        char tl[48] = "";
+        if (https && code < 0) tls.lastError(tl, sizeof(tl));
+        char e[96]; snprintf(e, sizeof(e), "HTTP %d %s (int heap %u/%u)", code, tl,
+                             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         http.end(); fail(e); return false;
     }
     int total = http.getSize();                 // -1 when chunked

@@ -109,6 +109,21 @@ void display_init() {
   Serial.println("Display initialized");
 }
 
+// The network update needs the internal RAM back: mbedTLS on this build can
+// only allocate internally (CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC) and the
+// handshake wants tens of KB, which the 40 KB draw buffer above was eating --
+// GET came back HTTP -1. Every update that reaches the radio ends in a reboot,
+// so this is one-way. Call between renders (from an event callback is fine).
+void display_release_internal_ram() {
+  if (!buf1 || !esp_ptr_internal(buf1)) return;
+  const size_t px = draw_buf.size;
+  lv_color_t* ps = (lv_color_t *)ps_malloc(px * sizeof(lv_color_t));
+  if (!ps) return;
+  lv_disp_draw_buf_init(&draw_buf, ps, nullptr, px);
+  heap_caps_free(buf1);
+  buf1 = ps;
+}
+
 // ============================================================
 // lvgl_init() -- LVGL buffers + display/touch driver registration
 // ============================================================

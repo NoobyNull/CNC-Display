@@ -15,6 +15,7 @@ void lvgl_tick();      // Call lv_timer_handler() -- call from loop()
 // CONFIG_LCD_RGB_RESTART_IN_VSYNC is set, so this restarts cleanly on a frame
 // boundary. Call it after any operation that blacks out the cache.
 void display_resync();
+void display_release_internal_ram();   // before WiFi/TLS; one-way, update reboots
 
 void set_backlight(uint8_t level);   // 0=off, 255=max. I2C command to the STC8.
 uint8_t get_backlight();
