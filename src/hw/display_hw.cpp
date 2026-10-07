@@ -36,7 +36,6 @@ static esp_lcd_panel_handle_t s_panel = nullptr;
 // ============================================================
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1;
-static lv_color_t *buf2;
 
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
   // esp_lcd takes an exclusive end coordinate; LVGL's area is inclusive.
@@ -116,10 +115,19 @@ void display_init() {
 void lvgl_init() {
   lv_init();
 
-  // Double-buffered PSRAM allocation (one screen width x 40 lines each)
-  buf1 = (lv_color_t *)ps_malloc(SCREEN_WIDTH * 40 * sizeof(lv_color_t));
-  buf2 = (lv_color_t *)ps_malloc(SCREEN_WIDTH * 40 * sizeof(lv_color_t));
-  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, SCREEN_WIDTH * 40);
+  // One draw buffer in internal SRAM. LVGL renders several times faster there
+  // than in PSRAM, and it leaves PSRAM bandwidth to the bounce-buffer refills
+  // that feed the scanout. One is enough: the flush below is a synchronous
+  // memcpy into the framebuffer, so a second buffer would never be drawn into
+  // while the first is in flight. Same height as the bounce buffers.
+  const size_t px = SCREEN_WIDTH * 20;
+  buf1 = (lv_color_t *)heap_caps_malloc(px * sizeof(lv_color_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!buf1) {
+    // Internal RAM short: PSRAM still works, just slower.
+    Serial.println("[lcd] no internal RAM for the draw buffer, using PSRAM");
+    buf1 = (lv_color_t *)ps_malloc(px * sizeof(lv_color_t));
+  }
+  lv_disp_draw_buf_init(&draw_buf, buf1, nullptr, px);
 
   // Display driver
   static lv_disp_drv_t disp_drv;
