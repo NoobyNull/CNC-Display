@@ -5,6 +5,7 @@
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
 #include "model/settings.h"
+#include "model/caps.h"
 #include "ui/goto_popup.h"
 #include "GrblParserC.h"
 #include <Arduino.h>
@@ -74,17 +75,23 @@ static void jog_send(const dir_t* d, float feed_mm_min, float dist_mm) {
 // machine should creep, not traverse.
 static const float JOG_FALLBACK_RATE = 500.0f;
 
+// The settings table is not a stable source: Diag (All/Changed) and the Motion
+// page clear it and re-request $S/$SC, so for a while -- or for good, if $SC
+// omits the key -- MaxRate is simply absent. Jogging then fell to the fallback
+// and crawled at 500 x jog%. The last rate the controller reported is still the
+// machine's rate, so remember it.
 static float axis_max_rate(int axis) {
+    static float seen[CAPS_MAX_AXES] = {};
     char key[FS_NAME_MAX];
     snprintf(key, sizeof(key), "Grbl/MaxRate/%c", axisNumToChar(axis));
     for (size_t i = 0; i < fncset_count(); i++) {
         const fnc_setting_t* st = fncset_at(i);
         if (st && strcmp(st->name, key) == 0) {
             float v = (float)atof(st->value);
-            if (v > 0.0f) return v;
+            if (v > 0.0f) return seen[axis] = v;
         }
     }
-    return JOG_FALLBACK_RATE;
+    return seen[axis] > 0.0f ? seen[axis] : JOG_FALLBACK_RATE;
 }
 
 // Feed is a percentage of what the machine says it can do, not a multiple of

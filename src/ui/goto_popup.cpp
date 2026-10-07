@@ -3,6 +3,7 @@
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
+#include "model/caps.h"
 #include "model/offsets.h"
 #include "GrblParserC.h"
 #include "e4math.h"
@@ -56,17 +57,20 @@ static char s_num_note[48];
 // back, and it falls back slow.
 static const float GOTO_FALLBACK_FEED = 1000.0f;
 
+// Same trap as page_jog.cpp: the table is cleared whenever Diag or Motion
+// re-reads it, so keep the last rate seen. ponytail: one prefix ever calls this.
 static float axis_setting(const char* prefix, int axis, float fallback) {
+    static float seen[CAPS_MAX_AXES] = {};
     char key[FS_NAME_MAX];
     snprintf(key, sizeof(key), "%s%c", prefix, axisNumToChar(axis));
     for (size_t i = 0; i < fncset_count(); i++) {
         const fnc_setting_t* s = fncset_at(i);
         if (s && strcmp(s->name, key) == 0) {
             float v = (float)atof(s->value);
-            if (v > 0.0f) return v;
+            if (v > 0.0f) return seen[axis] = v;
         }
     }
-    return fallback;
+    return seen[axis] > 0.0f ? seen[axis] : fallback;
 }
 
 static void refresh();
