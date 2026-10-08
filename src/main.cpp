@@ -258,8 +258,19 @@ static void link_watchdog() {
 }
 
 static void prime_link_if_up() {
+    // A controller reset wipes everything primed below, plus the $RI auto-report
+    // and the parser modes, and the link may never drop to Disconnected if the
+    // reboot is quick. Left alone the jog page falls back to its 500 mm/min
+    // creep rate because the axis max rates are gone.
+    bool reset = model_take_board_reset();
+    if (state == Disconnected) { s_primed = false; return; }
+    if (reset && s_primed) {
+        s_primed = false;
+        send_line("$G");
+        send_line("$RI=200");
+        Serial.println("controller reset seen: re-priming");
+    }
     if (s_primed) return;
-    if (state == Disconnected) return;
     s_primed = true;
     // Config dump first: it decides which controls are even offered, and every
     // second it is late is a second the panel shows homing and probing to a

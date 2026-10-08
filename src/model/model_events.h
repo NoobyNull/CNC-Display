@@ -26,6 +26,10 @@ bool        model_take_update_request();   // [MSG:PANEL:UPDATE] arrived
 // drops the banner long before anyone opens the HW page.
 const char* model_expander_board();
 
+// True once after the controller prints its boot banner. The panel uses it to
+// re-prime a link that survived a controller reset.
+bool model_take_board_reset();
+
 // GrblParserC hands unrecognised lines to handle_other(); this fans them out to
 // the offset table, the file list and the console.
 extern "C" void handle_other_line(char* line);
