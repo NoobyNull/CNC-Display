@@ -26,14 +26,15 @@
 // selector keeps pointing at the running slot until Update.end() commits.
 
 // ---------------- progress modal ----------------
-static lv_obj_t *s_m, *s_bar, *s_lbl, *s_note, *s_spin, *s_tool;
+static lv_obj_t *s_m, *s_note;
 static volatile bool s_cancel = false;
 
 // The updates run INSIDE an LVGL event callback, i.e. inside lv_timer_handler
 // — which refuses re-entrant calls, silently. So nothing here may lean on the
 // timer loop: painting is lv_refr_now (re-entrant safe), touch is read from
-// the GT911 driver directly, and the animations are driven by hand from
-// millis(). This is why the modal was once completely invisible.
+// the GT911 driver directly, and nothing here animates:
+// a moving widget is a framebuffer write while the flash cache is off. This is
+// why the modal was once completely invisible.
 static void ui_pump() {
     // WiFi activity and OTA flash writes blank the flash cache; the RGB ISR is
     // not IRAM-safe, so the DMA desyncs and the screen turns to garbage.
@@ -45,16 +46,6 @@ static void ui_pump() {
         display_resync();
     }
     touch_poll();                              // its timer is frozen with us
-    // spinner: a manually rotated 80-degree arc
-    if (s_spin) {
-        int a = (int)((now / 3) % 360);
-        lv_arc_set_angles(s_spin, a, a + 80);
-    }
-    // carriage bob: integer triangle wave, no lv_anim (timer-bound)
-    if (s_tool) {
-        int ph = (int)((now / 40) % 24);
-        lv_obj_set_y(s_tool, (ph < 12 ? ph : 24 - ph) - 4);
-    }
     lv_refr_now(NULL);
 }
 
@@ -80,60 +71,12 @@ static void ui_open(const char* title) {
     lv_obj_set_style_text_color(s_note, C_WARN, 0);
     lv_obj_align(s_note, LV_ALIGN_CENTER, 0, -U * 4);
 
-    s_bar = lv_bar_create(s_m);
-    lv_obj_set_size(s_bar, U * 50, U * 2);
-    lv_obj_align(s_bar, LV_ALIGN_CENTER, 0, U * 2);
-    lv_bar_set_range(s_bar, 0, 100);
-    lv_obj_set_style_bg_color(s_bar, C_RAISE, 0);
-    lv_obj_set_style_bg_color(s_bar, C_ACCENT, LV_PART_INDICATOR);
-
-    s_lbl = lv_label_create(s_m);
-    lv_label_set_text(s_lbl, "");
-    lv_obj_set_style_text_font(s_lbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_lbl, C_DIM, 0);
-    lv_obj_align(s_lbl, LV_ALIGN_CENTER, 0, U * 6);
-
-    // Alive-indicator arc, rotated by hand in ui_pump.
-    s_spin = lv_arc_create(s_m);
-    lv_obj_set_size(s_spin, U * 8, U * 8);
-    lv_obj_align(s_spin, LV_ALIGN_CENTER, 0, -U * 16);
-    lv_arc_set_bg_angles(s_spin, 0, 360);
-    lv_obj_remove_style(s_spin, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(s_spin, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_color(s_spin, C_RAISE, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_spin, C_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(s_spin, 4, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_spin, 4, LV_PART_INDICATOR);
-
-    // The carriage rides the fill edge of the bar; bobbed by hand in ui_pump.
-    s_tool = lv_obj_create(s_bar);
-    lv_obj_remove_style_all(s_tool);
-    lv_obj_set_size(s_tool, 12, 12);
-    lv_obj_set_style_bg_color(s_tool, C_ACCENT, 0);
-    lv_obj_set_style_bg_opa(s_tool, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(s_tool, 2, 0);
-    lv_obj_set_pos(s_tool, 0, 2);
     ui_pump();
 }
 
 static void ui_note_set(const char* txt, lv_color_t c) {
     lv_label_set_text(s_note, txt);
     lv_obj_set_style_text_color(s_note, c, 0);
-    ui_pump();
-}
-
-static void ui_progress(size_t done, size_t total) {
-    char b[48];
-    if (total) {
-        int pct = (int)((uint64_t)done * 100 / total);
-        lv_bar_set_value(s_bar, pct, LV_ANIM_OFF);
-        // carriage tracks the fill edge
-        lv_obj_set_x(s_tool, (lv_obj_get_width(s_bar) - 12) * pct / 100);
-        snprintf(b, sizeof(b), "%u / %u KB", (unsigned)(done / 1024), (unsigned)(total / 1024));
-    } else {
-        snprintf(b, sizeof(b), "%u KB", (unsigned)(done / 1024));
-    }
-    lv_label_set_text(s_lbl, b);
     ui_pump();
 }
 
@@ -318,7 +261,7 @@ bool fwupd_net() {
     uint8_t* fwbuf = (uint8_t*)ps_malloc(cap);
     if (!fwbuf) { http.end(); fail("no PSRAM for download buffer"); return false; }
 
-    ui_note_set("downloading - do not power off", C_WARN);
+    ui_note_set("Downloading firmware -- do not power off", C_WARN);
     WiFiClient* stream = http.getStreamPtr();
     size_t done = 0;
     uint32_t idle = millis();
@@ -337,7 +280,6 @@ bool fwupd_net() {
         size_t n = stream->readBytes(fwbuf + done, want);
         if (!n) continue;
         done += n;
-        if ((done % 0x10000) < 4096) ui_progress(done, total > 0 ? (size_t)total : 0);
     }
     http.end();
     WiFi.mode(WIFI_OFF);
@@ -347,8 +289,7 @@ bool fwupd_net() {
     // Phase 2: flash from RAM. The writes glitch the scanout no matter what,
     // so say what happens, cut the backlight, and burn it in the dark — the
     // reboot into the splash is the "done" signal.
-    ui_progress(done, done);
-    ui_note_set("flashing - screen goes dark - reboots itself when done", C_WARN);
+    ui_note_set("Updating -- please wait for the reboot", C_WARN);
     uint32_t t_note = millis();
     while (millis() - t_note < 1800) { ui_pump(); delay(30); }    // let it be read
     stc8_display(false);
