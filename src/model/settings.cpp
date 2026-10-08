@@ -8,6 +8,7 @@ static Preferences prefs;
 
 static bool     s_uart_en = true;
 static bool     s_status_led = true;
+static bool     s_blank_md = false;
 static uint8_t  s_bright   = 200;
 static uint8_t  s_vibmode  = 0;   // monitor until deliberately armed
 static float    s_vib_hold = 0.5f;    // CNC-TW THRESHOLD_HOLD_RMS_G
@@ -40,6 +41,7 @@ void settings_load() {
     prefs.begin("cncdisp", /*readOnly=*/true);
     s_uart_en = prefs.getBool("uart_en", true);
     s_status_led = prefs.getBool("statusled", true);
+    s_blank_md = prefs.getBool("blankmd", false);
     s_bright  = prefs.getUChar("bright", 200);
     s_vibmode  = prefs.getUChar("vibmode", 0);
     s_vib_hold = prefs.getFloat("vibhold", 0.5f);
@@ -100,6 +102,12 @@ bool settings_status_led() { return s_status_led; }
 void settings_set_status_led(bool on) {
     if (on == s_status_led) return;
     s_status_led = on; nvs_put_bool("statusled", on);
+}
+
+bool settings_blank_disables_motors() { return s_blank_md; }
+void settings_set_blank_disables_motors(bool on) {
+    if (on == s_blank_md) return;
+    s_blank_md = on; nvs_put_bool("blankmd", on);
 }
 
 bool settings_uart_enabled() { return s_uart_en; }

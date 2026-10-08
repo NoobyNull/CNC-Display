@@ -24,6 +24,8 @@ void page_setup_build(lv_obj_t* p);
 
 // Called on the shared 20 Hz tick while the page is visible.
 void page_jog_tick();
+// Same as pressing STEPPERS ON -> OFF; keeps the button in step.
+void page_jog_release_motors();
 void page_offsets_tick();
 void page_run_tick();
 void page_setup_tick();

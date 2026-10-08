@@ -70,6 +70,10 @@ static void led_sw_cb(lv_event_t* e) {
     settings_set_status_led(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
 
+static void blankmd_sw_cb(lv_event_t* e) {
+    settings_set_blank_disables_motors(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
 static void uart_sw_cb(lv_event_t* e) {
     settings_set_uart_enabled(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
     transport_settings_changed();
@@ -342,6 +346,9 @@ void page_setup_build(lv_obj_t* p) {
     static lv_obj_t* s_led_sw;
     toggle_row(sws, "Status lights", "light bar",
                settings_status_led(), led_sw_cb, &s_led_sw);
+    static lv_obj_t* s_blankmd_sw;
+    toggle_row(sws, "Blank frees", "steppers $MD",
+               settings_blank_disables_motors(), blankmd_sw_cb, &s_blankmd_sw);
 
     // Rail contents. One switch per optional page, because which pages a
     // machine needs is a property of how it is used, not something the panel

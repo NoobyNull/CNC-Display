@@ -58,6 +58,12 @@ static const float JOG_MAX_MM_MIN = 7000.0f;
 uint8_t settings_jog_pct();
 void    settings_set_jog_pct(uint8_t pct);
 
+// Release the steppers ($MD) when the idle screensaver blanks an Idle machine.
+// Off by default: holding torque is what keeps a collet-nut wrench from moving
+// the axes, so this is opt-in and only as safe as the blank timeout is long.
+bool settings_blank_disables_motors();
+void settings_set_blank_disables_motors(bool on);
+
 uint8_t settings_screen_off_min();
 void    settings_set_screen_off_min(uint8_t m);
 

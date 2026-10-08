@@ -12,6 +12,7 @@
 #include "model/settings.h"
 #include "transport/transport.h"
 #include "hw/touch.h"
+#include "model/screensaver.h"
 #include "GrblParserC.h"
 #include "e4math.h"
 #include <stdio.h>
@@ -871,4 +872,11 @@ void shell_tick() {
     expanded_tick();
 
     screen_idle_tick(machine_busy(state));
+
+    // Walked away: the blank timeout elapsed on a machine that is sitting still.
+    static bool was_blank = false;
+    const bool blank = screensaver_is_off();
+    if (blank && !was_blank && state == Idle && settings_blank_disables_motors())
+        page_jog_release_motors();
+    was_blank = blank;
 }

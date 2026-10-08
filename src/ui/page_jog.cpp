@@ -315,6 +315,11 @@ static void motors_cb(lv_event_t*) {
     motors_paint();
 }
 
+void page_jog_release_motors() {
+    if (!s_motors_on) return;
+    motors_cb(nullptr);
+}
+
 void page_jog_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(p, U, 0);
