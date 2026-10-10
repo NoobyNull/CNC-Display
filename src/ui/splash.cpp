@@ -54,6 +54,8 @@ static void splash_delete() {
     s_status = nullptr;
 }
 
+bool splash_active() { return s_root != nullptr; }
+
 static void exit_done_cb(lv_anim_t*) { splash_delete(); }
 
 static void exit_exec_cb(void* obj, int32_t v) { lv_obj_set_y((lv_obj_t*)obj, v); }

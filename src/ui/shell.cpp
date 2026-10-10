@@ -4,12 +4,14 @@
 #include "ui/view_expanded.h"
 #include "model/fnc_codes.h"
 #include "ui/goto_popup.h"
+#include "ui/home_wizard.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
 #include "model/caps.h"
 #include "model/model_compat.h"
 #include "model/offsets.h"
 #include "model/settings.h"
+#include "model/motors.h"
 #include "transport/transport.h"
 #include "hw/touch.h"
 #include "model/screensaver.h"
@@ -870,6 +872,15 @@ void shell_tick() {
         default: break;
     }
     expanded_tick();
+    home_wizard_tick();
+
+    // Alarm, or motion the panel did not start, while released: the steppers
+    // may be back on under someone's hands. Re-arm and re-enable to match.
+    static state_t was = Disconnected;
+    if (state != was) {
+        if (state == Alarm || state == Jog || state == Cycle || state == Homing) motors_resync();
+        was = state;
+    }
 
     screen_idle_tick(machine_busy(state));
 

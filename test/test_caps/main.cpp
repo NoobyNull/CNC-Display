@@ -184,6 +184,25 @@ void test_gpio_roles_come_from_the_dump() {
     TEST_ASSERT_NULL(caps_gpio_role(13));              // unused -> "free" on Diag
 }
 
+// The live machine's macros: two set a reference (G43.1Z0), one applies a TLO,
+// and its G43.1 sits far past the 23 characters the body is kept to.
+void test_tlo_macro_found_by_full_body() {
+    const char* L[] = {
+        "macros:",
+        "  Macro0: G21G90&G43.1Z0&G53G0Z90&G53G0X83.8Y433.13&G53G38.2Z40F800",
+        "  Macro1: G21G90&G53G0Z90&G53G0X83.8Y433.13&G53G38.2Z40F800&G53G0Z[#<_abs_z>+5]&G53G38.2Z40F80&#<_my_tlo_z>=[#5063-#<_ets_tool1_z>]&G43.1Z#<_my_tlo_z>&G53G0Z90",
+    };
+    feed_config(L, 3);
+    TEST_ASSERT_EQUAL(1, caps_tlo_macro());
+    TEST_ASSERT_EQUAL_STRING("Macro1", caps_macro_name(caps_tlo_macro()));
+}
+
+void test_no_tlo_macro() {
+    const char* L[] = { "macros:", "  Macro0: G43.1 Z0" };
+    feed_config(L, 2);
+    TEST_ASSERT_EQUAL(-1, caps_tlo_macro());
+}
+
 void test_config_request_gives_up() {
     caps_request_config();
     stub_set_millis(20000);
@@ -212,6 +231,8 @@ int main() {
     RUN_TEST(test_config_dump_finds_configured_pins);
     RUN_TEST(test_pin_keys_are_scoped_to_their_section);
     RUN_TEST(test_scanner_never_eats_the_settings_reply);
+    RUN_TEST(test_tlo_macro_found_by_full_body);
+    RUN_TEST(test_no_tlo_macro);
     RUN_TEST(test_config_request_gives_up);
     RUN_TEST(test_config_request_is_actually_sent);
     return UNITY_END();

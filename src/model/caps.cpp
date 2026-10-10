@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include "model/caps.h"
 #include "model/fnc_settings.h"
 #include "model/FluidNCModel.h"
@@ -21,6 +22,7 @@ static bool     s_settled = false;
 static size_t s_mcount = 0;
 static char   s_mname[CAPS_MACRO_MAX][CAPS_MACRO_NAME_MAX];
 static char   s_mbody[CAPS_MACRO_MAX][CAPS_MACRO_NAME_MAX];
+static int    s_mtlo = -1;
 
 struct axis_t {
     char  letter;
@@ -42,6 +44,7 @@ static char     s_section[24] = "";
 static const int CAPS_GPIO_MAX = 49;
 static char s_gpio_role[CAPS_GPIO_MAX][44];
 static char s_path[6][24];                 // key per indent level (2 spaces)
+static uint16_t s_hlmask = 0;
 
 static void note_pin_role(const char* line) {
     int indent = 0;
@@ -59,6 +62,13 @@ static void note_pin_role(const char* line) {
 
     const char* v = colon + 1;
     while (*v == ' ' || *v == '\'' || *v == '"') v++;   // YAML writers may quote "a:b"
+    // axes/<x>/motor<n>/hard_limits: true -> bit axis*2+n
+    if (depth == 3 && strcmp(s_path[0], "axes") == 0 && strcmp(s_path[3], "hard_limits") == 0 &&
+        strncmp(s_path[2], "motor", 5) == 0 && strncasecmp(v, "true", 4) == 0) {
+        const char* ax = strchr("xyzabc", tolower((unsigned char)s_path[1][0]));
+        const int   m  = s_path[2][5] - '0';
+        if (ax && s_path[1][0] && (m == 0 || m == 1)) s_hlmask |= (uint16_t)(1u << ((ax - "xyzabc") * 2 + m));
+    }
     if (strncmp(v, "gpio.", 5) != 0) return;
     char* end;
     const long n = strtol(v + 5, &end, 10);
@@ -113,6 +123,25 @@ bool     caps_settled()    { return s_settled; }
 size_t      caps_macro_count() { return s_mcount; }
 const char* caps_macro_name(size_t i) { return i < s_mcount ? s_mname[i] : ""; }
 const char* caps_macro_body(size_t i) { return i < s_mcount ? s_mbody[i] : ""; }
+int         caps_tlo_macro() { return s_mtlo; }
+uint16_t    caps_hard_limit_mask() { return s_hlmask; }
+
+static bool applies_tlo(const char* b) {
+    static const char PAT[] = "G43.1Z";
+    for (; *b; b++) {
+        const char* p = b;
+        size_t k = 0;
+        while (*p && PAT[k]) {
+            if (*p == ' ') { p++; continue; }
+            if (toupper((unsigned char)*p) != PAT[k]) break;
+            p++; k++;
+        }
+        if (PAT[k]) continue;
+        while (*p == ' ') p++;
+        if (*p == '#' || *p == '[') return true;
+    }
+    return false;
+}
 
 cap_state_t caps_homing()      { return s_homing; }
 cap_state_t caps_probe()       { return s_probe; }
@@ -242,6 +271,8 @@ void caps_request_config() {
     s_probe = s_toolsetter = s_flood = s_mist = CAP_ABSENT;
     s_door = s_estop = CAP_ABSENT;
     s_mcount = 0;              // empty slots are the common case, dump proves otherwise
+    s_mtlo = -1;
+    s_hlmask = 0;
     memset(s_gpio_role, 0, sizeof(s_gpio_role));
     send_line("$CD");
 }
@@ -353,6 +384,7 @@ bool caps_feed_line(const char* line) {
                 memcpy(body, val, bn); body[bn] = 0;
                 // Empty slots must not become buttons.
                 if (body[0]) {
+                    if (s_mtlo < 0 && applies_tlo(val)) s_mtlo = (int)s_mcount;
                     snprintf(s_mname[s_mcount], CAPS_MACRO_NAME_MAX, "%s", name);
                     snprintf(s_mbody[s_mcount], CAPS_MACRO_NAME_MAX, "%s", body);
                     s_mcount++;

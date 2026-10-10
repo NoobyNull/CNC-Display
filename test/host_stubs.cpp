@@ -36,3 +36,8 @@ void send_linef(const char* fmt, ...) {
 
 // GrblParserC requires the host to supply this; on the panel it is millis().
 extern "C" int milliseconds() { return s_now; }
+
+// model/motors persists one number; a single slot is enough to test that.
+static float s_setting = 0.0f;
+float settings_get_float(const char*, float def) { return s_setting ? s_setting : def; }
+void  settings_set_float(const char*, float v)   { s_setting = v; }

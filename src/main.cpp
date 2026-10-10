@@ -17,6 +17,8 @@
 #include "hw/status_led.h"
 #include "hw/fw_update.h"
 #include "esp32-hal-periman.h"
+#include "model/homed.h"
+#include "model/motors.h"
 #include "model/vibration.h"
 #include "model/imu_log.h"
 #include "transport/uart.h"
@@ -263,6 +265,7 @@ static void prime_link_if_up() {
     // reboot is quick. Left alone the jog page falls back to its 500 mm/min
     // creep rate because the axis max rates are gone.
     bool reset = model_take_board_reset();
+    if (reset) { homed_forget(); motors_resync(); }
     if (state == Disconnected) { s_primed = false; return; }
     if (reset && s_primed) {
         s_primed = false;
@@ -272,6 +275,8 @@ static void prime_link_if_up() {
     }
     if (s_primed) return;
     s_primed = true;
+    motors_resync();      // a drop may have been the controller rebooting
+    motors_on_link();
     // Config dump first: it decides which controls are even offered, and every
     // second it is late is a second the panel shows homing and probing to a
     // machine that has neither.

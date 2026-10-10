@@ -7,3 +7,5 @@
 // when the animation ends (or on tap).
 void splash_show();
 void splash_begin();
+// True while the splash still covers the screen.
+bool splash_active();

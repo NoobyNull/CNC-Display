@@ -135,6 +135,7 @@ static void q_push(const char* s) {
 static const char* s_state   = "Idle";
 static uint32_t    s_started = 0;
 static bool        s_moving  = true;
+static uint32_t    s_home_until = 0;
 
 void sim_set_state(const char* st) { s_state = st; }
 
@@ -211,8 +212,15 @@ static void canned_putchar(uint8_t c) {
         if (!s_len) return;
         s_line[s_len] = 0;
         if (strcmp(s_line, "$X") == 0 && strcmp(s_state, "Alarm") == 0) s_state = "Idle";
-        if (strcmp(s_line, "$#") != 0) q_push("ok\n");
-        else                           q_push("[G54:0.000,0.000,0.000]\nok\n");
+        // Just enough machine for the homing walk-through: a homing cycle,
+        // a TLO macro, and a $H that takes a moment.
+        if (strcmp(s_line, "$H") == 0) { s_state = "Home"; s_home_until = millis() + 1500; }
+        if      (strcmp(s_line, "$#") == 0) q_push("[G54:0.000,0.000,0.000]\nok\n");
+        else if (strcmp(s_line, "$S") == 0) q_push("$Grbl/HomingCycleEnable=1\nok\n");
+        else if (strcmp(s_line, "$CD") == 0)
+            q_push("axes:\n  x:\n    motor0:\n      hard_limits: true\n"
+                   "macros:\n  Macro0: G43.1Z0\n  Macro1: G43.1Z#<_my_tlo_z>\nok\n");
+        else q_push("ok\n");
         s_len = 0;
         return;
     }
@@ -269,6 +277,7 @@ void sim_transport_tick() {
     static uint32_t next = 0;
     uint32_t now = millis();
     if (!s_started) s_started = now;
+    if (s_home_until && (int32_t)(now - s_home_until) >= 0) { s_home_until = 0; s_state = "Idle"; }
     if ((int32_t)(now - next) < 0) return;
     next = now + SIM_REPORT_MS;
     push_status_report();

@@ -64,6 +64,13 @@ bool caps_settled();
 size_t      caps_macro_count();
 const char* caps_macro_name(size_t i);   // the key, e.g. "Macro0"
 const char* caps_macro_body(size_t i);   // the g-code, for the button subtitle
+// The macro that applies a measured tool length: G43.1 Z with a computed value
+// (#var or [expr]); G43.1Z0 only clears one. -1 if none. Judged on the full
+// body, which caps_macro_body() truncates. Index into the macro list above.
+int         caps_tlo_macro();
+// Motors with hard_limits: true, bit axis*2+motor (axis 0 = X). From the
+// running config, so a mask read while the panel has them disarmed reads 0.
+uint16_t    caps_hard_limit_mask();
 
 cap_state_t caps_homing();
 cap_state_t caps_probe();

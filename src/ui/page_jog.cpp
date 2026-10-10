@@ -2,6 +2,7 @@
 #include "ui/shell.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
+#include "model/motors.h"
 #include "model/FluidNCModel.h"
 #include "model/fnc_settings.h"
 #include "model/settings.h"
@@ -292,14 +293,14 @@ static void zero_cb(lv_event_t* e) {
 }
 
 // Drops holding torque so the gantry can be pushed by hand, and $ME puts it
-// back. FluidNC never reports enable state, so it is tracked here: green while
-// the steppers hold, red once released. Any motion re-enables them on the
-// controller side, which page_jog_tick() mirrors.
+// back. The state (and the hard-limit disarm that goes with it) lives in
+// model/motors; this button only shows it: green while held, red released.
 static lv_obj_t* s_zero_btn[3];
 static lv_obj_t* s_motors_btn;
-static bool      s_motors_on = true;
+static bool      s_motors_on = true;   // what is painted
 
 static void motors_paint() {
+    s_motors_on = !motors_released();
     lv_color_t bg = s_motors_on ? C_OK : C_CRIT;
     lv_obj_set_style_bg_color(s_motors_btn, bg, 0);
     lv_obj_set_style_bg_color(s_motors_btn, lv_color_lighten(bg, 40), LV_STATE_PRESSED);
@@ -310,14 +311,14 @@ static void motors_paint() {
 }
 
 static void motors_cb(lv_event_t*) {
-    send_line(s_motors_on ? "$MD" : "$ME");
-    s_motors_on = !s_motors_on;
+    if (motors_released()) motors_hold();
+    else                   motors_release();
     motors_paint();
 }
 
 void page_jog_release_motors() {
-    if (!s_motors_on) return;
-    motors_cb(nullptr);
+    motors_release();
+    motors_paint();
 }
 
 void page_jog_build(lv_obj_t* p) {
@@ -458,11 +459,7 @@ void page_jog_build(lv_obj_t* p) {
 // stops the press ever reaching an event handler -- no press, no long press, no
 // timer. And a key that cannot work must not look like it can.
 void page_jog_tick() {
-    // Motion (or a fresh link after reset) means FluidNC has the steppers on.
-    if (!s_motors_on && (state == Jog || state == Cycle || state == Homing || state == Disconnected)) {
-        s_motors_on = true;
-        motors_paint();
-    }
+    if (s_motors_on == motors_released()) motors_paint();
 
     // Zeroing is G10: refused in Alarm like any other G-code. STEPPERS stays
     // live -- $MD is allowed in Alarm, and freeing the gantry to push it by

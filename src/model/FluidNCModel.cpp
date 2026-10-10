@@ -13,6 +13,8 @@
 #include "transport/uart.h"
 #include "e4math.h"
 #include "model/sendq.h"
+#include "model/homed.h"
+#include "model/motors.h"
 
 #ifdef USE_WIFI
 #    include "WiFiConnection.h"  // wifi_use_uart_mode()
@@ -86,6 +88,7 @@ bool decode_state_string(const char* state_string, state_t& state) {
 void set_disconnected_state() {
     state           = Disconnected;
     my_state_string = "N/C";
+    homed_forget();
     jog_window_reset();
 }
 
@@ -255,6 +258,7 @@ void send_pump() {
 
 void send_line(const char* s, int timeout) {
     (void)timeout;   // the queue owns the timing now
+    motors_guard(s);   // re-arm hard limits ahead of anything that moves
     if (!sendq_push(&s_sendq, s)) {
         // A machine command has been thrown away. Say so; a silently dropped
         // G10 or $H is exactly the kind of thing that gets blamed on the
@@ -292,6 +296,10 @@ void send_jog_line(const char* s) {
     // which is the runaway the whole design avoids. If the controller has not
     // acked the last one it is behind, so skip this chunk -- the axis pauses
     // for a tick and catches up on the next.
+    // Steppers released: queue it behind the re-arm lines, and never let a
+    // later chunk overtake lines still queued.
+    if (motors_released()) { send_line(s); return; }
+    if (s_sendq.count) return;
     if (send_busy()) return;
     send_now(s);
     dbg_println(s);
@@ -387,6 +395,7 @@ extern "C" void show_state(const char* state_string) {
         // Leaving Alarm retires its number: the next alarm must be fetched
         // or reported afresh, never shown with the last one's.
         if (state == Alarm) lastAlarm = 0;
+        homed_note_state(state == Homing, new_state == Alarm, new_state == Disconnected);
         state = new_state;
         if (state == Alarm && lastAlarm == 0) {  // Unknown
             send_line("$A");                     // Get last alarm
@@ -426,6 +435,7 @@ extern "C" void handle_other(char* line) {
     int alarmlen = strlen("Active alarm: ");
     if (strncmp(line, "Active alarm: ", alarmlen) == 0) {
         lastAlarm = atoi(line + alarmlen);
+        homed_note_alarm(lastAlarm);
         if (awaiting_alarm) {
             dbg_printf("Got alarm %d\n", lastAlarm);
             awaiting_alarm = false;
@@ -501,6 +511,7 @@ extern "C" void show_alarm(int alarm) {
         clog_add(b);
     }
     lastAlarm = alarm;
+    homed_note_alarm(alarm);
     request_redisplay();
 }
 
