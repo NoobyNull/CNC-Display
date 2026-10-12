@@ -18,8 +18,8 @@
 #include <stdio.h>
 #include <string.h>
 
-// Firmware fetched over WiFi from the repo, staged on the SD card, then
-// flashed from there. WiFi exists
+// Firmware fetched over WiFi from the repo, staged on the SD card (or in PSRAM
+// when the card's pins belong to the status bar), then flashed from there. WiFi exists
 // ONLY inside the update: the RGB panel ISR is not IRAM-safe, so the radio
 // (and the OTA writes themselves) glitch the scanout — which is fine, because
 // the whole affair ends in a reboot. The radio is forced off on every exit
@@ -33,6 +33,39 @@ static const uint32_t    FETCH_STALL_MS = 15000;
 // Both phases copy through this; static because a 4K stack array next to a
 // TLS session is a lot to ask of the loop task's stack.
 static uint8_t buf[4096];
+
+// Where the download is staged: the SD card when the slot is wired in (DIP on
+// TF-CARD), else PSRAM (DIP on WM, where the status bar takes the pin). Both
+// resume the same way; the card only adds room to spare.
+static bool     s_to_sd;
+static File     s_part;
+static uint8_t* s_ram;
+static size_t   s_ram_cap, s_ram_len;
+
+static bool stage_open(size_t* have) {            // what is already staged
+    if (!s_to_sd) { *have = s_ram_len; return true; }
+    s_part = SD.open(FW_PART, FILE_APPEND);
+    *have = s_part ? s_part.size() : 0;
+    return (bool)s_part;
+}
+static void stage_restart() {                     // server ignored the range
+    if (s_to_sd) { s_part.close(); s_part = SD.open(FW_PART, FILE_WRITE); }
+    else         s_ram_len = 0;
+}
+static bool stage_reserve(size_t total) {         // RAM only, once the size is known
+    if (s_to_sd || s_ram) return true;
+    s_ram_cap = total ? total : 4 * 1024 * 1024;  // chunked: room for any app slot
+    s_ram     = (uint8_t*)ps_malloc(s_ram_cap);
+    return s_ram != nullptr;
+}
+static bool stage_write(const uint8_t* p, size_t n) {
+    if (s_to_sd) return s_part.write(p, n) == n;
+    if (s_ram_len + n > s_ram_cap) return false;
+    memcpy(s_ram + s_ram_len, p, n);
+    s_ram_len += n;
+    return true;
+}
+static void stage_close() { if (s_to_sd && s_part) s_part.close(); }
 
 // ---------------- progress modal ----------------
 static lv_obj_t *s_m, *s_note;
@@ -236,29 +269,26 @@ bool fwupd_net() {
     snprintf(ip, sizeof(ip), "%s  fetching...", WiFi.localIP().toString().c_str());
     ui_note_set(ip, C_DIM);
 
-    // Phase 1: download to the SD card. A stall or a dropped connection costs
-    // a reconnect, not the download: the retry asks for the missing bytes
-    // only (HTTP Range; Gitea behind Cloudflare answers 206). Each update
-    // starts a fresh file, so a part left by an older image is never resumed
-    // into a newer one.
-    if (!sd_present()) { fail("no SD card - the update downloads to it"); return false; }
-    sd_mkdir("/fw");
-    SD.remove(FW_PART);
+    // Phase 1: download. A stall or a dropped connection costs a reconnect,
+    // not the download: the retry asks for the missing bytes only (HTTP
+    // Range; Gitea behind Cloudflare answers 206). Each update starts fresh,
+    // so a part left by an older image is never resumed into a newer one.
+    s_to_sd = sd_present();
+    if (s_to_sd) { sd_mkdir("/fw"); SD.remove(FW_PART); }
 
     const char* url = settings_update_url();
     const bool https = strncmp(url, "https:", 6) == 0;
     size_t total = 0;          // whole image, once a response has said
     bool   ok    = false;
     for (int attempt = 1; attempt <= FETCH_TRIES && !ok; attempt++) {
-        File f = SD.open(FW_PART, FILE_APPEND);
-        if (!f) { fail("SD card: cannot write /fw"); return false; }
-        size_t have = f.size();
+        size_t have;
+        if (!stage_open(&have)) { fail("SD card: cannot write /fw"); return false; }
 
         WiFiClientSecure tls;
         WiFiClient       plain;
         HTTPClient       http;
         if (https) tls.setInsecure();           // Cloudflare cert chain, no store
-        if (!http.begin(https ? (WiFiClient&)tls : plain, url)) { f.close(); fail("bad update URL"); return false; }
+        if (!http.begin(https ? (WiFiClient&)tls : plain, url)) { stage_close(); fail("bad update URL"); return false; }
         // Cloudflare fronting the Gitea returns error 1010 without a browser-ish UA.
         http.setUserAgent("Mozilla/5.0 (X11; Linux) CNC-Console");
         http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -269,7 +299,7 @@ bool fwupd_net() {
         }
         const int code = http.GET();
         if (code == HTTP_CODE_OK && have) {      // server ignored the range: start over
-            f.close(); f = SD.open(FW_PART, FILE_WRITE); have = 0;
+            stage_restart(); have = 0;
         } else if (code != HTTP_CODE_OK && code != HTTP_CODE_PARTIAL_CONTENT) {
             // -1 is "connect failed" and says nothing more; the TLS error and
             // the internal heap are what tell DNS, handshake and out-of-RAM apart.
@@ -278,14 +308,15 @@ bool fwupd_net() {
             char e[96]; snprintf(e, sizeof(e), "HTTP %d %s (int heap %u/%u)", code, tl,
                                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-            http.end(); f.close();
+            http.end(); stage_close();
             if (code > 0) { fail(e); return false; }   // a real answer: retrying will not help
             clog_add(e);
             continue;
         }
         const int len = http.getSize();          // this response's body; -1 when chunked
         if (len > 0) total = have + (size_t)len;
-        if (total && total < 0x40000) { http.end(); f.close(); fail("file too small to be firmware"); return false; }
+        if (total && total < 0x40000) { http.end(); stage_close(); fail("file too small to be firmware"); return false; }
+        if (!stage_reserve(total)) { http.end(); fail("no PSRAM for download buffer"); return false; }
 
         WiFiClient* stream = http.getStreamPtr();
         uint32_t idle = millis();
@@ -300,25 +331,29 @@ bool fwupd_net() {
             }
             idle = millis();
             size_t n = stream->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
-            if (n && f.write(buf, n) != n) { http.end(); f.close(); fail("SD card write failed"); return false; }
+            if (n && !stage_write(buf, n)) {
+                http.end(); stage_close();
+                fail(s_to_sd ? "SD card write failed" : "download bigger than its buffer");
+                return false;
+            }
             have += n;
             const size_t pct = total ? have * 100 / total : 0;
             if (pct / 5 != shown) {
                 shown = pct / 5;
                 char note[64];
-                snprintf(note, sizeof(note), "Downloading to SD %u%%%s -- do not power off",
-                         (unsigned)pct, attempt > 1 ? " (resumed)" : "");
+                snprintf(note, sizeof(note), "Downloading%s %u%%%s -- do not power off",
+                         s_to_sd ? " to SD" : "", (unsigned)pct, attempt > 1 ? " (resumed)" : "");
                 ui_note_set(note, C_WARN);
             }
         }
         http.end();
-        f.close();
+        stage_close();
         ok = total ? have == total : have > 0x40000;   // chunked: end of stream is the end
     }
     WiFi.mode(WIFI_OFF);
     if (!ok) { fail("incomplete download"); return false; }
 
-    // Phase 2: flash from the SD file. The writes glitch the scanout no matter
+    // Phase 2: flash from the staged copy. The writes glitch the scanout no matter
     // what, so say what happens, cut the backlight, and burn it in the dark —
     // the reboot into the splash is the "done" signal. Update.end() verifies
     // the image before the boot selector moves, so a bad file cannot brick.
@@ -327,21 +362,25 @@ bool fwupd_net() {
     while (millis() - t_note < 1800) { ui_pump(); delay(30); }    // let it be read
     stc8_display(false);
 
-    File f = SD.open(FW_PART, FILE_READ);
-    const size_t size = f ? f.size() : 0;
+    File f;
+    if (s_to_sd) f = SD.open(FW_PART, FILE_READ);
+    const size_t size = s_to_sd ? (f ? f.size() : 0) : s_ram_len;
     ok = size && Update.begin(size);
     if (ok) {
         size_t w = 0;
         while (w < size) {
-            const size_t n = f.read(buf, sizeof(buf));
-            if (!n || Update.write(buf, n) != n) { ok = false; break; }
+            const uint8_t* src;
+            size_t n;
+            if (s_to_sd) { n = f.read(buf, sizeof(buf)); src = buf; }
+            else         { n = size - w > sizeof(buf) ? sizeof(buf) : size - w; src = s_ram + w; }
+            if (!n || Update.write((uint8_t*)src, n) != n) { ok = false; break; }
             w += n;
         }
         ok = ok && Update.end(true);
     }
     if (f) f.close();
     if (ok) {
-        SD.remove(FW_PART);
+        if (s_to_sd) SD.remove(FW_PART);
         delay(200);
         ESP.restart();                     // boot restores the backlight
     }
