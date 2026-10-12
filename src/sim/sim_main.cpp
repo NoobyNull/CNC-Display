@@ -10,6 +10,7 @@
 //
 // Window keys:
 //   1..5   force Idle / Run / Hold / Alarm / Jog on the fake controller
+//   6      play the next tool change of the Snowman job (atc_manual timing)
 //   space  freeze or resume the moving DRO position
 //   right-drag  hold = two-finger press: toggle config mode
 //   s      write shot.bmp
@@ -48,6 +49,7 @@
 void sim_transport_tick();
 void sim_set_state(const char* st);
 void sim_raise_alarm(int n);
+void sim_tool_change(int t);
 void sim_toggle_motion();
 bool sim_link_open(const char* path);
 
@@ -160,6 +162,7 @@ static bool s_gesture = false;
 
 // --alarm N: canned fake only; raised after settle, before any taps.
 static int s_alarm = 0;
+static int s_tool = 0;   // --toolchange N: canned fake pauses for tool N
 
 // Hold long enough that LVGL's indev timer (LV_INDEV_DEF_READ_PERIOD, 30ms)
 // cannot miss the press, then release and let the click event dispatch.
@@ -333,6 +336,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--no-devwin"))               want_devwin = false;
         else if (!strcmp(argv[i], "--gesture"))                 s_gesture = true;
         else if (!strcmp(argv[i], "--alarm") && i + 1 < argc)  s_alarm = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--toolchange") && i + 1 < argc) s_tool = atoi(argv[++i]);
     }
 
     if (link) sim_link_open(link);
@@ -381,6 +385,11 @@ int main(int argc, char** argv) {
             uint32_t until = millis() + 600;
             while (millis() < until) { step(); SDL_Delay(5); }
         }
+        if (s_tool) {
+            sim_tool_change(s_tool);
+            uint32_t until = millis() + 600;
+            while (millis() < until) { step(); SDL_Delay(5); }
+        }
         if (s_tap) run_taps(s_tap);
         const bool ok = write_bmp(shot);
         fprintf(stderr, ok ? "wrote %s\n" : "could not write %s\n", shot);
@@ -424,6 +433,7 @@ int main(int argc, char** argv) {
                         case SDLK_3: sim_set_state("Hold");  break;
                         case SDLK_4: sim_set_state("Alarm"); break;
                         case SDLK_5: sim_set_state("Jog");   break;
+                        case SDLK_6: sim_tool_change(0);     break;
                         case SDLK_SPACE: sim_toggle_motion(); break;
                         case SDLK_s: write_bmp("shot.bmp"); fprintf(stderr, "wrote shot.bmp\n"); break;
                         case SDLK_ESCAPE:

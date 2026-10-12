@@ -137,6 +137,12 @@ void home_wizard_tick() {
         return;
     }
     if (state == Disconnected) { close_wizard(); return; }   // reopens on relink
+    // A job (or a jog from elsewhere) started while it was still asking:
+    // get out of the way; it comes back next time the machine is Idle.
+    if (s_step == S_CHECK && !homed() && !(state == Idle || state == Alarm || state == Homing)) {
+        close_wizard();
+        return;
+    }
 
     if (homed() && s_step != S_TLO)               show(S_TLO);   // homed here or elsewhere
     else if (s_step == S_HOMING && state == Alarm) show(S_CHECK); // homing failed: say why

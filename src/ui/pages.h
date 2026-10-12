@@ -8,6 +8,7 @@ typedef void (*page_build_fn)(lv_obj_t* parent);
 enum page_id_t {
     PAGE_JOG = 0, PAGE_HOME, PAGE_PROBE, PAGE_OFFSETS,
     PAGE_RUN, PAGE_MACRO, PAGE_MOTION, PAGE_CAL, PAGE_DIAG, PAGE_SETUP,
+    PAGE_TOOLS,   // last: page ids index the saved page-enable mask
     PAGE_COUNT
 };
 
@@ -21,6 +22,7 @@ void page_motion_build(lv_obj_t* p);
 void page_cal_build(lv_obj_t* p);
 void page_diag_build(lv_obj_t* p);
 void page_setup_build(lv_obj_t* p);
+void page_tools_build(lv_obj_t* p);
 
 // Called on the shared 20 Hz tick while the page is visible.
 void page_jog_tick();
@@ -33,6 +35,7 @@ void page_diag_tick();
 void page_cal_tick();
 void page_motion_tick();
 void page_macro_tick();
+void page_tools_tick();
 // These two re-gate their controls against the capability model, so they run
 // even while off screen — a page must be correct the instant it is shown, not
 // one tick later.

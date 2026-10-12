@@ -45,7 +45,7 @@ bool sim_screenshot(const char* path);
 
 // Page names for --page, in page_id_t order.
 static const char* PAGE_NAMES[PAGE_COUNT] = {
-    "jog", "home", "probe", "offsets", "run", "macro", "motion", "cal", "diag", "setup"
+    "jog", "home", "probe", "offsets", "run", "macro", "motion", "cal", "diag", "setup", "tools"
 };
 
 static void ui_tick_cb(lv_timer_t*) { shell_tick(); }

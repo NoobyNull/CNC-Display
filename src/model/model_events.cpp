@@ -1,4 +1,5 @@
 #include "model/model_events.h"
+#include "model/toolchange.h"
 #include "model/console_log.h"
 #include "model/offsets.h"
 #include "model/filelist.h"
@@ -80,6 +81,7 @@ static void sniff_reset(const char* line) {
 
 void model_flag_message(const char* cmd, const char* args) {
     if (cmd && args && !strcasecmp(cmd, "PANEL") && !strcasecmp(args, "UPDATE")) s_update_req = true;
+    tc_note_message(args);
     char buf[CLOG_LINE_MAX];
     snprintf(buf, sizeof(buf), "[MSG:%s %s]", cmd ? cmd : "", args ? args : "");
     sniff_board(buf);

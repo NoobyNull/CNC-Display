@@ -24,6 +24,9 @@ lv_obj_t* w_label(lv_obj_t* parent, const char* text, const lv_font_t* font, lv_
 // `reason` replaces the button's sub-label while disabled and is restored on
 // re-enable; it needs the button to have been given a `sub` at build time.
 void w_gate(lv_obj_t* btn, bool enabled, const char* reason);
+// Change a w_button()'s sub-label after build, including the text w_gate()
+// restores on re-enable.
+void w_set_sub(lv_obj_t* btn, const char* text);
 
 // One on-screen keyboard shared by every page that needs text entry. Created on
 // the screen rather than inside a page so it can cover the whole panel.

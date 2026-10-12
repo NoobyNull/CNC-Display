@@ -5,6 +5,7 @@
 #include "model/fnc_codes.h"
 #include "ui/goto_popup.h"
 #include "ui/home_wizard.h"
+#include "ui/tool_popup.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
 #include "model/caps.h"
@@ -23,7 +24,7 @@
 // panel height, with every target at the full 10U. Fitting all eight at once
 // would mean 7.5U items and a broken grid; a nested menu would cost a tap on
 // things used constantly.
-#define NAV_COUNT   10
+#define NAV_COUNT   11
 
 // How many nav slots fit in the rail between the two scroll arrows. Derived from
 // the panel rather than fixed: this was hardcoded to 5, which exactly filled the
@@ -36,7 +37,7 @@ static const int NAV_VISIBLE = NAV_FIT > NAV_COUNT ? NAV_COUNT : NAV_FIT;
 static_assert(NAV_VISIBLE >= 1, "rail is too short for a single nav slot");
 
 static const char* NAV_LABEL[NAV_COUNT] = {
-    "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "MOTION", "CAL", "DIAG", "SETUP"
+    "JOG", "HOME", "PROBE", "OFFSET", "RUN", "MACRO", "MOTION", "CAL", "DIAG", "SETUP", "TOOLS"
 };
 static_assert(sizeof(NAV_LABEL) / sizeof(NAV_LABEL[0]) == PAGE_COUNT,
               "every page needs a rail label");
@@ -157,7 +158,7 @@ enum ui_mode_t { MODE_RUN = 0, MODE_CONFIG };
 // remembers on a touch controller with a known stall is not an escape route.
 #define NAV_EXIT (-1)
 
-static const int RUN_PAGES[]    = { PAGE_JOG, PAGE_HOME, PAGE_PROBE, PAGE_RUN, PAGE_MACRO };
+static const int RUN_PAGES[]    = { PAGE_JOG, PAGE_HOME, PAGE_PROBE, PAGE_TOOLS, PAGE_RUN, PAGE_MACRO };
 static const int CONFIG_PAGES[] = { PAGE_SETUP, PAGE_OFFSETS, PAGE_CAL, PAGE_MOTION, PAGE_DIAG, NAV_EXIT };
 
 static const int RUN_N    = (int)(sizeof(RUN_PAGES) / sizeof(RUN_PAGES[0]));
@@ -336,23 +337,17 @@ static void hold_resume_paint() {
 }
 
 // ---- override faders --------------------------------------------------------
-// Each override tile is a vertical fader: press, drag up or down, release to
-// send; long-press snaps back to 100%. The tile is only ~64px tall, so the drag
-// is relative to where the finger landed and may run off the tile -- 1% per
-// pixel gives the full 10..200% over a comfortable thumb stroke. Feed and
-// spindle span FluidNC's 10..200% (Config.h FeedOverride); rapid only has
-// three real settings, so it steps 25/50/100 every OVR_RAPID_PX.
+// Each override tile shows its value and opens a full-width card on tap. The
+// tiles are 64px tall: a fader inside one was too short to hit a number on.
+// Feed and spindle span FluidNC's 10..200% (Config.h FeedOverride); rapid has
+// only three real settings, so it gets three buttons instead of a slider.
 static const int  OVR_MIN[3] = { 10, 0, 10 };
 static const int  OVR_MAX[3] = { 200, 100, 200 };
 static const int  OVR_DETENT = 4;         // +-% around 100 that snaps to 100
-static const int  OVR_RAPID_PX = 30;      // drag per rapid step
 static const uint32_t OVR_HOLD_MS = 1500; // show the sent value until Ov: catches up
 static int      s_ovr_target[3] = { -1, -1, -1 };   // -1 = not being set
-static int      s_ovr_start[3];                     // value under the finger at press
-static lv_coord_t s_ovr_y0[3];
-static bool     s_ovr_moved[3];                     // finger travelled: not a long-press
-static const lv_coord_t OVR_STILL_PX = 8;           // travel under this is "held still"
 static uint32_t s_ovr_sent_ms[3];
+static const char* const OVR_K[3] = { "FEED", "RAPID", "SPINDLE" };
 
 static int ovr_now(int i) {
     return i == 0 ? (int)myFro : i == 1 ? (int)myRro : (int)mySro;
@@ -370,19 +365,6 @@ static void ovr_show(int i, int v, lv_color_t col) {
     lv_label_set_text(s_ovr_val[i], b);
     lv_obj_set_style_text_color(s_ovr_val[i], col, 0);
     ovr_fill(i, v);
-}
-
-static int ovr_from_drag(int i, lv_coord_t dy) {   // dy > 0 = finger moved up
-    if (i == 1) {
-        static const int R[3] = { 25, 50, 100 };
-        int k = s_ovr_start[i] >= 100 ? 2 : s_ovr_start[i] >= 50 ? 1 : 0;
-        k += dy / OVR_RAPID_PX;
-        return R[k < 0 ? 0 : k > 2 ? 2 : k];
-    }
-    int v = s_ovr_start[i] + dy;
-    if (v < OVR_MIN[i]) v = OVR_MIN[i];
-    if (v > OVR_MAX[i]) v = OVR_MAX[i];
-    return (v > 100 - OVR_DETENT && v < 100 + OVR_DETENT) ? 100 : v;
 }
 
 // Reset first, then step from a known 100%: the result never depends on how
@@ -406,37 +388,122 @@ static void ovr_send(int i, int v) {
     for (; d < 0; d++)        fnc_realtime(fm);
 }
 
-static void ovr_cb(lv_event_t* e) {
-    const int i = (int)(intptr_t)lv_event_get_user_data(e);
-    const lv_event_code_t code = lv_event_get_code(e);
+// ---- the popout --------------------------------------------------------------
+static lv_obj_t* s_pop;          // scrim; nullptr while closed
+static int       s_pop_i;        // which override
+static lv_obj_t* s_pop_val;
+static lv_obj_t* s_pop_slider;   // feed/spindle only
 
-    // A slow drag outlasts the long-press time too; only a finger that has
-    // held still means "reset".
-    if (code == LV_EVENT_LONG_PRESSED && !s_ovr_moved[i]) {
-        s_ovr_target[i] = -1;          // the release must not send the drag value
-        ovr_send(i, 100);
-        ovr_show(i, 100, C_ACCENT);
-        s_ovr_sent_ms[i] = lv_tick_get();
-    } else if (code == LV_EVENT_PRESSED) {
-        lv_point_t pt;
-        lv_indev_get_point(lv_indev_get_act(), &pt);
-        s_ovr_y0[i] = pt.y;
-        s_ovr_start[i] = ovr_now(i);
-        s_ovr_target[i] = s_ovr_start[i];
-        s_ovr_moved[i] = false;
-    } else if (code == LV_EVENT_PRESSING && s_ovr_target[i] >= 0) {
-        lv_point_t pt;
-        lv_indev_get_point(lv_indev_get_act(), &pt);
-        const lv_coord_t dy = s_ovr_y0[i] - pt.y;
-        if (LV_ABS(dy) >= OVR_STILL_PX) s_ovr_moved[i] = true;
-        s_ovr_target[i] = ovr_from_drag(i, dy);
-        ovr_show(i, s_ovr_target[i], C_ACCENT);
-    } else if (code == LV_EVENT_RELEASED && s_ovr_target[i] >= 0) {
-        // A plain tap (no travel) changes nothing and sends nothing.
-        if (s_ovr_target[i] != s_ovr_start[i]) ovr_send(i, s_ovr_target[i]);
-        s_ovr_target[i] = -1;
-        s_ovr_sent_ms[i] = lv_tick_get();
+static void pop_close() {
+    if (!s_pop) return;
+    s_ovr_target[s_pop_i] = -1;
+    lv_obj_del(s_pop);
+    s_pop = s_pop_slider = s_pop_val = nullptr;
+}
+
+static void pop_show(int v, lv_color_t col) {
+    char b[12];
+    snprintf(b, sizeof(b), "%d%%", v);
+    lv_label_set_text(s_pop_val, b);
+    lv_obj_set_style_text_color(s_pop_val, col, 0);
+    if (s_pop_slider) lv_slider_set_value(s_pop_slider, v, LV_ANIM_OFF);
+}
+
+static void ovr_set(int i, int v) {
+    if (v < OVR_MIN[i]) v = OVR_MIN[i];
+    if (v > OVR_MAX[i]) v = OVR_MAX[i];
+    ovr_send(i, v);
+    ovr_show(i, v, C_ACCENT);
+    if (s_pop) pop_show(v, C_ACCENT);
+    s_ovr_target[i] = -1;
+    s_ovr_sent_ms[i] = lv_tick_get();
+}
+
+static int pop_snap(int v) { return (v > 100 - OVR_DETENT && v < 100 + OVR_DETENT) ? 100 : v; }
+
+// Dragging only previews; the value goes out once, on release.
+static void pop_slider_cb(lv_event_t* e) {
+    const int v = pop_snap(lv_slider_get_value(s_pop_slider));
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+        s_ovr_target[s_pop_i] = v;
+        pop_show(v, C_ACCENT);
+        ovr_show(s_pop_i, v, C_ACCENT);
+    } else {
+        ovr_set(s_pop_i, v);
     }
+}
+
+// Step buttons carry their delta; 0 means "back to 100%"; rapid's carry the
+// absolute value, tagged by adding 1000.
+static void pop_step_cb(lv_event_t* e) {
+    const int d = (int)(intptr_t)lv_event_get_user_data(e);
+    if (d >= 1000)  ovr_set(s_pop_i, d - 1000);
+    else if (d == 0) ovr_set(s_pop_i, 100);
+    else             ovr_set(s_pop_i, ovr_now(s_pop_i) + d);
+}
+
+static void pop_open(int i) {
+    if (s_pop) pop_close();
+    s_pop_i = i;
+    s_pop = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_pop);
+    lv_obj_set_size(s_pop, SCREEN_W, SCREEN_H - SAFETY_H);   // the safety bar stays live
+    lv_obj_set_style_bg_color(s_pop, C_BG, 0);
+    lv_obj_set_style_bg_opa(s_pop, LV_OPA_60, 0);
+    lv_obj_add_flag(s_pop, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_pop, [](lv_event_t*) { pop_close(); }, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t* card = w_panel(s_pop, C_SURFACE);
+    lv_obj_set_size(card, CONTENT_W - U * 4, LV_SIZE_CONTENT);
+    lv_obj_align(card, LV_ALIGN_BOTTOM_MID, RAIL_W / 2, -U);
+    lv_obj_set_style_pad_all(card, U * 2, 0);
+    lv_obj_set_style_pad_row(card, U * 2, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);   // taps on the card do not close it
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* head = lv_obj_create(card);
+    w_flatten(head);
+    lv_obj_set_size(head, LV_PCT(100), LV_SIZE_CONTENT);
+    w_label(head, OVR_K[i], &lv_font_montserrat_20, C_DIM);
+    s_pop_val = w_label(head, "", &lv_font_montserrat_40, C_TEXT);
+    lv_obj_align(s_pop_val, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_t* done = w_button(head, "DONE", nullptr, C_RAISE, C_TEXT,
+                              [](lv_event_t*) { pop_close(); }, nullptr);
+    lv_obj_set_size(done, U * 14, TOUCH_TAP);
+    lv_obj_align(done, LV_ALIGN_CENTER, 0, 0);
+
+    if (i != 1) {
+        s_pop_slider = lv_slider_create(card);
+        lv_obj_set_size(s_pop_slider, LV_PCT(100), U * 3);
+        lv_obj_set_style_pad_ver(card, U * 3, 0);              // room for the knob
+        lv_slider_set_range(s_pop_slider, OVR_MIN[i], OVR_MAX[i]);
+        lv_obj_set_style_bg_color(s_pop_slider, C_RAISE, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(s_pop_slider, C_ACCENT, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(s_pop_slider, C_TEXT, LV_PART_KNOB);
+        lv_obj_set_style_pad_all(s_pop_slider, U, LV_PART_KNOB);   // a fingertip-sized knob
+        lv_obj_set_ext_click_area(s_pop_slider, U * 3);
+        lv_obj_add_event_cb(s_pop_slider, pop_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+        lv_obj_add_event_cb(s_pop_slider, pop_slider_cb, LV_EVENT_RELEASED, nullptr);
+    }
+
+    lv_obj_t* row = lv_obj_create(card);
+    w_flatten(row);
+    lv_obj_set_size(row, LV_PCT(100), TOUCH_HOLD);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(row, U, 0);
+    static const char* const STEP_L[5] = { "-10", "-1", "100%", "+1", "+10" };
+    static const int         STEP_D[5] = { -10, -1, 0, 1, 10 };
+    static const char* const RAPID_L[3] = { "25%", "50%", "100%" };
+    static const int         RAPID_D[3] = { 1025, 1050, 1100 };
+    const int n = i == 1 ? 3 : 5;
+    for (int k = 0; k < n; k++) {
+        lv_obj_t* b = w_button(row, i == 1 ? RAPID_L[k] : STEP_L[k], nullptr, C_RAISE, C_TEXT,
+                               pop_step_cb, (void*)(intptr_t)(i == 1 ? RAPID_D[k] : STEP_D[k]));
+        lv_obj_set_flex_grow(b, 1);
+        lv_obj_set_height(b, LV_PCT(100));
+    }
+    pop_show(ovr_now(i), ovr_now(i) == 100 ? C_TEXT : C_WARN);
 }
 
 // $X clears the alarm lock. An alarm can land on any page, so this lives in
@@ -486,16 +553,14 @@ static void build_safety(lv_obj_t* parent) {
     lv_obj_set_flex_flow(s_ovr_box, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(s_ovr_box, U, 0);
 
-    static const char* OVR_K[3] = { "FEED", "RAPID", "SPINDLE" };
     for (int i = 0; i < 3; i++) {
         lv_obj_t* cell = w_panel(s_ovr_box, C_RAISE);
         lv_obj_set_flex_grow(cell, 1);
         lv_obj_set_height(cell, LV_PCT(100));
-        // A drag must stay with the fader, not scroll or swipe the page.
         lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_clear_flag(cell, LV_OBJ_FLAG_GESTURE_BUBBLE);
-        lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLL_CHAIN);
-        lv_obj_add_event_cb(cell, ovr_cb, LV_EVENT_ALL, (void*)(intptr_t)i);
+        lv_obj_add_event_cb(cell, [](lv_event_t* e) {
+            pop_open((int)(intptr_t)lv_event_get_user_data(e));
+        }, LV_EVENT_CLICKED, (void*)(intptr_t)i);
 
         // Created before the labels so it draws behind them.
         s_ovr_fill[i] = lv_obj_create(cell);
@@ -723,7 +788,7 @@ void shell_build() {
     page_build_fn BUILD[PAGE_COUNT] = {
         page_jog_build, page_home_build, page_probe_build, page_offsets_build,
         page_run_build, page_macro_build, page_motion_build, page_cal_build,
-        page_diag_build, page_setup_build
+        page_diag_build, page_setup_build, page_tools_build
     };
     for (int i = 0; i < PAGE_COUNT; i++) {
         s_pages[i] = lv_obj_create(s_content);
@@ -858,6 +923,7 @@ void shell_tick() {
         // the next Ov: report can reflect it -- otherwise the fader snaps back.
         if (s_ovr_target[i] >= 0 || lv_tick_elaps(s_ovr_sent_ms[i]) < OVR_HOLD_MS) continue;
         ovr_show(i, ovr[i], ovr[i] == 100 ? C_TEXT : C_WARN);
+        if (s_pop && s_pop_i == i) pop_show(ovr[i], ovr[i] == 100 ? C_TEXT : C_WARN);
     }
 
     switch (s_page) {
@@ -869,10 +935,12 @@ void shell_tick() {
         case PAGE_CAL:     page_cal_tick();     break;
         case PAGE_MACRO:   page_macro_tick();   break;
         case PAGE_MOTION:  page_motion_tick();  break;
+        case PAGE_TOOLS:   page_tools_tick();   break;
         default: break;
     }
     expanded_tick();
     home_wizard_tick();
+    tool_popup_tick();
 
     // Alarm, or motion the panel did not start, while released: the steppers
     // may be back on under someone's hands. Re-arm and re-enable to match.

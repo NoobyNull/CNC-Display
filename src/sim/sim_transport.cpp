@@ -148,6 +148,48 @@ void sim_raise_alarm(int n) {
     s_state = "Alarm";
 }
 void sim_toggle_motion() { s_moving = !s_moving; }
+// A job reaching "(MSG, Change to Tn: name)" + "M6 Tn" under atc_manual, timed
+// like the real thing: travel to the change position, pause for the operator,
+// then (on cycle start) measure on the toolsetter and go back to cutting.
+// t = 0 takes the next tool of the Snowman job.
+static uint32_t s_tc_at = 0;      // when the current phase ends; 0 = idle
+static int      s_tc_phase = 0;   // 1 travelling, 2 waiting, 3 measuring
+static int      s_tc_tool = 0;
+static int      s_cur_tool = 0;   // what $G reports
+static bool     s_tc_idle  = false; // started from Idle (the rack), so ends there
+
+void sim_tool_change(int t) {
+    static const int   TOOLS[] = { 2, 4, 12 };
+    static const char* NAMES[] = { "2 HOG Roughing End Mill {1/4\"} UP CUT",
+                                   "4 SpeTool W02003 SC Compression Spiral 1/4\" Dia",
+                                   "12 SpeTool W01016 Tapered Ball Nose 1/64\" Radius" };
+    static int next = 0;
+    const int k = next++ % 3;
+    s_tc_tool = t ? t : TOOLS[k];
+    char b[160];
+    snprintf(b, sizeof(b), "[MSG:INFO: MSG, Change to T%d: %s]\n", s_tc_tool, t ? "test tool" : NAMES[k]);
+    q_push(b);
+    s_state = "Run";
+    s_tc_phase = 1;
+    s_tc_at = millis() + 1500;
+}
+
+static void tool_change_tick(uint32_t now) {
+    if (!s_tc_phase || (int32_t)(now - s_tc_at) < 0) return;
+    if (s_tc_phase == 1) {
+        char b[96];
+        snprintf(b, sizeof(b), "[MSG:INFO: MSG, Install tool #%d then resume to continue]\n", s_tc_tool);
+        q_push(b);
+        s_state = "Hold:0";
+        s_tc_phase = 2;                     // until cycle start
+    } else if (s_tc_phase == 3) {
+        q_push("[MSG:INFO: TLO measured on the toolsetter (sim)]\n");
+        s_cur_tool = s_tc_tool;
+        s_state = s_tc_idle ? "Idle" : "Run";   // back to the cut, or to rest
+        s_tc_idle = false;
+        s_tc_phase = 0;
+    }
+}
 
 static void axis_positions(float* out, int n) {
     float t = (millis() - s_started) / 1000.0f;
@@ -206,7 +248,13 @@ static void canned_putchar(uint8_t c) {
     if (c == '?') { push_status_report(); return; }
     if (c == 0x11 || c == 0x13) return;
     if (c >= 0x80) { apply_override(c); return; }
-    if (c == 0x18) return;
+    if (c == 0x18) { s_tc_phase = 0; return; }
+    if (c == '~' && s_tc_phase == 2) {      // TOOL CHANGED / RESUME
+        s_state = "Run";
+        s_tc_phase = 3;
+        s_tc_at = millis() + 2500;          // seek + slow probe + return
+        return;
+    }
 
     if (c == '\n' || c == '\r') {
         if (!s_len) return;
@@ -215,7 +263,20 @@ static void canned_putchar(uint8_t c) {
         // Just enough machine for the homing walk-through: a homing cycle,
         // a TLO macro, and a $H that takes a moment.
         if (strcmp(s_line, "$H") == 0) { s_state = "Home"; s_home_until = millis() + 1500; }
-        if      (strcmp(s_line, "$#") == 0) q_push("[G54:0.000,0.000,0.000]\nok\n");
+        // The tool rack: M61 Q<n> sets the tool, M6 T<n> plays the atc_manual
+        // change (T0 just clears it), $G reports the T word back.
+        int n;
+        if (sscanf(s_line, "M61 Q%d", &n) == 1) s_cur_tool = n;
+        if (sscanf(s_line, "M6 T%d", &n) == 1) {
+            if (n) { s_tc_idle = strncmp(s_state, "Idle", 4) == 0; sim_tool_change(n); }
+            else s_cur_tool = 0;
+        }
+        if (strcmp(s_line, "$G") == 0) {
+            char g[96];
+            snprintf(g, sizeof(g), "[GC:G0 G54 G17 G21 G90 G94 M5 M9 T%d F0 S0]\nok\n", s_cur_tool);
+            q_push(g);
+        }
+        else if (strcmp(s_line, "$#") == 0) q_push("[G54:0.000,0.000,0.000]\nok\n");
         else if (strcmp(s_line, "$S") == 0) q_push("$Grbl/HomingCycleEnable=1\nok\n");
         else if (strcmp(s_line, "$CD") == 0)
             q_push("axes:\n  x:\n    motor0:\n      hard_limits: true\n"
@@ -278,6 +339,7 @@ void sim_transport_tick() {
     uint32_t now = millis();
     if (!s_started) s_started = now;
     if (s_home_until && (int32_t)(now - s_home_until) >= 0) { s_home_until = 0; s_state = "Idle"; }
+    tool_change_tick(now);
     if ((int32_t)(now - next) < 0) return;
     next = now + SIM_REPORT_MS;
     push_status_report();

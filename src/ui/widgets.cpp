@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "ui/widgets.h"
 #include <string.h>
 #include "model/FluidNCModel.h"
@@ -90,6 +91,13 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
     // the reason w_gate() writes has to be legible, which it is not on a
     // dimmed accent fill.
     lv_obj_set_style_bg_color(b, C_RAISE, LV_STATE_DISABLED);
+    // No transition into it: the theme's 80ms bg fade, started on a button
+    // disabled the moment it is built, left the fill at its enabled colour.
+    static const lv_style_prop_t no_props[] = { LV_STYLE_BG_COLOR, LV_STYLE_PROP_INV };
+    static lv_style_transition_dsc_t instant;
+    static bool inited = false;
+    if (!inited) { lv_style_transition_dsc_init(&instant, no_props, lv_anim_path_linear, 0, 0, nullptr); inited = true; }
+    lv_obj_set_style_transition(b, &instant, LV_STATE_DISABLED);
     if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
 
     lv_obj_t* col = lv_obj_create(b);
@@ -120,6 +128,14 @@ lv_obj_t* w_button(lv_obj_t* parent, const char* label, const char* sub,
     }
     lv_obj_set_user_data(b, sublbl);
     return b;
+}
+
+void w_set_sub(lv_obj_t* btn, const char* text) {
+    lv_obj_t* sub = btn ? (lv_obj_t*)lv_obj_get_user_data(btn) : nullptr;
+    if (!sub) return;
+    free(lv_obj_get_user_data(sub));             // w_gate()'s remembered text
+    lv_obj_set_user_data(sub, (void*)strdup(text));
+    if (!lv_obj_has_state(btn, LV_STATE_DISABLED)) lv_label_set_text(sub, text);
 }
 
 void w_gate(lv_obj_t* btn, bool enabled, const char* reason) {

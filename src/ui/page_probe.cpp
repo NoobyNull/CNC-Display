@@ -45,6 +45,7 @@ static lv_obj_t* s_go;
 static lv_obj_t* s_state_key;
 static lv_obj_t* s_state_val;
 static lv_obj_t* s_go_lbl;
+static lv_obj_t* s_tlo;
 static lv_obj_t* s_flat_box;      // flat-plate parameter rows
 static lv_obj_t* s_az_box;        // AutoZero corner picker
 static lv_obj_t* s_type_btn[2];
@@ -259,6 +260,11 @@ static void probe_cb(lv_event_t*) {
     send_linef("$J=G91F1000Z%.2f", (double)s_params[P_RETRACT].value);
 }
 
+static void tlo_cb(lv_event_t*) {
+    const int m = caps_tlo_macro();
+    if (m >= 0) send_linef("$RM=%s", caps_macro_name(m));
+}
+
 void page_probe_build(lv_obj_t* p) {
     for (int i = 0; i < P_N; i++)
         s_params[i].value = settings_get_float(s_params[i].key, s_params[i].def);
@@ -331,13 +337,19 @@ void page_probe_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(right, U, 0);
 
+    // A readout, not a control: one strip, so the column has room for TLO.
     lv_obj_t* st = w_panel(right, C_SURFACE);
-    lv_obj_set_width(st, LV_PCT(100));
-    lv_obj_set_flex_grow(st, 1);
+    lv_obj_set_size(st, LV_PCT(100), TOUCH_TAP);
     s_state_key = w_label(st, "PROBE INPUT", &lv_font_montserrat_10, C_DIM);
-    lv_obj_align(s_state_key, LV_ALIGN_CENTER, 0, -12);
+    lv_obj_align(s_state_key, LV_ALIGN_LEFT_MID, U, 0);
     s_state_val = w_label(st, "OPEN", &lv_font_montserrat_20, C_OK);
-    lv_obj_align(s_state_val, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_align(s_state_val, LV_ALIGN_RIGHT_MID, -U, 0);
+
+    // Measures the tool in the spindle on the fixed toolsetter and applies
+    // the length offset: the controller's own TLO macro, found from the config.
+    s_tlo = w_button(right, "TLO FROM SENSOR", "$RM", C_ACCENT, C_BG, tlo_cb, nullptr);
+    lv_obj_set_width(s_tlo, LV_PCT(100));
+    lv_obj_set_flex_grow(s_tlo, 1);
 
     s_go = lv_btn_create(right);
     lv_obj_set_width(s_go, LV_PCT(100));
@@ -381,6 +393,21 @@ void page_probe_tick() {
         }
         lv_label_set_text(s_state_key, ok ? "PROBE INPUT" : "NO PROBE PIN");
         lv_obj_set_style_text_color(s_state_val, ok ? C_OK : C_DIM, 0);
+    }
+
+    // TLO: needs the macro, and a machine sitting still to run it on.
+    {
+        const int m = caps_tlo_macro();
+        const bool idle = state == Idle;
+        static int seen_m = -2, seen_idle = -1, seen_l = -1;
+        if (m != seen_m || idle != seen_idle || locked != seen_l) {
+            seen_m = m; seen_idle = idle; seen_l = locked;
+            char sub[40];
+            snprintf(sub, sizeof(sub), "$RM=%s", m >= 0 ? caps_macro_name(m) : "");
+            w_set_sub(s_tlo, sub);
+            w_gate(s_tlo, m >= 0 && idle,
+                   m < 0 ? "no TLO macro in config" : locked ? LOCK_REASON : "machine busy");
+        }
     }
 
     // Live, every tick, NOT gated on caps: the whole point of this readout is
