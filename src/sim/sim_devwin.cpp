@@ -194,8 +194,10 @@ static void tick_display() {
             "STC8", stc8_present() ? "0x30 ready" : "no answer (sim)");
     snprintf(b, sizeof(b), "%lu scans", (unsigned long)touch_fresh_count());
     set_row(0, i++, touch_fresh_count() ? LAMP_GOOD : LAMP_UNKNOWN, "TOUCH", b);
+#ifdef HAS_SD_CARD
     set_row(0, i++, sd_present() ? LAMP_GOOD : LAMP_WARN,
             "SD", sd_present() ? "card present" : "no card");
+#endif
     set_row(0, i++, imu_present() ? LAMP_GOOD : LAMP_UNKNOWN,
             "IMU", imu_present() ? "fitted" : "not fitted");
     snprintf(b, sizeof(b), "%u%%", (unsigned)((get_backlight() * 100) / 255));

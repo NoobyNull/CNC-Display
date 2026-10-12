@@ -32,7 +32,8 @@ static uint8_t s_probe_corner = 0;
 // (wifi_en / host / port) stay dead.
 // Defaults are THIS machine's shop network and the repo's tokenized
 // latest-firmware URL (read-only token, revocable in Gitea as "cnc-panel-fw").
-// A wifi.txt on the SD card overrides all three — see fw_update.cpp.
+// In a HAS_SD_CARD build a wifi.txt on the card overrides all three —
+// see fw_update.cpp.
 static char s_ssid[33] = "YAX-Net";
 static char s_pass[65] = "REDACTED-WIFI";
 static char s_url[161] = "https://git.yax.family/api/v1/repos/matthew/CNC-Disply/raw/update.bin?ref=fw&token=REDACTEDREDACTEDREDACTEDREDACTEDREDACTED";

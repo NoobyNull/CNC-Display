@@ -1,4 +1,5 @@
 #include "hw/sdcard.h"
+#ifdef HAS_SD_CARD
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
@@ -90,3 +91,4 @@ void sd_log_close() {
 }
 
 bool sd_log_is_open() { return (bool)s_log; }
+#endif  // HAS_SD_CARD

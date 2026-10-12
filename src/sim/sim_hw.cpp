@@ -74,6 +74,7 @@ uint32_t touch_stat_errs() { return 0; }
 uint8_t  touch_int_level() { return sim_touch_down ? 0 : 1; }
 uint8_t  touch_last_status() { return sim_touch_down ? 0x81 : 0x00; }
 
+#ifdef HAS_SD_CARD
 // ---------------- SD card ----------------
 // Only /wifi.txt is ever read from the panel card; the sim has none.
 bool   sd_begin() { return true; }
@@ -96,6 +97,7 @@ void   sd_log_close() {}
 bool   sd_log_is_open() { return false; }
 bool   sd_mkdir(const char*) { return false; }
 bool   sd_exists(const char*) { return false; }
+#endif
 
 // ---------------- IMU ----------------
 // Absent, which is the panel's own default: no IMU is fitted unless one is

@@ -414,7 +414,7 @@ void page_setup_build(lv_obj_t* p) {
     lv_obj_set_flex_grow(rst, 1);
     lv_obj_set_height(rst, LV_PCT(100));
     // Firmware from the repo: WiFi up, fetch, flash, WiFi off, reboot.
-    // Creds bootstrap once from wifi.txt on the SD (ssid / pass / [url]).
+    // Creds: NVS or the built-in defaults (wifi.txt too, in a HAS_SD_CARD build).
     // Plain tap: long-press proved unreliable on the glass, and the update
     // modal itself arms with a tap-to-cancel countdown.
     lv_obj_t* net = w_button(sys, "UPDATE NET", "wifi", C_RAISE, C_WARN,

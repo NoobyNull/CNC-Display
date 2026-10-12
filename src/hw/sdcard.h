@@ -6,6 +6,7 @@
 // Holds /wifi.txt and the staged download (/fw) for the network firmware
 // update (fw_update.cpp), and the IMU logs. G-code
 // is never read from here: jobs run from the controller's own SD card.
+#ifdef HAS_SD_CARD
 bool   sd_begin();
 bool   sd_present();
 bool   sd_open(const char* path);
@@ -24,3 +25,19 @@ bool   sd_log_is_open();
 
 bool sd_mkdir(const char* path);             // true if it exists afterwards
 bool sd_exists(const char* path);
+#else
+// Built without the card (see HAS_SD_CARD in platformio.ini): nothing is ever
+// present, so every caller takes its no-card path and the SD code drops out.
+inline bool   sd_begin()                          { return false; }
+inline bool   sd_present()                        { return false; }
+inline bool   sd_open(const char*)                { return false; }
+inline size_t sd_read(uint8_t*, size_t)           { return 0; }
+inline void   sd_close()                          {}
+inline bool   sd_log_open(const char*)            { return false; }
+inline size_t sd_log_write(const void*, size_t)   { return 0; }
+inline void   sd_log_flush()                      {}
+inline void   sd_log_close()                      {}
+inline bool   sd_log_is_open()                    { return false; }
+inline bool   sd_mkdir(const char*)               { return false; }
+inline bool   sd_exists(const char*)              { return false; }
+#endif

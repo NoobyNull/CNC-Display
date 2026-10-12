@@ -13,13 +13,15 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#ifdef HAS_SD_CARD
 #include <SD.h>
+#endif
 #include <lvgl.h>
 #include <stdio.h>
 #include <string.h>
 
-// Firmware fetched over WiFi from the repo, staged on the SD card (or in PSRAM
-// when the card's pins belong to the status bar), then flashed from there. WiFi exists
+// Firmware fetched over WiFi from the repo, staged in PSRAM (or on the SD card
+// in a HAS_SD_CARD build), then flashed from there. WiFi exists
 // ONLY inside the update: the RGB panel ISR is not IRAM-safe, so the radio
 // (and the OTA writes themselves) glitch the scanout — which is fine, because
 // the whole affair ends in a reboot. The radio is forced off on every exit
@@ -27,7 +29,9 @@
 // selector keeps pointing at the running slot until Update.end() commits.
 
 // Staging file on the panel's SD, and how hard the download tries.
+#ifdef HAS_SD_CARD
 static const char* const FW_PART        = "/fw/update.part";
+#endif
 static const int         FETCH_TRIES    = 5;
 static const uint32_t    FETCH_STALL_MS = 15000;
 // Both phases copy through this; static because a 4K stack array next to a
@@ -37,20 +41,31 @@ static uint8_t buf[4096];
 // Where the download is staged: the SD card when the slot is wired in (DIP on
 // TF-CARD), else PSRAM (DIP on WM, where the status bar takes the pin). Both
 // resume the same way; the card only adds room to spare.
+#ifdef HAS_SD_CARD
 static bool     s_to_sd;
 static File     s_part;
+#else
+static const bool s_to_sd = false;   // built without the card
+#endif
 static uint8_t* s_ram;
 static size_t   s_ram_cap, s_ram_len;
 
 static bool stage_open(size_t* have) {            // what is already staged
-    if (!s_to_sd) { *have = s_ram_len; return true; }
-    s_part = SD.open(FW_PART, FILE_APPEND);
-    *have = s_part ? s_part.size() : 0;
-    return (bool)s_part;
+#ifdef HAS_SD_CARD
+    if (s_to_sd) {
+        s_part = SD.open(FW_PART, FILE_APPEND);
+        *have = s_part ? s_part.size() : 0;
+        return (bool)s_part;
+    }
+#endif
+    *have = s_ram_len;
+    return true;
 }
 static void stage_restart() {                     // server ignored the range
-    if (s_to_sd) { s_part.close(); s_part = SD.open(FW_PART, FILE_WRITE); }
-    else         s_ram_len = 0;
+#ifdef HAS_SD_CARD
+    if (s_to_sd) { s_part.close(); s_part = SD.open(FW_PART, FILE_WRITE); return; }
+#endif
+    s_ram_len = 0;
 }
 static bool stage_reserve(size_t total) {         // RAM only, once the size is known
     if (s_to_sd || s_ram) return true;
@@ -59,13 +74,19 @@ static bool stage_reserve(size_t total) {         // RAM only, once the size is 
     return s_ram != nullptr;
 }
 static bool stage_write(const uint8_t* p, size_t n) {
+#ifdef HAS_SD_CARD
     if (s_to_sd) return s_part.write(p, n) == n;
+#endif
     if (s_ram_len + n > s_ram_cap) return false;
     memcpy(s_ram + s_ram_len, p, n);
     s_ram_len += n;
     return true;
 }
-static void stage_close() { if (s_to_sd && s_part) s_part.close(); }
+static void stage_close() {
+#ifdef HAS_SD_CARD
+    if (s_to_sd && s_part) s_part.close();
+#endif
+}
 
 // ---------------- progress modal ----------------
 static lv_obj_t *s_m, *s_note;
@@ -187,6 +208,7 @@ static void fail(const char* what) {
 
 // ---------------- network update ----------------
 
+#ifdef HAS_SD_CARD
 // One-time credential bootstrap: /wifi.txt on the SD card, lines
 //   ssid
 //   password
@@ -215,18 +237,25 @@ static bool creds_from_sd() {
     clog_add("[MSG:UPDATE: wifi credentials read from SD]");
     return true;
 }
+#endif
 
 bool fwupd_net() {
     // The modal opens FIRST: every failure after this point is on-screen.
     // "Held the button and nothing happened" must not be a reachable state.
     ui_open("NETWORK UPDATE");
     if (!ui_countdown()) return cancelled();
+#ifdef HAS_SD_CARD
     // wifi.txt on the SD overrides stored creds whenever it is present — not
     // only when none are stored, or a baked-in default with a bad password
     // could never be corrected without a cable.
     creds_from_sd();
+#endif
     if (!*settings_wifi_ssid()) {
+#ifdef HAS_SD_CARD
         fail("no wifi creds - put wifi.txt (ssid/pass) on the SD");
+#else
+        fail("no wifi creds");
+#endif
         return false;
     }
     ui_note_set("joining wifi...", C_DIM);
@@ -273,8 +302,10 @@ bool fwupd_net() {
     // not the download: the retry asks for the missing bytes only (HTTP
     // Range; Gitea behind Cloudflare answers 206). Each update starts fresh,
     // so a part left by an older image is never resumed into a newer one.
+#ifdef HAS_SD_CARD
     s_to_sd = sd_present();
     if (s_to_sd) { sd_mkdir("/fw"); SD.remove(FW_PART); }
+#endif
 
     const char* url = settings_update_url();
     const bool https = strncmp(url, "https:", 6) == 0;
@@ -362,25 +393,34 @@ bool fwupd_net() {
     while (millis() - t_note < 1800) { ui_pump(); delay(30); }    // let it be read
     stc8_display(false);
 
+#ifdef HAS_SD_CARD
     File f;
     if (s_to_sd) f = SD.open(FW_PART, FILE_READ);
     const size_t size = s_to_sd ? (f ? f.size() : 0) : s_ram_len;
+#else
+    const size_t size = s_ram_len;
+#endif
     ok = size && Update.begin(size);
     if (ok) {
         size_t w = 0;
         while (w < size) {
             const uint8_t* src;
             size_t n;
+#ifdef HAS_SD_CARD
             if (s_to_sd) { n = f.read(buf, sizeof(buf)); src = buf; }
-            else         { n = size - w > sizeof(buf) ? sizeof(buf) : size - w; src = s_ram + w; }
+            else
+#endif
+            { n = size - w > sizeof(buf) ? sizeof(buf) : size - w; src = s_ram + w; }
             if (!n || Update.write((uint8_t*)src, n) != n) { ok = false; break; }
             w += n;
         }
         ok = ok && Update.end(true);
     }
+#ifdef HAS_SD_CARD
     if (f) f.close();
+    if (ok && s_to_sd) SD.remove(FW_PART);
+#endif
     if (ok) {
-        if (s_to_sd) SD.remove(FW_PART);
         delay(200);
         ESP.restart();                     // boot restores the backlight
     }

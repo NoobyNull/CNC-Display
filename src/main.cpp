@@ -109,7 +109,9 @@ void setup() {
     filelist_reset();
 
     transport_init();
+#ifdef HAS_SD_CARD
     sd_begin();
+#endif
 
     // Apply the saved sensitivity before the IMU starts feeding samples, or the
     // first seconds of a session run on the compiled defaults instead of the
@@ -119,7 +121,7 @@ void setup() {
     status_led_begin();
     // Where a dark status bar is diagnosed: the pin must belong to RMT_TX.
     // SPI_MASTER_MISO means the SD card still holds it (DIP on MIC & TF).
-    bootlog_printf("SD %s; status bar IO%d owned by %s", sd_present() ? "mounted" : "absent",
+    bootlog_printf("SD %s; status bar IO%d owned by %s", sd_present() ? "mounted" : "not built in",
                    status_led_pin(), perimanGetTypeName(perimanGetPinBusType(status_led_pin())));
 
     shell_build();
@@ -209,9 +211,11 @@ static void console_cmd() {
     if (settings_uart_enabled()) return;
     while (Serial.available()) {
         switch (Serial.read()) {
+#ifdef HAS_SD_CARD
         case 'r':
             if (!imulog_start()) Serial.printf("# start failed: %s\r\n", imulog_status());
             break;
+#endif
         case 's':
             imulog_stop();
             imulog_set_tty(false);
@@ -229,7 +233,11 @@ static void console_cmd() {
                           imu_present() ? "yes" : "NOT FOUND");
             break;
         case 'h':
+#ifdef HAS_SD_CARD
             Serial.println("# r=record to SD  s=stop  t=toggle console stream  ?=status");
+#else
+            Serial.println("# t=toggle console stream  s=stop  ?=status");
+#endif
             break;
         default:
             break;    // newlines and stray bytes from a terminal

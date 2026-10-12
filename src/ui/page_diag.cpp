@@ -564,6 +564,7 @@ void page_diag_build(lv_obj_t* p) {
         lv_obj_set_height(b, LV_PCT(100));
     }
 
+#ifdef HAS_SD_CARD   // records to the card; without one the button is not built
     // Raw 3-axis recorder to the card. A tap, not a hold: it is safe in both
     // directions and gets used mid-job, which is exactly when a long-press on a
     // panel next to a running spindle is the wrong gesture.
@@ -578,6 +579,7 @@ void page_diag_build(lv_obj_t* p) {
     // that, so the caption is a grandchild. The sub-label is not walked for at
     // all — w_button() stashes it in the button's user_data for w_gate().
     s_rec_lbl = lv_obj_get_child(lv_obj_get_child(s_rec_btn, 0), 0);
+#endif
 
     // $CD=<file> dumps the LIVE config tree over the file the controller boots
     // from — the persistence FluidNC has but never documents. It rewrites the
