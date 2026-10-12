@@ -13,17 +13,26 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <SD.h>
 #include <lvgl.h>
 #include <stdio.h>
 #include <string.h>
 
-// Firmware fetched over WiFi from the repo. (An SD-card /update.bin path used
-// to sit alongside this one; it went once network OTA proved out.) WiFi exists
+// Firmware fetched over WiFi from the repo, staged on the SD card, then
+// flashed from there. WiFi exists
 // ONLY inside the update: the RGB panel ISR is not IRAM-safe, so the radio
 // (and the OTA writes themselves) glitch the scanout — which is fine, because
 // the whole affair ends in a reboot. The radio is forced off on every exit
 // path. The update is blocking, and a power loss mid-write is safe — the boot
 // selector keeps pointing at the running slot until Update.end() commits.
+
+// Staging file on the panel's SD, and how hard the download tries.
+static const char* const FW_PART        = "/fw/update.part";
+static const int         FETCH_TRIES    = 5;
+static const uint32_t    FETCH_STALL_MS = 15000;
+// Both phases copy through this; static because a 4K stack array next to a
+// TLS session is a lot to ask of the loop task's stack.
+static uint8_t buf[4096];
 
 // ---------------- progress modal ----------------
 static lv_obj_t *s_m, *s_note;
@@ -227,90 +236,118 @@ bool fwupd_net() {
     snprintf(ip, sizeof(ip), "%s  fetching...", WiFi.localIP().toString().c_str());
     ui_note_set(ip, C_DIM);
 
+    // Phase 1: download to the SD card. A stall or a dropped connection costs
+    // a reconnect, not the download: the retry asks for the missing bytes
+    // only (HTTP Range; Gitea behind Cloudflare answers 206). Each update
+    // starts a fresh file, so a part left by an older image is never resumed
+    // into a newer one.
+    if (!sd_present()) { fail("no SD card - the update downloads to it"); return false; }
+    sd_mkdir("/fw");
+    SD.remove(FW_PART);
+
     const char* url = settings_update_url();
-    WiFiClientSecure tls;
-    WiFiClient      plain;
-    HTTPClient http;
-    bool https = strncmp(url, "https:", 6) == 0;
-    if (https) tls.setInsecure();               // Cloudflare cert chain, no store
-    if (!http.begin(https ? (WiFiClient&)tls : plain, url)) { fail("bad update URL"); return false; }
-    // Cloudflare fronting the Gitea returns error 1010 without a browser-ish UA.
-    http.setUserAgent("Mozilla/5.0 (X11; Linux) CNC-Console");
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setTimeout(15000);
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        // -1 is "connect failed" and says nothing more; the TLS error and the
-        // internal heap are what tell DNS, handshake and out-of-RAM apart.
-        char tl[48] = "";
-        if (https && code < 0) tls.lastError(tl, sizeof(tl));
-        char e[96]; snprintf(e, sizeof(e), "HTTP %d %s (int heap %u/%u)", code, tl,
-                             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        http.end(); fail(e); return false;
-    }
-    int total = http.getSize();                 // -1 when chunked
-    if (total > 0 && total < 0x40000) { http.end(); fail("file too small to be firmware"); return false; }
+    const bool https = strncmp(url, "https:", 6) == 0;
+    size_t total = 0;          // whole image, once a response has said
+    bool   ok    = false;
+    for (int attempt = 1; attempt <= FETCH_TRIES && !ok; attempt++) {
+        File f = SD.open(FW_PART, FILE_APPEND);
+        if (!f) { fail("SD card: cannot write /fw"); return false; }
+        size_t have = f.size();
 
-    // No Update.begin() here: phase 2 opens the update once the size is known,
-    // and a second begin() on an open update is refused with no error code
-    // (the failure read "No Error").
-    // Phase 1: download the whole image into PSRAM. No flash writes happen
-    // here, so the screen stays essentially clean while the radio runs.
-    size_t cap = total > 0 ? (size_t)total : 4 * 1024 * 1024;
-    uint8_t* fwbuf = (uint8_t*)ps_malloc(cap);
-    if (!fwbuf) { http.end(); fail("no PSRAM for download buffer"); return false; }
-
-    ui_note_set("Downloading firmware -- do not power off", C_WARN);
-    WiFiClient* stream = http.getStreamPtr();
-    size_t done = 0;
-    uint32_t idle = millis();
-    bool ok = true;
-    while (http.connected() && done < cap && (total < 0 || done < (size_t)total)) {
-        size_t avail = stream->available();
-        if (!avail) {
-            if (millis() - idle > 15000) { ok = false; break; }   // stalled
-            ui_pump();
-            delay(10);
+        WiFiClientSecure tls;
+        WiFiClient       plain;
+        HTTPClient       http;
+        if (https) tls.setInsecure();           // Cloudflare cert chain, no store
+        if (!http.begin(https ? (WiFiClient&)tls : plain, url)) { f.close(); fail("bad update URL"); return false; }
+        // Cloudflare fronting the Gitea returns error 1010 without a browser-ish UA.
+        http.setUserAgent("Mozilla/5.0 (X11; Linux) CNC-Console");
+        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+        http.setTimeout(15000);
+        if (have) {
+            char r[32]; snprintf(r, sizeof(r), "bytes=%u-", (unsigned)have);
+            http.addHeader("Range", r);
+        }
+        const int code = http.GET();
+        if (code == HTTP_CODE_OK && have) {      // server ignored the range: start over
+            f.close(); f = SD.open(FW_PART, FILE_WRITE); have = 0;
+        } else if (code != HTTP_CODE_OK && code != HTTP_CODE_PARTIAL_CONTENT) {
+            // -1 is "connect failed" and says nothing more; the TLS error and
+            // the internal heap are what tell DNS, handshake and out-of-RAM apart.
+            char tl[48] = "";
+            if (https && code < 0) tls.lastError(tl, sizeof(tl));
+            char e[96]; snprintf(e, sizeof(e), "HTTP %d %s (int heap %u/%u)", code, tl,
+                                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+            http.end(); f.close();
+            if (code > 0) { fail(e); return false; }   // a real answer: retrying will not help
+            clog_add(e);
             continue;
         }
-        idle = millis();
-        size_t want = avail > 4096 ? 4096 : avail;
-        if (want > cap - done) want = cap - done;
-        size_t n = stream->readBytes(fwbuf + done, want);
-        if (!n) continue;
-        done += n;
-    }
-    http.end();
-    WiFi.mode(WIFI_OFF);
-    ok = ok && (total < 0 ? done > 0x40000 : done == (size_t)total);
-    if (!ok) { free(fwbuf); fail("incomplete download"); return false; }
+        const int len = http.getSize();          // this response's body; -1 when chunked
+        if (len > 0) total = have + (size_t)len;
+        if (total && total < 0x40000) { http.end(); f.close(); fail("file too small to be firmware"); return false; }
 
-    // Phase 2: flash from RAM. The writes glitch the scanout no matter what,
-    // so say what happens, cut the backlight, and burn it in the dark — the
-    // reboot into the splash is the "done" signal.
+        WiFiClient* stream = http.getStreamPtr();
+        uint32_t idle = millis();
+        size_t   shown = (size_t)-1;
+        while (http.connected() && (!total || have < total)) {
+            size_t avail = stream->available();
+            if (!avail) {
+                if (millis() - idle > FETCH_STALL_MS) break;      // stalled: reconnect
+                ui_pump();
+                delay(10);
+                continue;
+            }
+            idle = millis();
+            size_t n = stream->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
+            if (n && f.write(buf, n) != n) { http.end(); f.close(); fail("SD card write failed"); return false; }
+            have += n;
+            const size_t pct = total ? have * 100 / total : 0;
+            if (pct / 5 != shown) {
+                shown = pct / 5;
+                char note[64];
+                snprintf(note, sizeof(note), "Downloading to SD %u%%%s -- do not power off",
+                         (unsigned)pct, attempt > 1 ? " (resumed)" : "");
+                ui_note_set(note, C_WARN);
+            }
+        }
+        http.end();
+        f.close();
+        ok = total ? have == total : have > 0x40000;   // chunked: end of stream is the end
+    }
+    WiFi.mode(WIFI_OFF);
+    if (!ok) { fail("incomplete download"); return false; }
+
+    // Phase 2: flash from the SD file. The writes glitch the scanout no matter
+    // what, so say what happens, cut the backlight, and burn it in the dark —
+    // the reboot into the splash is the "done" signal. Update.end() verifies
+    // the image before the boot selector moves, so a bad file cannot brick.
     ui_note_set("Updating -- please wait for the reboot", C_WARN);
     uint32_t t_note = millis();
     while (millis() - t_note < 1800) { ui_pump(); delay(30); }    // let it be read
     stc8_display(false);
 
-    ok = Update.begin(done);
+    File f = SD.open(FW_PART, FILE_READ);
+    const size_t size = f ? f.size() : 0;
+    ok = size && Update.begin(size);
     if (ok) {
         size_t w = 0;
-        while (w < done) {
-            size_t n = done - w > 0x10000 ? 0x10000 : done - w;
-            if (Update.write(fwbuf + w, n) != n) { ok = false; break; }
+        while (w < size) {
+            const size_t n = f.read(buf, sizeof(buf));
+            if (!n || Update.write(buf, n) != n) { ok = false; break; }
             w += n;
         }
         ok = ok && Update.end(true);
     }
-    free(fwbuf);
+    if (f) f.close();
     if (ok) {
+        SD.remove(FW_PART);
         delay(200);
         ESP.restart();                     // boot restores the backlight
     }
     stc8_display(true);
     display_resync();
-    fail(Update.errorString());
+    fail(size ? Update.errorString() : "SD card: cannot read the download");
     return false;
 }
+

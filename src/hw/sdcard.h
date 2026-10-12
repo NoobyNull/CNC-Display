@@ -3,7 +3,8 @@
 #include <stddef.h>
 
 // Panel-local microSD on HSPI: CS=10, MOSI=11, CLK=12, MISO=13.
-// Holds only /wifi.txt for the network firmware update (fw_update.cpp). G-code
+// Holds /wifi.txt and the staged download (/fw) for the network firmware
+// update (fw_update.cpp), and the IMU logs. G-code
 // is never read from here: jobs run from the controller's own SD card.
 bool   sd_begin();
 bool   sd_present();
