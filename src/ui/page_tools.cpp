@@ -5,7 +5,7 @@
 #include "GrblParserC.h"
 #include <stdio.h>
 
-// The tool rack (T0 by hand, T1-T5 in the OpenATC, T6+ off-rack), driven
+// The tool rack (T0 by hand, T1-T5 in the OpenATC on the right, T6+ off-rack), driven
 // through FluidNC's atc_manual until the OpenATC macro takes over M6:
 //   CURRENT  M61 Q0 then M61 Q<n>: this tool is in the spindle and Z was zeroed
 //            with it. Clears the old TLO and the toolsetter reference, no motion.
@@ -16,14 +16,15 @@
 // $G after each refreshes the T word that mySelectedTool comes from.
 
 // The machine's tools: T0 is whatever is fitted by hand, T1..RACK_POCKETS live
-// in the OpenATC rack along the far (high-Y) edge, pocket n holding Tn, and the
-// rest up to TOOL_MAX are numbered tools changed by hand. Both counts are the
-// hardware's, not the layout's: the grid below is sized from them.
+// in the OpenATC rack on the right-hand (high-X) side, stacked front to back
+// (pocket n holds Tn, pocket 1 nearest the operator), and the rest up to
+// TOOL_MAX are numbered tools changed by hand. Both counts are the hardware's,
+// not the layout's: the page below is sized from them.
 static const int RACK_POCKETS = 5;
 static const int TOOL_MAX     = 12;
-static const int COLS         = RACK_POCKETS + 2;   // T0, the rack, the readout
+static const int OFF_COLS     = 4;                  // left block: T0 + readout, then off-rack
 static const int OFF_RACK     = TOOL_MAX - RACK_POCKETS;
-static const int OFF_ROWS     = (OFF_RACK + COLS - 1) / COLS;
+static const int OFF_ROWS     = 1 + (OFF_RACK + OFF_COLS - 1) / OFF_COLS;
 
 static bool in_rack(int t) { return t >= 1 && t <= RACK_POCKETS; }
 
@@ -97,7 +98,8 @@ static void tool_cb(lv_event_t* e) {
     w_label(card, b, &lv_font_montserrat_40, C_TEXT);
     char where[64];
     if (s_tool == 0)          snprintf(where, sizeof(where), "Manual tool - fitted by hand, not tracked");
-    else if (in_rack(s_tool)) snprintf(where, sizeof(where), "Rack pocket %d - OpenATC, far end of the table", s_tool);
+    else if (in_rack(s_tool)) snprintf(where, sizeof(where), "Rack pocket %d of %d - OpenATC, right side, from the front",
+                                       s_tool, RACK_POCKETS);
     else                      snprintf(where, sizeof(where), "Not in the rack - changed by hand");
     w_label(card, where, &lv_font_montserrat_14, C_DIM);
 
@@ -120,52 +122,75 @@ static void tool_cb(lv_event_t* e) {
     gate_actions();
 }
 
-static lv_obj_t* tool_button(lv_obj_t* p, int t, const char* sub, int col, int row) {
+static lv_obj_t* tool_button(lv_obj_t* p, int t, const char* sub) {
     char b[8];
     snprintf(b, sizeof(b), "T%d", t);
-    lv_obj_t* btn = w_button(p, b, sub, C_SURFACE, C_TEXT, tool_cb, (void*)(intptr_t)t);
-    lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, col, 1, LV_GRID_ALIGN_STRETCH, row, 1);
-    return btn;
+    return w_button(p, b, sub, C_SURFACE, C_TEXT, tool_cb, (void*)(intptr_t)t);
 }
 
+static lv_obj_t* column(lv_obj_t* p) {
+    lv_obj_t* c = lv_obj_create(p);
+    w_flatten(c);
+    lv_obj_set_height(c, LV_PCT(100));
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(c, U, 0);
+    return c;
+}
+
+// Laid out the way the machine looks from the operator's side: the rack is a
+// column on the right with pocket 1 at the bottom (front), the hand tools on
+// the left.
 void page_tools_build(lv_obj_t* p) {
-    // Row 0 names the groups, row 1 is T0 + the rack as it sits on the machine
-    // + the readout, then the off-rack tools fill whole rows below.
-    static lv_coord_t cols[COLS + 1], rows[2 + OFF_ROWS + 1];
-    for (int i = 0; i < COLS; i++) cols[i] = LV_GRID_FR(1);
-    rows[0] = LV_GRID_CONTENT;
-    for (int i = 1; i < 2 + OFF_ROWS; i++) rows[i] = LV_GRID_FR(1);
-    cols[COLS] = rows[2 + OFF_ROWS] = LV_GRID_TEMPLATE_LAST;
-    lv_obj_set_grid_dsc_array(p, cols, rows);
-    lv_obj_set_layout(p, LV_LAYOUT_GRID);
-    lv_obj_set_style_pad_column(p, U, 0);
-    lv_obj_set_style_pad_row(p, U, 0);
+    lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(p, U * 2, 0);
 
-    lv_obj_t* h = w_label(p, "MANUAL", &lv_font_montserrat_10, C_DIM);
-    lv_obj_set_grid_cell(h, LV_GRID_ALIGN_CENTER, 0, 1, LV_GRID_ALIGN_CENTER, 0, 1);
-    h = w_label(p, "OPENATC RACK  -  far end of the table", &lv_font_montserrat_10, C_ACCENT);
-    lv_obj_set_grid_cell(h, LV_GRID_ALIGN_CENTER, 1, RACK_POCKETS, LV_GRID_ALIGN_CENTER, 0, 1);
+    // --- left: T0 and the readout, then the off-rack tools ---
+    lv_obj_t* left = column(p);
+    lv_obj_set_flex_grow(left, 3);
+    w_label(left, "BY HAND", &lv_font_montserrat_10, C_DIM);
+    lv_obj_t* grid = lv_obj_create(left);
+    w_flatten(grid);
+    lv_obj_set_width(grid, LV_PCT(100));
+    lv_obj_set_flex_grow(grid, 1);
+    static lv_coord_t cols[OFF_COLS + 1], rows[OFF_ROWS + 1];
+    for (int i = 0; i < OFF_COLS; i++) cols[i] = LV_GRID_FR(1);
+    for (int i = 0; i < OFF_ROWS; i++) rows[i] = LV_GRID_FR(1);
+    cols[OFF_COLS] = rows[OFF_ROWS] = LV_GRID_TEMPLATE_LAST;
+    lv_obj_set_grid_dsc_array(grid, cols, rows);
+    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
+    lv_obj_set_style_pad_column(grid, U, 0);
+    lv_obj_set_style_pad_row(grid, U, 0);
 
-    s_btn[0] = tool_button(p, 0, "hand", 0, 1);
-    for (int t = 1; t <= RACK_POCKETS; t++) {
-        char sub[12];
-        snprintf(sub, sizeof(sub), "pocket %d", t);
-        s_btn[t] = tool_button(p, t, sub, t, 1);
-        // The rack reads as one strip: a pocket outline rather than a plain key.
-        lv_obj_set_style_border_color(s_btn[t], C_ACCENT, 0);
-        lv_obj_set_style_border_opa(s_btn[t], LV_OPA_50, 0);
-    }
-    for (int k = 0; k < OFF_RACK; k++) {
-        const int t = RACK_POCKETS + 1 + k;
-        s_btn[t] = tool_button(p, t, nullptr, k % COLS, 2 + k / COLS);
-    }
-
-    lv_obj_t* now = w_panel(p, C_BG);
-    lv_obj_set_grid_cell(now, LV_GRID_ALIGN_STRETCH, COLS - 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
+    s_btn[0] = tool_button(grid, 0, "hand");
+    lv_obj_set_grid_cell(s_btn[0], LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
+    lv_obj_t* now = w_panel(grid, C_BG);
+    lv_obj_set_grid_cell(now, LV_GRID_ALIGN_STRETCH, 1, OFF_COLS - 1, LV_GRID_ALIGN_STRETCH, 0, 1);
     lv_obj_t* k = w_label(now, "IN SPINDLE", &lv_font_montserrat_10, C_DIM);
     lv_obj_align(k, LV_ALIGN_TOP_MID, 0, U);
     s_now = w_label(now, "--", &lv_font_montserrat_28, C_ACCENT);
     lv_obj_align(s_now, LV_ALIGN_CENTER, 0, U);
+    for (int n = 0; n < OFF_RACK; n++) {
+        const int t = RACK_POCKETS + 1 + n;
+        s_btn[t] = tool_button(grid, t, nullptr);
+        lv_obj_set_grid_cell(s_btn[t], LV_GRID_ALIGN_STRETCH, n % OFF_COLS, 1,
+                             LV_GRID_ALIGN_STRETCH, 1 + n / OFF_COLS, 1);
+    }
+
+    // --- right: the rack, back at the top, front at the bottom ---
+    lv_obj_t* rack = column(p);
+    lv_obj_set_flex_grow(rack, 1);
+    w_label(rack, "OPENATC RACK  -  back", &lv_font_montserrat_10, C_ACCENT);
+    for (int t = RACK_POCKETS; t >= 1; t--) {
+        char sub[12];
+        snprintf(sub, sizeof(sub), "pocket %d", t);
+        s_btn[t] = tool_button(rack, t, sub);
+        lv_obj_set_width(s_btn[t], LV_PCT(100));
+        lv_obj_set_flex_grow(s_btn[t], 1);
+        // The rack reads as one strip: a pocket outline rather than a plain key.
+        lv_obj_set_style_border_color(s_btn[t], C_ACCENT, 0);
+        lv_obj_set_style_border_opa(s_btn[t], LV_OPA_50, 0);
+    }
+    w_label(rack, "front", &lv_font_montserrat_10, C_ACCENT);
 }
 
 void page_tools_tick() {

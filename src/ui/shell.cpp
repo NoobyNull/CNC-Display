@@ -249,11 +249,13 @@ static void nav_pick_cb(lv_event_t* e) {
     shell_show_page((page_id_t)s_visible[idx]);
 }
 
-// Setup and Diag are the two pages with no business near a moving machine, so
-// they alone trade the DRO's strip for content height. The safety bar stays on
-// every page regardless.
+// Setup and Diag have no business near a moving machine, so they trade the
+// DRO's strip for content height; TOOLS does too, for the rack's sake. The
+// safety bar stays on every page regardless.
 static bool page_wants_dro(page_id_t id) {
-    return id != PAGE_SETUP && id != PAGE_DIAG;
+    // TOOLS too: five stacked pockets only reach a fingertip's height with
+    // the DRO's strip, and the page carries its own IN SPINDLE readout.
+    return id != PAGE_SETUP && id != PAGE_DIAG && id != PAGE_TOOLS;
 }
 
 void shell_show_page(page_id_t id) {
