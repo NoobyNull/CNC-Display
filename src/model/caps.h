@@ -64,6 +64,10 @@ bool caps_settled();
 size_t      caps_macro_count();
 const char* caps_macro_name(size_t i);   // the key, e.g. "Macro0"
 const char* caps_macro_body(size_t i);   // the g-code, for the button subtitle
+// The slot number to run it by: $RM=<n>. FluidNC 4.0.x reads only the first
+// character of $RM's argument as a digit and does not range-check it, so
+// "$RM=Macro1" indexes slot 29 of a 4-slot table. -1 if the name has none.
+int         caps_macro_num(size_t i);
 // The macro that applies a measured tool length: G43.1 Z with a computed value
 // (#var or [expr]); G43.1Z0 only clears one. -1 if none. Judged on the full
 // body, which caps_macro_body() truncates. Index into the macro list above.

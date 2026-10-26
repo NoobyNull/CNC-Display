@@ -262,7 +262,7 @@ static void probe_cb(lv_event_t*) {
 
 static void tlo_cb(lv_event_t*) {
     const int m = caps_tlo_macro();
-    if (m >= 0) send_linef("$RM=%s", caps_macro_name(m));
+    if (m >= 0 && caps_macro_num(m) >= 0) send_linef("$RM=%d", caps_macro_num(m));
 }
 
 void page_probe_build(lv_obj_t* p) {
@@ -403,7 +403,7 @@ void page_probe_tick() {
         if (m != seen_m || idle != seen_idle || locked != seen_l) {
             seen_m = m; seen_idle = idle; seen_l = locked;
             char sub[40];
-            snprintf(sub, sizeof(sub), "$RM=%s", m >= 0 ? caps_macro_name(m) : "");
+            snprintf(sub, sizeof(sub), "$RM=%d", m >= 0 ? caps_macro_num(m) : -1);
             w_set_sub(s_tlo, sub);
             w_gate(s_tlo, m >= 0 && idle,
                    m < 0 ? "no TLO macro in config" : locked ? LOCK_REASON : "machine busy");

@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-// FluidNC macros are named in the controller's config; $RM=<name> runs one.
+// FluidNC macros are named in the controller's config; $RM=<slot number> runs one.
 //
 // This page used to draw six buttons labelled macro0..macro5, invented here and
 // never checked against anything. FluidNC v4 defines FOUR slots, spelled with a
@@ -28,8 +28,8 @@ static size_t    s_shown = (size_t)-1;   // force a first pass
 
 static void macro_cb(lv_event_t* e) {
     size_t i = (size_t)(intptr_t)lv_event_get_user_data(e);
-    const char* name = caps_macro_name(i);
-    if (name && *name) send_linef("$RM=%s", name);
+    const int n = caps_macro_num(i);
+    if (n >= 0) send_linef("$RM=%d", n);
 }
 
 void page_macro_build(lv_obj_t* p) {

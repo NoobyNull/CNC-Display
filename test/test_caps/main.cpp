@@ -195,6 +195,8 @@ void test_tlo_macro_found_by_full_body() {
     feed_config(L, 3);
     TEST_ASSERT_EQUAL(1, caps_tlo_macro());
     TEST_ASSERT_EQUAL_STRING("Macro1", caps_macro_name(caps_tlo_macro()));
+    TEST_ASSERT_EQUAL(1, caps_macro_num(caps_tlo_macro()));   // $RM=1, never $RM=Macro1
+    TEST_ASSERT_EQUAL(0, caps_macro_num(0));
 }
 
 void test_no_tlo_macro() {

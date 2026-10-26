@@ -38,7 +38,7 @@ static void later_cb(lv_event_t*) { s_dismissed = homed_epoch(); close_wizard();
 static void done_cb(lv_event_t*)  { close_wizard(); }
 static void tlo_cb(lv_event_t*) {
     const int m = caps_tlo_macro();
-    if (m >= 0 && state == Idle) send_linef("$RM=%s", caps_macro_name(m));
+    if (m >= 0 && caps_macro_num(m) >= 0 && state == Idle) send_linef("$RM=%d", caps_macro_num(m));
     close_wizard();
 }
 
@@ -96,7 +96,7 @@ static void show(step_t st) {
     } else {
         char sub[48];
         const int m = caps_tlo_macro();
-        snprintf(sub, sizeof(sub), "$RM=%s", m >= 0 ? caps_macro_name(m) : "?");
+        snprintf(sub, sizeof(sub), "$RM=%d", m >= 0 ? caps_macro_num(m) : -1);
         text("HOMED", &lv_font_montserrat_20, C_OK);
         text("Optional: measure the tool in the spindle on the toolsetter (TLO).",
              &lv_font_montserrat_14, C_TEXT);

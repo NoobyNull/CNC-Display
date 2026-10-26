@@ -125,6 +125,11 @@ const char* caps_macro_name(size_t i) { return i < s_mcount ? s_mname[i] : ""; }
 const char* caps_macro_body(size_t i) { return i < s_mcount ? s_mbody[i] : ""; }
 int         caps_tlo_macro() { return s_mtlo; }
 uint16_t    caps_hard_limit_mask() { return s_hlmask; }
+int caps_macro_num(size_t i) {
+    const char* n = caps_macro_name(i);            // "Macro0".."Macro3"
+    if (strlen(n) != 6 || strncasecmp(n, "Macro", 5) != 0) return -1;
+    return (n[5] >= '0' && n[5] <= '3') ? n[5] - '0' : -1;   // FluidNC has four slots
+}
 
 static bool applies_tlo(const char* b) {
     static const char PAT[] = "G43.1Z";
