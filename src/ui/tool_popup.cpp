@@ -9,6 +9,7 @@
 static lv_obj_t* s_root;
 static int       s_shown_tool;
 static bool      s_shown_measured;
+static bool      s_shown_remove;
 
 static void close_popup() {
     if (!s_root) return;
@@ -28,6 +29,7 @@ static lv_obj_t* text(lv_obj_t* card, const char* t, const lv_font_t* f, lv_colo
 static void open_popup() {
     s_shown_tool     = tc_tool();
     s_shown_measured = tc_measured();
+    s_shown_remove   = tc_remove();
 
     // Same shape as the homing card: stops short of the safety bar.
     s_root = lv_obj_create(lv_layer_top());
@@ -45,18 +47,22 @@ static void open_popup() {
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
     char b[16];
-    snprintf(b, sizeof(b), "T%d", s_shown_tool);
-    text(card, "TOOL CHANGE", &lv_font_montserrat_14, C_WARN);
+    if (s_shown_tool < 0) snprintf(b, sizeof(b), "?");
+    else                  snprintf(b, sizeof(b), "T%d", s_shown_tool);
+    text(card, s_shown_remove ? "REMOVE TOOL" : "TOOL CHANGE", &lv_font_montserrat_14, C_WARN);
     text(card, b, &lv_font_montserrat_40, C_TEXT);
     if (*tc_name()) text(card, tc_name(), &lv_font_montserrat_16, C_TEXT);
-    text(card, s_shown_measured
-        ? "Install it, then TOOL CHANGED. The machine measures it on the toolsetter, "
-          "sets the length offset and goes back to the cut. Leave Z zero alone."
-        : "Install it, then TOOL CHANGED to resume. This file was posted without M6, "
-          "so the new tool will NOT be measured.",
-        &lv_font_montserrat_14, s_shown_measured ? C_DIM : C_WARN);
+    const char* how =
+        s_shown_remove   ? "Take it out of the spindle, then TOOL REMOVED. The rack does the rest: "
+                           "it picks up the next tool and measures it."
+      : s_shown_measured ? "Install it, then TOOL CHANGED. The machine measures it on the toolsetter, "
+                           "sets the length offset and goes back to the cut. Leave Z zero alone."
+                         : "Install it, then TOOL CHANGED to resume. This file was posted without M6, "
+                           "so the new tool will NOT be measured.";
+    text(card, how, &lv_font_montserrat_14, s_shown_measured || s_shown_remove ? C_DIM : C_WARN);
 
-    lv_obj_t* go = w_button(card, "TOOL CHANGED", s_shown_measured ? "measure + resume" : "resume",
+    lv_obj_t* go = w_button(card, s_shown_remove ? "TOOL REMOVED" : "TOOL CHANGED",
+                            s_shown_measured ? "measure + resume" : "resume",
                             C_OK, C_BG, changed_cb, nullptr);
     lv_obj_set_size(go, LV_PCT(100), TOUCH_HOLD);
 }
@@ -73,8 +79,9 @@ void tool_popup_tick() {
         if (s_root) { close_popup(); tc_clear(); }
         return;
     }
-    if (!tc_tool()) return;
-    // ponytail: rebuilt rather than updated when atc_manual's message lands on an open card
-    if (s_root && (s_shown_tool != tc_tool() || s_shown_measured != tc_measured())) close_popup();
+    if (!tc_pending()) return;
+    // ponytail: rebuilt rather than updated when the ATC's message lands on an open card
+    if (s_root && (s_shown_tool != tc_tool() || s_shown_measured != tc_measured() ||
+                   s_shown_remove != tc_remove())) close_popup();
     if (!s_root) open_popup();
 }

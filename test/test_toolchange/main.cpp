@@ -25,10 +25,36 @@ void test_atc_install_keeps_the_name_and_marks_measured() {
     TEST_ASSERT_TRUE(tc_measured());
 }
 
+void test_openatc_install_keeps_the_name() {
+    tc_note_message(" MSG, Change to T7: 7 Dovetail");
+    tc_note_message(" PRINT,Install tool T7 then resume to continue");
+    TEST_ASSERT_TRUE(tc_pending());
+    TEST_ASSERT_EQUAL(7, tc_tool());
+    TEST_ASSERT_FALSE(tc_remove());
+    TEST_ASSERT_TRUE(tc_measured());
+    TEST_ASSERT_EQUAL_STRING("7 Dovetail", tc_name());
+}
+
+void test_hand_tool_t0_is_a_real_request() {
+    tc_note_message(" PRINT,Install tool T0 then resume to continue");
+    TEST_ASSERT_TRUE(tc_pending());
+    TEST_ASSERT_EQUAL(0, tc_tool());
+}
+
+void test_removal_before_a_rack_pickup() {
+    tc_note_message(" PRINT,Remove tool T6 then resume to continue");
+    TEST_ASSERT_TRUE(tc_remove());
+    TEST_ASSERT_EQUAL(6, tc_tool());
+    tc_note_message(" PRINT,Remove the tool in the spindle then resume to continue");
+    TEST_ASSERT_TRUE(tc_remove());
+    TEST_ASSERT_EQUAL(-1, tc_tool());
+}
+
 void test_other_messages_ignored() {
     tc_note_message("uart_channel2 auto report interval set to 200 ms");
     tc_note_message(" MSG, TLO Z reset to 0");
-    TEST_ASSERT_EQUAL(0, tc_tool());
+    tc_note_message(" PRINT,ATC: T2 back in pocket 2");
+    TEST_ASSERT_FALSE(tc_pending());
 }
 
 int main() {
@@ -36,6 +62,9 @@ int main() {
     RUN_TEST(test_post_message_names_the_tool);
     RUN_TEST(test_old_post_text_is_trimmed);
     RUN_TEST(test_atc_install_keeps_the_name_and_marks_measured);
+    RUN_TEST(test_openatc_install_keeps_the_name);
+    RUN_TEST(test_hand_tool_t0_is_a_real_request);
+    RUN_TEST(test_removal_before_a_rack_pickup);
     RUN_TEST(test_other_messages_ignored);
     return UNITY_END();
 }

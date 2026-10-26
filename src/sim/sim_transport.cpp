@@ -155,7 +155,8 @@ void sim_toggle_motion() { s_moving = !s_moving; }
 static uint32_t s_tc_at = 0;      // when the current phase ends; 0 = idle
 static int      s_tc_phase = 0;   // 1 travelling, 2 waiting, 3 measuring
 static int      s_tc_tool = 0;
-static int      s_cur_tool = 0;   // what $G reports
+static int      s_cur_tool = -1;  // what $G reports; FluidNC boots not knowing
+static char     s_tc_msg_later[112];
 static bool     s_tc_idle  = false; // started from Idle (the rack), so ends there
 
 void sim_tool_change(int t) {
@@ -174,12 +175,42 @@ void sim_tool_change(int t) {
     s_tc_at = millis() + 1500;
 }
 
+// What openatc_m6.nc does, timed: rack tools go and come without a stop; a
+// hand tool going out before a rack pickup is a "Remove" stop, a hand tool
+// coming in is an "Install" stop. Then the toolsetter.
+static bool sim_rack(int t) { return t >= 1 && t <= 5; }
+void sim_atc_change(int to) {
+    s_tc_tool = to;
+    s_state = "Run";
+    if (sim_rack(to)) {
+        if (!sim_rack(s_cur_tool)) {
+            char b[96];
+            if (s_cur_tool < 0) snprintf(b, sizeof(b), "[MSG:INFO: PRINT,Remove the tool in the spindle then resume to continue]\n");
+            else                snprintf(b, sizeof(b), "[MSG:INFO: PRINT,Remove tool T%d then resume to continue]\n", s_cur_tool);
+            s_tc_msg_later[0] = 0;
+            snprintf(s_tc_msg_later, sizeof(s_tc_msg_later), "%s", b);
+            s_tc_phase = 1;                  // travel, then the removal stop
+        } else {
+            s_tc_phase = 3;                  // drop + pick up + measure, no stop
+        }
+        s_tc_at = millis() + 3000;
+        return;
+    }
+    snprintf(s_tc_msg_later, sizeof(s_tc_msg_later),
+             "[MSG:INFO: PRINT,Install tool T%d then resume to continue]\n", to);
+    s_tc_phase = 1;
+    s_tc_at = millis() + 1500;
+}
+
 static void tool_change_tick(uint32_t now) {
     if (!s_tc_phase || (int32_t)(now - s_tc_at) < 0) return;
     if (s_tc_phase == 1) {
-        char b[96];
-        snprintf(b, sizeof(b), "[MSG:INFO: MSG, Install tool #%d then resume to continue]\n", s_tc_tool);
-        q_push(b);
+        if (s_tc_msg_later[0]) { q_push(s_tc_msg_later); s_tc_msg_later[0] = 0; }
+        else {
+            char b[96];
+            snprintf(b, sizeof(b), "[MSG:INFO: MSG, Install tool #%d then resume to continue]\n", s_tc_tool);
+            q_push(b);
+        }
         s_state = "Hold:0";
         s_tc_phase = 2;                     // until cycle start
     } else if (s_tc_phase == 3) {
@@ -268,8 +299,8 @@ static void canned_putchar(uint8_t c) {
         int n;
         if (sscanf(s_line, "M61 Q%d", &n) == 1) s_cur_tool = n;
         if (sscanf(s_line, "M6 T%d", &n) == 1) {
-            if (n) { s_tc_idle = strncmp(s_state, "Idle", 4) == 0; sim_tool_change(n); }
-            else s_cur_tool = 0;
+            s_tc_idle = strncmp(s_state, "Idle", 4) == 0;
+            sim_atc_change(n);
         }
         if (strcmp(s_line, "$G") == 0) {
             char g[96];

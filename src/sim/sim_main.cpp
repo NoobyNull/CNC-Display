@@ -281,7 +281,10 @@ static void step() {
 // Drive one or more taps through the same indev the mouse uses, pumping the
 // loop throughout so LVGL actually samples the press and dispatches the click.
 static void run_taps(const char* spec) {
-    char buf[256];
+    // Long enough for a scripted walk through a whole tool change; a cut-off
+    // script silently skips its last taps and captures too early.
+    static char buf[2048];
+    if (strlen(spec) >= sizeof(buf)) fprintf(stderr, "[sim] --tap script too long, truncated\n");
     snprintf(buf, sizeof(buf), "%s", spec);
 
     for (char* tok = strtok(buf, ";"); tok; tok = strtok(nullptr, ";")) {
