@@ -126,3 +126,10 @@ The FluidNC model and protocol handling started from Mitch Bradley's
 [FluidDial](https://github.com/bdring/FluidDial) (GPLv3, kept in
 `FluidDial-main/`), and the parser is his
 [GrblParser](https://github.com/MitchBradley/GrblParser).
+
+## License
+
+[GNU General Public License v3.0](LICENSE). This project builds on FluidDial,
+which is GPLv3, so the whole is too: you may use, modify and share it, and
+anything you distribute that is built from it must be shared under the same
+terms, with its source.
