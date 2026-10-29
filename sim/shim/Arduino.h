@@ -50,6 +50,10 @@ struct SimSerial {
     void end() {}
     operator bool() const { return true; }
     size_t write(uint8_t c) { fputc(c, stdout); return 1; }
+    size_t write(const uint8_t* b, size_t n) { return fwrite(b, 1, n, stdout); }
+    int    availableForWrite() { return 4096; }      // stdout never pushes back
+    int    available() { return 0; }                 // no console input on the bench
+    int    read() { return -1; }
     size_t print(const char* s) { fputs(s ? s : "", stdout); return 1; }
     size_t print(int v) { return (size_t)::printf("%d", v); }
     size_t print(unsigned v) { return (size_t)::printf("%u", v); }

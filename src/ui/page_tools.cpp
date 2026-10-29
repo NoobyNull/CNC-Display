@@ -31,7 +31,8 @@ static lv_obj_t* s_now;            // "IN SPINDLE T4"
 static lv_obj_t* s_pop;
 static lv_obj_t* s_load;
 static int       s_tool;           // the tool the open card is about
-static uint32_t  s_shown = (uint32_t)-1;
+static uint32_t  s_shown;
+static bool      s_painted = false;   // s_shown is valid (it can be -1: unknown)
 
 static void pop_close() {
     if (!s_pop) return;
@@ -223,7 +224,8 @@ void page_tools_tick() {
         gate_actions();
     }
 
-    if (s_shown == mySelectedTool) return;
+    if (s_painted && s_shown == mySelectedTool) return;
+    s_painted = true;
     s_shown = mySelectedTool;
     gate_actions();
     char b[8];

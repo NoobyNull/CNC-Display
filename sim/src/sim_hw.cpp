@@ -257,6 +257,10 @@ bool  imu_present() { return false; }
 void  imu_poll()    {}
 float imu_last_magnitude() { return 0.0f; }
 uint8_t imu_address() { return 0; }
+// The recorder asks for its rate; no sensor here, so nothing ever samples at it.
+static uint16_t s_imu_rate = 50;
+void     imu_set_rate(uint16_t hz) { s_imu_rate = hz; }
+uint16_t imu_rate() { return s_imu_rate; }
 
 // --- OTA -------------------------------------------------------------------
 

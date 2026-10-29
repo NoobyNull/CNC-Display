@@ -165,10 +165,12 @@ void sim_tool_change(int t) {
                                    "4 SpeTool W02003 SC Compression Spiral 1/4\" Dia",
                                    "12 SpeTool W01016 Tapered Ball Nose 1/64\" Radius" };
     static int next = 0;
-    const int k = next++ % 3;
+    int k = next++ % 3;
+    for (int i = 0; t && i < 3; i++) if (TOOLS[i] == t) k = i;   // a Snowman tool keeps its name
     s_tc_tool = t ? t : TOOLS[k];
     char b[160];
-    snprintf(b, sizeof(b), "[MSG:INFO: MSG, Change to T%d: %s]\n", s_tc_tool, t ? "test tool" : NAMES[k]);
+    snprintf(b, sizeof(b), "[MSG:INFO: MSG, Change to T%d: %s]\n", s_tc_tool,
+             !t || TOOLS[k] == t ? NAMES[k] : "test tool");
     q_push(b);
     s_state = "Run";
     s_tc_phase = 1;
