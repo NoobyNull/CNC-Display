@@ -50,6 +50,7 @@ void sim_transport_tick();
 void sim_set_state(const char* st);
 void sim_raise_alarm(int n);
 void sim_tool_change(int t);
+extern bool s_atc_manual;
 void sim_toggle_motion();
 bool sim_link_open(const char* path);
 
@@ -340,6 +341,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--gesture"))                 s_gesture = true;
         else if (!strcmp(argv[i], "--alarm") && i + 1 < argc)  s_alarm = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--toolchange") && i + 1 < argc) s_tool = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--atc-manual"))              s_atc_manual = true;
     }
 
     if (link) sim_link_open(link);

@@ -68,6 +68,14 @@ const char* caps_macro_body(size_t i);   // the g-code, for the button subtitle
 // character of $RM's argument as a digit and does not range-check it, so
 // "$RM=Macro1" indexes slot 29 of a 4-slot table. -1 if the name has none.
 int         caps_macro_num(size_t i);
+
+// What M6 does on this controller, from the spindle's config. The tool card
+// has to promise what will really happen, and the two differ a lot:
+//   CAPS_ATC_MANUAL  atc: atc_manual. Every change is by hand; the first one
+//                    after T0 neither pauses nor measures.
+//   CAPS_ATC_MACRO   m6_macro: the OpenATC macro decides, rack included.
+enum caps_atc_t { CAPS_ATC_NONE = 0, CAPS_ATC_MANUAL, CAPS_ATC_MACRO };
+caps_atc_t  caps_atc();
 // The macro that applies a measured tool length: G43.1 Z with a computed value
 // (#var or [expr]); G43.1Z0 only clears one. -1 if none. Judged on the full
 // body, which caps_macro_body() truncates. Index into the macro list above.

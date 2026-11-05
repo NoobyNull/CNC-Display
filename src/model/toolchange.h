@@ -15,3 +15,10 @@ bool        tc_remove();     // true: take it OUT (the next one comes from the r
 const char* tc_name();       // tool name from the post's message, "" if none
 bool        tc_measured();   // resume measures it on the toolsetter and sets TLO
 void        tc_clear();
+
+// The tool FluidNC itself says is in the spindle. $G only gives the SELECTED
+// tool, which moves the moment M6 is read and stays there if the change dies;
+// the status report has no tool at all. So the panel asks with a PRINT, and the
+// reply lands here. -1 = FluidNC does not know, as after every boot and reset.
+#define TC_ASK_CURRENT "(PRINT,TOOLNOW %d#<_current_tool>)"
+int         tc_current();

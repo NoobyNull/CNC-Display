@@ -50,6 +50,15 @@ void test_removal_before_a_rack_pickup() {
     TEST_ASSERT_EQUAL(-1, tc_tool());
 }
 
+void test_current_tool_reply() {
+    TEST_ASSERT_EQUAL(-1, tc_current());
+    tc_note_message(" PRINT,TOOLNOW 3");
+    TEST_ASSERT_EQUAL(3, tc_current());
+    TEST_ASSERT_FALSE(tc_pending());
+    tc_note_message(" PRINT,TOOLNOW -1");
+    TEST_ASSERT_EQUAL(-1, tc_current());
+}
+
 void test_other_messages_ignored() {
     tc_note_message("uart_channel2 auto report interval set to 200 ms");
     tc_note_message(" MSG, TLO Z reset to 0");
@@ -65,6 +74,7 @@ int main() {
     RUN_TEST(test_openatc_install_keeps_the_name);
     RUN_TEST(test_hand_tool_t0_is_a_real_request);
     RUN_TEST(test_removal_before_a_rack_pickup);
+    RUN_TEST(test_current_tool_reply);
     RUN_TEST(test_other_messages_ignored);
     return UNITY_END();
 }

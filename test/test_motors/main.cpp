@@ -57,6 +57,7 @@ void test_line_classifier() {
     TEST_ASSERT_TRUE(motors_line_can_move("$SD/Run=/sd/a.nc"));
     TEST_ASSERT_FALSE(motors_line_can_move("$MD"));
     TEST_ASSERT_FALSE(motors_line_can_move("$#"));
+    TEST_ASSERT_FALSE(motors_line_can_move("(PRINT,TOOLNOW %d#<_current_tool>)"));
 }
 
 void settings_set_float(const char* key, float v);

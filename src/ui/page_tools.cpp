@@ -3,15 +3,25 @@
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
 #include "model/homed.h"
+#include "model/caps.h"
+#include "model/toolchange.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 
-// Tap a tool, LOAD or CANCEL. LOAD is M6 T<n> and FluidNC does the rest
-// (CNC-Wiring/openatc_m6.nc via m6_macro): the outgoing tool back to its
-// pocket or out by hand, the new one from its pocket or in by hand, measured
-// on the toolsetter, length offset applied. The hand steps are the tool-change
-// card's pauses. The card spells out the plan before you commit to it.
-// $G afterwards refreshes the T word that mySelectedTool comes from.
+// What a tool's card offers depends on what M6 really does on this controller
+// (caps_atc(), read from its config), because the card must not promise a rack
+// the controller is not running:
+//
+// OpenATC macro (m6_macro, CNC-Wiring/openatc_m6.nc): LOAD or CANCEL. LOAD is
+//   M6 T<n> and FluidNC does the rest, the card spelling out the plan first.
+//
+// atc_manual: every change is by hand, and it needs to be told what is in:
+//   CURRENT  M61 Q0, M61 Q<n>: this tool is in and Z was zeroed with it. No motion.
+//   LOAD     M6 T<n>. From a known tool: measures it if there is no reference
+//            yet, goes to the change position, pauses, measures the new one.
+//            From T0: goes to the change position and that is ALL -- no pause,
+//            no measuring. Fit the tool, zero Z, then CURRENT.
+//   UNLOAD   M6 T0: goes to the change position and clears the TLO.
 
 // The machine's tools: T0 is whatever is fitted by hand, T1..RACK_POCKETS live
 // in the OpenATC rack on the right-hand (high-X) side, stacked front to back
@@ -28,11 +38,10 @@ static bool in_rack(int t) { return t >= 1 && t <= RACK_POCKETS; }
 
 static lv_obj_t* s_btn[TOOL_MAX + 1];      // indexed by tool number, T0 included
 static lv_obj_t* s_now;            // "IN SPINDLE T4"
+static lv_obj_t* s_rack_lbl;
 static lv_obj_t* s_pop;
-static lv_obj_t* s_load;
+static lv_obj_t* s_act[3];          // LOAD, CURRENT, UNLOAD; the last two only by hand
 static int       s_tool;           // the tool the open card is about
-static uint32_t  s_shown;
-static bool      s_painted = false;   // s_shown is valid (it can be -1: unknown)
 
 static void pop_close() {
     if (!s_pop) return;
@@ -40,21 +49,35 @@ static void pop_close() {
     s_pop = nullptr;
 }
 
-// What is in the spindle: a tool number, or -1 when FluidNC does not know
-// (it starts there after every boot and reset).
+enum { A_LOAD, A_CURRENT, A_UNLOAD };
+
+static bool by_macro() { return caps_atc() == CAPS_ATC_MACRO; }
+
+// What is in the spindle. With the macro FluidNC knows, and -1 means it does
+// not. atc_manual never updates FluidNC's current tool, so there the selected
+// tool from $G is the best there is, and 0 means nothing declared yet.
 static int in_spindle() {
-    const int t = (int)mySelectedTool;
+    const int t = by_macro() ? tc_current() : (int)mySelectedTool;
     return (t < 0 || t > TOOL_MAX) ? -1 : t;
 }
 
-static void load_cb(lv_event_t*) {
-    send_linef("M6 T%d", s_tool);
+static void refresh_tool() {
     send_line("$G");
+    if (by_macro()) send_line(TC_ASK_CURRENT);
+}
+
+static void act_cb(lv_event_t* e) {
+    switch ((int)(intptr_t)lv_event_get_user_data(e)) {
+        case A_LOAD:    send_linef("M6 T%d", s_tool);                                   break;
+        case A_CURRENT: send_line("M61 Q0"); if (s_tool) send_linef("M61 Q%d", s_tool); break;
+        case A_UNLOAD:  send_line("M6 T0");                                             break;
+    }
+    refresh_tool();
     pop_close();
 }
 
 // The same decisions openatc_m6.nc makes, in words, so LOAD is never a surprise.
-static void plan(char* out, size_t n, int from, int to) {
+static void plan_macro(char* out, size_t n, int from, int to) {
     char a[48], b[56];
     if (in_rack(from))  snprintf(a, sizeof(a), "T%d back to pocket %d", from, from);
     else if (in_rack(to)) {
@@ -68,17 +91,34 @@ static void plan(char* out, size_t n, int from, int to) {
     snprintf(out, n, "%s%s%s  >  measure it", a, a[0] ? "  >  " : "", b);
 }
 
+// And what atc_manual will do. The T0 case is the one that catches people out.
+static void plan_manual(char* out, size_t n, int from, int to) {
+    if (to == 0)        snprintf(out, n, "Change position, length offset cleared.");
+    else if (from <= 0) snprintf(out, n, "LOAD only goes to the change position: it does not stop or measure. "
+                                         "Fit T%d, zero Z, then tap CURRENT. If T%d is already in, just tap CURRENT.", to, to);
+    else                snprintf(out, n, "Measure T%d if needed  >  change position  >  swap to T%d by hand  >  measure it",
+                                 from, to);
+}
+
 // Only what makes sense for what is in the spindle is offered; the rest says
-// why. A machine that is not Idle offers nothing.
-// LOAD needs a machine at rest that knows where it is (the rack and the
-// toolsetter are machine coordinates), and a tool that is not already in.
+// why. Anything that moves needs a machine at rest that knows where it is (the
+// change position, rack and toolsetter are machine coordinates).
 static void gate_actions() {
     if (!s_pop) return;
-    const char* why = state != Idle ? (w_locked() ? LOCK_REASON : "machine busy")
-                    : !homed()      ? "home first"
-                    : in_spindle() == s_tool ? "already in the spindle"
-                    : nullptr;
-    w_gate(s_load, why == nullptr, why);
+    static char why_cur[40], why_unl[40];
+    const int   in   = in_spindle();
+    const bool  idle = state == Idle;
+    const char* busy = w_locked() ? LOCK_REASON : "machine busy";
+    const char* move = !idle ? busy : !homed() ? "home first" : nullptr;
+
+    w_gate(s_act[A_LOAD], !move && in != s_tool, move ? move : "already in the spindle");
+    if (by_macro()) return;
+
+    snprintf(why_cur, sizeof(why_cur), "T%d is loaded: load or unload", in);
+    snprintf(why_unl, sizeof(why_unl), "T%d is loaded, not T%d", in, s_tool);
+    w_gate(s_act[A_CURRENT], idle && (in <= 0 || in == s_tool), !idle ? busy : why_cur);
+    w_gate(s_act[A_UNLOAD],  !move && in > 0 && in == s_tool,
+           move ? move : in <= 0 ? "spindle is empty" : why_unl);
 }
 
 static void tool_cb(lv_event_t* e) {
@@ -106,13 +146,15 @@ static void tool_cb(lv_event_t* e) {
     w_label(card, b, &lv_font_montserrat_40, C_TEXT);
     char where[64];
     if (s_tool == 0)          snprintf(where, sizeof(where), "Manual tool - fitted by hand, not tracked");
-    else if (in_rack(s_tool)) snprintf(where, sizeof(where), "Rack pocket %d of %d - OpenATC, right side, from the front",
-                                       s_tool, RACK_POCKETS);
+    else if (in_rack(s_tool) && by_macro())
+        snprintf(where, sizeof(where), "Rack pocket %d of %d - OpenATC, right side, from the front", s_tool, RACK_POCKETS);
+    else if (in_rack(s_tool)) snprintf(where, sizeof(where), "Pocket %d - rack not in use yet, changed by hand", s_tool);
     else                      snprintf(where, sizeof(where), "Not in the rack - changed by hand");
     w_label(card, where, &lv_font_montserrat_14, C_DIM);
     if (in_spindle() != s_tool) {
-        char p[128];
-        plan(p, sizeof(p), in_spindle(), s_tool);
+        char p[160];
+        if (by_macro()) plan_macro(p, sizeof(p), in_spindle(), s_tool);
+        else            plan_manual(p, sizeof(p), in_spindle(), s_tool);
         lv_obj_t* l = w_label(card, p, &lv_font_montserrat_14, C_TEXT);
         lv_obj_set_width(l, LV_PCT(100));
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
@@ -124,12 +166,21 @@ static void tool_cb(lv_event_t* e) {
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(row, U, 0);
 
-    s_load = w_button(row, "LOAD", "M6", C_ACCENT, C_BG, load_cb, nullptr);
-    lv_obj_set_flex_grow(s_load, 2);
-    lv_obj_set_height(s_load, LV_PCT(100));
     char m6[12];
     snprintf(m6, sizeof(m6), "M6 T%d", s_tool);
-    w_set_sub(s_load, m6);
+    s_act[A_LOAD] = w_button(row, "LOAD", m6, C_ACCENT, C_BG, act_cb, (void*)(intptr_t)A_LOAD);
+    lv_obj_set_flex_grow(s_act[A_LOAD], 2);
+    lv_obj_set_height(s_act[A_LOAD], LV_PCT(100));
+    if (!by_macro()) {
+        s_act[A_CURRENT] = w_button(row, "CURRENT", "in spindle, Z zeroed with it", C_OK, C_BG,
+                                    act_cb, (void*)(intptr_t)A_CURRENT);
+        s_act[A_UNLOAD]  = w_button(row, "UNLOAD", "M6 T0", C_RAISE, C_TEXT,
+                                    act_cb, (void*)(intptr_t)A_UNLOAD);
+        for (int k = A_CURRENT; k <= A_UNLOAD; k++) {
+            lv_obj_set_flex_grow(s_act[k], 2);
+            lv_obj_set_height(s_act[k], LV_PCT(100));
+        }
+    }
     lv_obj_t* cancel = w_button(row, "CANCEL", nullptr, C_RAISE, C_TEXT,
                                 [](lv_event_t*) { pop_close(); }, nullptr);
     lv_obj_set_flex_grow(cancel, 1);
@@ -194,7 +245,7 @@ void page_tools_build(lv_obj_t* p) {
     // --- right: the rack, back at the top, front at the bottom ---
     lv_obj_t* rack = column(p);
     lv_obj_set_flex_grow(rack, 1);
-    w_label(rack, "OPENATC RACK  -  back", &lv_font_montserrat_10, C_ACCENT);
+    s_rack_lbl = w_label(rack, "OPENATC RACK  -  back", &lv_font_montserrat_10, C_ACCENT);
     for (int t = RACK_POCKETS; t >= 1; t--) {
         char sub[12];
         snprintf(sub, sizeof(sub), "pocket %d", t);
@@ -210,30 +261,37 @@ void page_tools_build(lv_obj_t* p) {
 
 void page_tools_tick() {
     static bool asked = false;
-    if (!asked && state != Disconnected) { send_line("$G"); asked = true; }   // T word, once
+    static int  asked_atc = -1;
     if (state == Disconnected) asked = false;
+    if ((!asked || asked_atc != (int)caps_atc()) && state != Disconnected) {   // once, and once the config says
+        refresh_tool();
+        asked = true;
+        asked_atc = (int)caps_atc();
+        lv_label_set_text(s_rack_lbl, by_macro() ? "OPENATC RACK  -  back" : "RACK (not in use)  -  back");
+    }
 
-    // Back at rest: a change (ours, or a job's) may have moved the T word.
     static bool was_homed = false;
     if (homed() != was_homed) { was_homed = homed(); gate_actions(); }
 
+    // Back at rest: a change (ours, or a job's) may have moved the tool.
     static state_t was = Disconnected;
     if (state != was) {
-        if (state == Idle && was != Disconnected) send_line("$G");
+        if (state == Idle && was != Disconnected) refresh_tool();
         was = state;
         gate_actions();
     }
 
-    if (s_painted && s_shown == mySelectedTool) return;
-    s_painted = true;
-    s_shown = mySelectedTool;
+    static int shown = -2;
+    const int now = in_spindle();
+    if (now == shown) return;
+    shown = now;
     gate_actions();
     char b[8];
-    if (in_spindle() < 0) snprintf(b, sizeof(b), "?");    // FluidNC does not know yet
-    else                  snprintf(b, sizeof(b), "T%d", in_spindle());   // T0 = the hand tool
+    if (now < 0) snprintf(b, sizeof(b), "?");          // FluidNC does not know
+    else         snprintf(b, sizeof(b), "T%d", now);   // T0 = the hand tool
     lv_label_set_text(s_now, b);
     for (int t = 0; t <= TOOL_MAX; t++) {
-        const bool on = t == in_spindle();
+        const bool on = t == now;
         lv_obj_set_style_bg_color(s_btn[t], on ? C_ACCENT : C_SURFACE, 0);
         lv_obj_set_style_text_color(lv_obj_get_child(lv_obj_get_child(s_btn[t], 0), 0), on ? C_BG : C_TEXT, 0);
     }

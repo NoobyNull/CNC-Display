@@ -8,12 +8,14 @@ static int  s_tool     = 0;
 static bool s_remove   = false;
 static char s_name[96];
 static bool s_measured = false;
+static int  s_current  = -1;
 
 bool        tc_pending()  { return s_pending; }
 int         tc_tool()     { return s_tool; }
 bool        tc_remove()   { return s_remove; }
 const char* tc_name()     { return s_name; }
 bool        tc_measured() { return s_measured; }
+int         tc_current()  { return s_current; }
 void        tc_clear()    { s_pending = false; s_tool = 0; s_remove = false; s_name[0] = 0; s_measured = false; }
 
 static void request(int t, bool remove, bool measured) {
@@ -27,6 +29,7 @@ static void request(int t, bool remove, bool measured) {
 void tc_note_message(const char* a) {
     if (!a) return;
     const char* p;
+    if ((p = strstr(a, "TOOLNOW "))) { s_current = atoi(p + 8); return; }
     // The operator steps. "#" from atc_manual; "T" from openatc_m6.nc, which
     // cannot print a literal '#' (FluidNC's PRINT reads it as a parameter).
     if ((p = strstr(a, "Install tool #")) || (p = strstr(a, "Install tool T"))) {

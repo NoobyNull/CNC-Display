@@ -23,6 +23,7 @@ static size_t s_mcount = 0;
 static char   s_mname[CAPS_MACRO_MAX][CAPS_MACRO_NAME_MAX];
 static char   s_mbody[CAPS_MACRO_MAX][CAPS_MACRO_NAME_MAX];
 static int    s_mtlo = -1;
+static caps_atc_t s_atc = CAPS_ATC_NONE;
 
 struct axis_t {
     char  letter;
@@ -124,6 +125,7 @@ size_t      caps_macro_count() { return s_mcount; }
 const char* caps_macro_name(size_t i) { return i < s_mcount ? s_mname[i] : ""; }
 const char* caps_macro_body(size_t i) { return i < s_mcount ? s_mbody[i] : ""; }
 int         caps_tlo_macro() { return s_mtlo; }
+caps_atc_t  caps_atc() { return s_atc; }
 uint16_t    caps_hard_limit_mask() { return s_hlmask; }
 int caps_macro_num(size_t i) {
     const char* n = caps_macro_name(i);            // "Macro0".."Macro3"
@@ -278,6 +280,7 @@ void caps_request_config() {
     s_mcount = 0;              // empty slots are the common case, dump proves otherwise
     s_mtlo = -1;
     s_hlmask = 0;
+    s_atc = CAPS_ATC_NONE;
     memset(s_gpio_role, 0, sizeof(s_gpio_role));
     send_line("$CD");
 }
@@ -361,6 +364,10 @@ bool caps_feed_line(const char* line) {
     }
 
     const char* v;
+    // Under whichever section names the spindle, so matched by key alone. An
+    // atc wins, as it does in Spindle::tool_change().
+    if ((v = yaml_value(line, "m6_macro")) && s_atc == CAPS_ATC_NONE && *v && *v != '\'' && *v != '"') s_atc = CAPS_ATC_MACRO;
+    if ((v = yaml_value(line, "atc")) && *v && *v != '\'' && *v != '"') s_atc = CAPS_ATC_MANUAL;
     if (strcmp(s_section, "probe") == 0) {
         if ((v = yaml_value(line, "pin")))            s_probe      = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
         if ((v = yaml_value(line, "toolsetter_pin"))) s_toolsetter = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;

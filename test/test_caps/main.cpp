@@ -205,6 +205,18 @@ void test_no_tlo_macro() {
     TEST_ASSERT_EQUAL(-1, caps_tlo_macro());
 }
 
+void test_atc_mode_follows_the_spindle_config() {
+    const char* M[] = { "atc_manual:", "  safe_z_mpos_mm: 90", "H100:", "  atc: atc_manual", "  m6_macro: " };
+    feed_config(M, 5);
+    TEST_ASSERT_EQUAL(CAPS_ATC_MANUAL, caps_atc());
+    const char* R[] = { "H100:", "  atc: ", "  m6_macro: $LocalFS/Run=openatc_m6.nc" };
+    feed_config(R, 3);
+    TEST_ASSERT_EQUAL(CAPS_ATC_MACRO, caps_atc());
+    const char* N[] = { "H100:", "  atc: ''", "  m6_macro: ''" };
+    feed_config(N, 3);
+    TEST_ASSERT_EQUAL(CAPS_ATC_NONE, caps_atc());
+}
+
 void test_config_request_gives_up() {
     caps_request_config();
     stub_set_millis(20000);
@@ -235,6 +247,7 @@ int main() {
     RUN_TEST(test_scanner_never_eats_the_settings_reply);
     RUN_TEST(test_tlo_macro_found_by_full_body);
     RUN_TEST(test_no_tlo_macro);
+    RUN_TEST(test_atc_mode_follows_the_spindle_config);
     RUN_TEST(test_config_request_gives_up);
     RUN_TEST(test_config_request_is_actually_sent);
     return UNITY_END();

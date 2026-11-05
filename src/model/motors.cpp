@@ -60,7 +60,7 @@ static bool prefix(const char* l, const char* p) {
 
 bool motors_line_can_move(const char* l) {
     while (*l == ' ') l++;
-    if (!*l) return false;
+    if (!*l || *l == '(') return false;   // a comment-only line moves nothing
     if (*l != '$') return true;    // G-code
     static const char* const MOVERS[] = {
         "$J=", "$H", "$RM", "$ME", "$SD/Run", "$LocalFS/Run", "$Macros/Run", "$Run",

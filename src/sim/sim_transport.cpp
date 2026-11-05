@@ -156,7 +156,9 @@ static uint32_t s_tc_at = 0;      // when the current phase ends; 0 = idle
 static int      s_tc_phase = 0;   // 1 travelling, 2 waiting, 3 measuring
 static int      s_tc_tool = 0;
 static int      s_cur_tool = -1;  // what $G reports; FluidNC boots not knowing
+static int      s_sel_tool = 0;   // $G's T word: selected, not in the spindle
 static char     s_tc_msg_later[112];
+bool            s_atc_manual = false;   // --atc-manual: today's controller config
 static bool     s_tc_idle  = false; // started from Idle (the rack), so ends there
 
 void sim_tool_change(int t) {
@@ -181,6 +183,18 @@ void sim_tool_change(int t) {
 // hand tool going out before a rack pickup is a "Remove" stop, a hand tool
 // coming in is an "Install" stop. Then the toolsetter.
 static bool sim_rack(int t) { return t >= 1 && t <= 5; }
+// atc_manual as 4.0.3 has it: from T0 it goes to the change position and stops
+// there, no pause; otherwise a pause, then the toolsetter.
+void sim_manual_change(int to) {
+    s_tc_tool = to;
+    s_state = "Run";
+    if (to == 0 || s_cur_tool <= 0) { s_tc_phase = 3; s_tc_at = millis() + 1500; return; }
+    snprintf(s_tc_msg_later, sizeof(s_tc_msg_later),
+             "[MSG:INFO: MSG, Install tool #%d then resume to continue]\n", to);
+    s_tc_phase = 1;
+    s_tc_at = millis() + 1500;
+}
+
 void sim_atc_change(int to) {
     s_tc_tool = to;
     s_state = "Run";
@@ -299,21 +313,31 @@ static void canned_putchar(uint8_t c) {
         // The tool rack: M61 Q<n> sets the tool, M6 T<n> plays the atc_manual
         // change (T0 just clears it), $G reports the T word back.
         int n;
-        if (sscanf(s_line, "M61 Q%d", &n) == 1) s_cur_tool = n;
+        if (sscanf(s_line, "M61 Q%d", &n) == 1) s_cur_tool = s_sel_tool = n;
         if (sscanf(s_line, "M6 T%d", &n) == 1) {
             s_tc_idle = strncmp(s_state, "Idle", 4) == 0;
-            sim_atc_change(n);
+            s_sel_tool = n;                   // FluidNC moves this as soon as M6 is read
+            if (s_atc_manual) sim_manual_change(n);
+            else              sim_atc_change(n);
         }
         if (strcmp(s_line, "$G") == 0) {
             char g[96];
-            snprintf(g, sizeof(g), "[GC:G0 G54 G17 G21 G90 G94 M5 M9 T%d F0 S0]\nok\n", s_cur_tool);
+            snprintf(g, sizeof(g), "[GC:G0 G54 G17 G21 G90 G94 M5 M9 T%d F0 S0]\nok\n", s_sel_tool);
             q_push(g);
         }
         else if (strcmp(s_line, "$#") == 0) q_push("[G54:0.000,0.000,0.000]\nok\n");
         else if (strcmp(s_line, "$S") == 0) q_push("$Grbl/HomingCycleEnable=1\nok\n");
-        else if (strcmp(s_line, "$CD") == 0)
+        else if (strcmp(s_line, "$CD") == 0) {
             q_push("axes:\n  x:\n    motor0:\n      hard_limits: true\n"
-                   "macros:\n  Macro0: G43.1Z0\n  Macro1: G43.1Z#<_my_tlo_z>\nok\n");
+                   "macros:\n  Macro0: G43.1Z0\n  Macro1: G43.1Z#<_my_tlo_z>\n");
+            q_push(s_atc_manual ? "H100:\n  atc: atc_manual\nok\n"
+                                : "H100:\n  m6_macro: $LocalFS/Run=openatc_m6.nc\nok\n");
+        }
+        else if (strncmp(s_line, "(PRINT,TOOLNOW", 14) == 0) {
+            char g[48];
+            snprintf(g, sizeof(g), "[MSG:INFO: PRINT,TOOLNOW %d]\nok\n", s_cur_tool);
+            q_push(g);
+        }
         else q_push("ok\n");
         s_len = 0;
         return;
