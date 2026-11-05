@@ -49,12 +49,12 @@ enum { A_LOAD, A_CURRENT, A_UNLOAD };
 
 static bool by_macro() { return caps_atc() == CAPS_ATC_MACRO; }
 
-// What is in the spindle: a cartridge, or 0 for the custom tool. With the macro
-// FluidNC knows; atc_manual never updates FluidNC's current tool, so there the
-// selected tool from $G is the best there is.
+// What is in the spindle: a cartridge, TC_EMPTY, or 0 for the custom tool. With
+// the macro FluidNC knows; atc_manual never updates FluidNC's current tool, so
+// there the selected tool from $G is the best there is.
 static int in_spindle() {
     const int t = by_macro() ? tc_current() : (int)mySelectedTool;
-    return in_rack(t) ? t : 0;
+    return in_rack(t) || (by_macro() && t == TC_EMPTY) ? t : 0;
 }
 
 static void refresh_tool() {
@@ -75,6 +75,7 @@ static void act_cb(lv_event_t* e) {
 // The same decisions openatc_m6.nc makes, in words, so LOAD is never a surprise.
 static void plan_macro(char* out, size_t n, int from, int to) {
     char a[48];
+    if (from == TC_EMPTY) { snprintf(out, n, "Pick up T%d from pocket %d  >  measure it", to, to); return; }
     if (in_rack(from)) snprintf(a, sizeof(a), "T%d back to pocket %d", from, from);
     else               snprintf(a, sizeof(a), "remove the custom tool by hand");
     snprintf(out, n, "%s  >  pick up T%d from pocket %d  >  measure it", a, to, to);
@@ -247,8 +248,9 @@ void page_tools_tick() {
     shown = now;
     gate_actions();
     char b[8];
-    if (now == 0) snprintf(b, sizeof(b), "CUSTOM");
-    else          snprintf(b, sizeof(b), "T%d", now);
+    if (now == TC_EMPTY) snprintf(b, sizeof(b), "EMPTY");
+    else if (now == 0)   snprintf(b, sizeof(b), "CUSTOM");
+    else                 snprintf(b, sizeof(b), "T%d", now);
     lv_label_set_text(s_now, b);
     for (int t = 1; t <= RACK_POCKETS; t++) {
         const bool on = t == now;

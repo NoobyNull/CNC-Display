@@ -4,3 +4,4 @@
 // trusted (fresh link, controller restart, position-losing alarm): check the
 // table, HOME ALL, then an optional TLO run. Called from shell_tick().
 void home_wizard_tick();
+bool home_wizard_open();

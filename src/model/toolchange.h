@@ -22,3 +22,14 @@ void        tc_clear();
 // reply lands here. -1 = FluidNC does not know, as after every boot and reset.
 #define TC_ASK_CURRENT "(PRINT,TOOLNOW %d#<_current_tool>)"
 int         tc_current();
+bool        tc_current_known();      // the controller has answered at least once
+void        tc_assume(int t);        // the panel just set it with M61: no need to wait
+
+// Nothing in the spindle. T0 is the custom tool on this machine, so empty needs a
+// number of its own; 98 is what RapidChange's macros use for the same thing.
+#define TC_EMPTY 98
+
+// openatc_tap.nc's answer: TC_TAP_NONE until one arrives.
+enum { TC_TAP_NONE = -1, TC_TAP_EMPTY = 0, TC_TAP_TOOL = 1 };
+int         tc_tap();
+void        tc_tap_clear();

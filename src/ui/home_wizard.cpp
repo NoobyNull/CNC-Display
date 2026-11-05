@@ -127,6 +127,8 @@ static void open_wizard() {
     show(S_CHECK);
 }
 
+bool home_wizard_open() { return s_root != nullptr; }
+
 void home_wizard_tick() {
     if (!s_root) {
         // Waits for the config dump: no prompt before we know this machine

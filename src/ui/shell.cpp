@@ -6,6 +6,7 @@
 #include "ui/goto_popup.h"
 #include "ui/home_wizard.h"
 #include "ui/tool_popup.h"
+#include "ui/spindle_card.h"
 #include "model/FluidNCModel.h"
 #include "model/model_events.h"
 #include "model/caps.h"
@@ -943,6 +944,7 @@ void shell_tick() {
     expanded_tick();
     home_wizard_tick();
     tool_popup_tick();
+    spindle_card_tick();
 
     // Alarm, or motion the panel did not start, while released: the steppers
     // may be back on under someone's hands. Re-arm and re-enable to match.

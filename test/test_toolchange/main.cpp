@@ -59,6 +59,18 @@ void test_current_tool_reply() {
     TEST_ASSERT_EQUAL(-1, tc_current());
 }
 
+void test_tap_reply_survives_the_job_ending() {
+    tc_tap_clear();
+    TEST_ASSERT_EQUAL(TC_TAP_NONE, tc_tap());
+    tc_note_message(" PRINT,TOOLTAP 1");
+    TEST_ASSERT_EQUAL(TC_TAP_TOOL, tc_tap());
+    tc_clear();                                    // the Idle edge after the tap
+    TEST_ASSERT_EQUAL(TC_TAP_TOOL, tc_tap());
+    tc_note_message(" PRINT,TOOLTAP 0");
+    TEST_ASSERT_EQUAL(TC_TAP_EMPTY, tc_tap());
+    TEST_ASSERT_FALSE(tc_pending());
+}
+
 void test_other_messages_ignored() {
     tc_note_message("uart_channel2 auto report interval set to 200 ms");
     tc_note_message(" MSG, TLO Z reset to 0");
@@ -75,6 +87,7 @@ int main() {
     RUN_TEST(test_hand_tool_t0_is_a_real_request);
     RUN_TEST(test_removal_before_a_rack_pickup);
     RUN_TEST(test_current_tool_reply);
+    RUN_TEST(test_tap_reply_survives_the_job_ending);
     RUN_TEST(test_other_messages_ignored);
     return UNITY_END();
 }

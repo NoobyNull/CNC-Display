@@ -155,7 +155,8 @@ void sim_toggle_motion() { s_moving = !s_moving; }
 static uint32_t s_tc_at = 0;      // when the current phase ends; 0 = idle
 static int      s_tc_phase = 0;   // 1 travelling, 2 waiting, 3 measuring
 static int      s_tc_tool = 0;
-static int      s_cur_tool = -1;  // what $G reports; FluidNC boots not knowing
+int             s_cur_tool = 0;   // --tool-unknown: -1, as FluidNC boots
+bool            s_tap_hit  = true; // --tap-empty: the tap finds nothing
 static int      s_sel_tool = 0;   // $G's T word: selected, not in the spindle
 static char     s_tc_msg_later[112];
 bool            s_atc_manual = false;   // --atc-manual: today's controller config
@@ -316,6 +317,11 @@ static void canned_putchar(uint8_t c) {
             s_sel_tool = n;                   // FluidNC moves this as soon as M6 is read
             if (s_atc_manual) sim_manual_change(n);
             else              sim_atc_change(n);
+        }
+        if (strcmp(s_line, "$LocalFS/Run=openatc_tap.nc") == 0) {
+            char g[48];
+            snprintf(g, sizeof(g), "[MSG:INFO: PRINT,TOOLTAP %d]\nok\n", s_tap_hit ? 1 : 0);
+            q_push(g);
         }
         if (strcmp(s_line, "$G") == 0) {
             char g[96];
