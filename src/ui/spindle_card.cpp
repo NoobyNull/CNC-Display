@@ -18,10 +18,15 @@ static const char* const KEY = "tool_last";        // survives the controller fo
 
 static lv_obj_t* s_root;
 static lv_obj_t* s_tool[POCKETS + 1];              // [0] is CUSTOM: T0 is the custom tool
-static lv_obj_t* s_none;
+static lv_obj_t* s_empty;
+static lv_obj_t* s_skip;
 static lv_obj_t* s_tap_btn;
 static lv_obj_t* s_msg;
 static bool      s_tapping;
+// SKIP holds the card back until something new could have changed the answer:
+// a link drop, a controller restart, lost position (all bump homed_epoch()).
+static uint32_t  s_skipped_epoch = UINT32_MAX;
+static bool      s_ask_now;
 static bool      s_tap_left_idle;
 static uint32_t  s_tap_at;
 
@@ -40,6 +45,11 @@ static void answer_cb(lv_event_t* e) {
     close_card();
 }
 
+static void skip_cb(lv_event_t*) {
+    s_skipped_epoch = homed_epoch();
+    close_card();
+}
+
 static void tap_cb(lv_event_t*) {
     tc_tap_clear();
     s_tapping = true;
@@ -55,7 +65,10 @@ static void paint() {
 
     for (int t = 0; t <= POCKETS; t++)
         w_gate(s_tool[t], idle && tap != TC_TAP_EMPTY, idle ? "toolsetter found nothing" : busy);
-    w_gate(s_none, idle && tap != TC_TAP_TOOL, idle ? "toolsetter touched a tool" : busy);
+    // EMPTY is the one answer that can crash the rack: the next LOAD skips the
+    // put-back and drives the tool still in the collet into a full pocket. So
+    // it is never taken on the operator's word, only on the toolsetter's.
+    w_gate(s_empty, idle && tap == TC_TAP_EMPTY, !idle ? busy : "check with the toolsetter first");
     w_gate(s_tap_btn, idle && homed(), !idle ? busy : "home first");
 
     char b[96];
@@ -118,20 +131,25 @@ static void open_card() {
         s_tool[t] = grow(w_button(tools, b, " ", C_RAISE, C_TEXT, answer_cb, (void*)(intptr_t)t));
     }
     lv_obj_t* others = row(card);
-    s_none    = grow(w_button(others, "NONE / SKIP", "assume empty", C_RAISE, C_TEXT, answer_cb, (void*)(intptr_t)TC_EMPTY));
-    s_tool[0] = grow(w_button(others, "CUSTOM", "by hand, rack full", C_RAISE, C_TEXT, answer_cb, (void*)(intptr_t)0));
     s_tap_btn = grow(w_button(others, "TOOLSETTER", "tool or no tool", C_ACCENT, C_BG, tap_cb, nullptr));
+    s_empty   = grow(w_button(others, "EMPTY", "toolsetter confirmed", C_RAISE, C_TEXT, answer_cb, (void*)(intptr_t)TC_EMPTY));
+    s_tool[0] = grow(w_button(others, "CUSTOM", "by hand, rack full", C_RAISE, C_TEXT, answer_cb, (void*)(intptr_t)0));
+    s_skip    = grow(w_button(others, "SKIP", "LOAD stays locked", C_RAISE, C_TEXT, skip_cb, nullptr));
     paint();
 }
 
 void spindle_card_tick() {
     if (caps_atc() != CAPS_ATC_MACRO) { close_card(); return; }
 
-    // Ask at rest, and again after anything that may have reset the controller.
+    // Ask when the answer can have changed: a new link or controller restart
+    // (homed_epoch), or coming to rest from anything but a jog, since a job or
+    // a macro may have run M6. Never after a plain jog: the query queues ahead
+    // of the next jog chunk, and a queued line makes that chunk get skipped.
     static state_t  was   = Disconnected;
     static uint32_t epoch = UINT32_MAX;
     static bool     macro = false;
-    if (state == Idle && (was != Idle || epoch != homed_epoch() || !macro)) send_line(TC_ASK_CURRENT);
+    const bool came_to_rest = state == Idle && was != Idle && was != Jog;
+    if (state == Idle && (came_to_rest || epoch != homed_epoch() || !macro)) send_line(TC_ASK_CURRENT);
     const bool changed = state != was || epoch != homed_epoch();
     was = state;
     epoch = homed_epoch();
@@ -144,8 +162,10 @@ void spindle_card_tick() {
     }
 
     if (!s_root) {
-        if (tc_current_known() && tc_current() < 0 && state == Idle &&
+        const bool skipped = s_skipped_epoch == homed_epoch() && !s_ask_now;
+        if (tc_current_known() && tc_current() < 0 && state == Idle && !skipped &&
             !home_wizard_open() && !splash_active()) open_card();
+        s_ask_now = false;
         return;
     }
     if (tc_current() >= 0 || state == Disconnected || (state != Idle && !s_tapping)) {
@@ -161,3 +181,5 @@ void spindle_card_tick() {
         paint();
     }
 }
+
+void spindle_card_ask() { s_ask_now = true; }

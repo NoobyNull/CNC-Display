@@ -5,3 +5,5 @@
 // card asks: empty, custom, or T1..T5. A touch on the toolsetter can settle tool or no
 // tool first. Called from shell_tick().
 void spindle_card_tick();
+// Bring the card back after SKIP (the TOOLS page's IN SPINDLE panel).
+void spindle_card_ask();

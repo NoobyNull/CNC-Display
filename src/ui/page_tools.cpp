@@ -5,6 +5,7 @@
 #include "model/homed.h"
 #include "model/caps.h"
 #include "model/toolchange.h"
+#include "ui/spindle_card.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 
@@ -49,10 +50,13 @@ enum { A_LOAD, A_CURRENT, A_UNLOAD };
 
 static bool by_macro() { return caps_atc() == CAPS_ATC_MACRO; }
 
-// What is in the spindle: a cartridge, TC_EMPTY, or 0 for the custom tool. With
-// the macro FluidNC knows; atc_manual never updates FluidNC's current tool, so
-// there the selected tool from $G is the best there is.
+// What is in the spindle: a cartridge, TC_EMPTY, 0 for the custom tool, or -1
+// for not known. With the macro FluidNC knows, or says it does not (after every
+// boot and reset); atc_manual never updates FluidNC's current tool, so there
+// the selected tool from $G is the best there is.
+static const int UNKNOWN = -1;
 static int in_spindle() {
+    if (by_macro() && tc_current() < 0) return UNKNOWN;
     const int t = by_macro() ? tc_current() : (int)mySelectedTool;
     return in_rack(t) || (by_macro() && t == TC_EMPTY) ? t : 0;
 }
@@ -100,7 +104,10 @@ static void gate_actions() {
     const char* busy = w_locked() ? LOCK_REASON : "machine busy";
     const char* move = !idle ? busy : !homed() ? "home first" : nullptr;
 
-    w_gate(s_act[A_LOAD], !move && in != s_tool, move ? move : "already in the spindle");
+    // An unknown spindle is not "the custom tool": the macro would skip the
+    // put-back for a cartridge that may still be in the collet.
+    const char* load_why = move ? move : in == UNKNOWN ? "spindle unknown: tap IN SPINDLE" : "already in the spindle";
+    w_gate(s_act[A_LOAD], !move && in != UNKNOWN && in != s_tool, load_why);
     if (by_macro()) return;
 
     snprintf(why_cur, sizeof(why_cur), "T%d is loaded: load or unload", in);
@@ -203,6 +210,10 @@ void page_tools_build(lv_obj_t* p) {
     lv_obj_set_flex_grow(now, 1);
     s_now = w_label(now, "--", &lv_font_montserrat_40, C_ACCENT);
     lv_obj_center(s_now);
+    // Tapping it reopens the spindle card if it was skipped.
+    lv_obj_add_flag(now, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(now, [](lv_event_t*) { if (in_spindle() == UNKNOWN) spindle_card_ask(); },
+                        LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t* rack = column(p);
     lv_obj_set_flex_grow(rack, 1);
@@ -237,7 +248,7 @@ void page_tools_tick() {
     // Back at rest: a change (ours, or a job's) may have moved the tool.
     static state_t was = Disconnected;
     if (state != was) {
-        if (state == Idle && was != Disconnected) refresh_tool();
+        if (state == Idle && was != Disconnected && was != Jog) refresh_tool();
         was = state;
         gate_actions();
     }
@@ -248,7 +259,8 @@ void page_tools_tick() {
     shown = now;
     gate_actions();
     char b[8];
-    if (now == TC_EMPTY) snprintf(b, sizeof(b), "EMPTY");
+    if (now == UNKNOWN)       snprintf(b, sizeof(b), "?");
+    else if (now == TC_EMPTY) snprintf(b, sizeof(b), "EMPTY");
     else if (now == 0)   snprintf(b, sizeof(b), "CUSTOM");
     else                 snprintf(b, sizeof(b), "T%d", now);
     lv_label_set_text(s_now, b);
