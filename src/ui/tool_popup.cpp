@@ -47,7 +47,7 @@ static void open_popup() {
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
     char b[16];
-    if (s_shown_tool < 0) snprintf(b, sizeof(b), "?");
+    if (s_shown_tool < 0) snprintf(b, sizeof(b), "CUSTOM");
     else                  snprintf(b, sizeof(b), "T%d", s_shown_tool);
     text(card, s_shown_remove ? "REMOVE TOOL" : "TOOL CHANGE", &lv_font_montserrat_14, C_WARN);
     text(card, b, &lv_font_montserrat_40, C_TEXT);

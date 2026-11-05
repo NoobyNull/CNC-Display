@@ -20,8 +20,9 @@ config says it has.
 - **Homing walk-through** — when position can't be trusted (fresh link,
   controller restart, an alarm that loses position) a card walks you through a
   checklist, HOME ALL, and an optional tool-length measurement.
-- **Tool changes** — a TOOLS page laid out like the machine: T0 by hand, T1–T5 in
-  the OpenATC rack, T6+ off-rack. What a tool's card offers follows the
+- **Tool changes** — a TOOLS page laid out like the machine: five buttons, one per
+  OpenATC cartridge, in a column with T1 at the front. Anything else in the spindle
+  is the custom tool, fitted and removed by hand. What a tool's card offers follows the
   controller's config: with an M6 macro, tap a tool and LOAD or CANCEL, and the
   macro does the rest; with `atc_manual`, LOAD / CURRENT / UNLOAD and honest text
   about what each will do. Either way the card shows the plan first, every
@@ -43,7 +44,7 @@ All of these are the real UI, rendered by the desktop simulator below.
 |---|---|---|
 | ![Homing walk-through](docs/screenshots/homing-walkthrough.png) Homing walk-through | ![Alarm](docs/screenshots/alarm.png) After a hard-limit alarm | ![Home](docs/screenshots/home.png) Home |
 | ![Tools load card](docs/screenshots/tools-load-card.png) Tap a tool: the plan, LOAD / CANCEL | ![Tool change card](docs/screenshots/tool-change-card.png) A job paused for a tool | ![Tools](docs/screenshots/tools.png) Tools |
-| ![Tools with atc_manual](docs/screenshots/tools-manual-card.png) The same card under `atc_manual` | | |
+| ![Tools with atc_manual](docs/screenshots/tools-manual-card.png) The same card under `atc_manual` | ![Remove tool](docs/screenshots/tools-remove-card.png) A custom tool coming out before a pickup | |
 | ![Feed override](docs/screenshots/feed-override.png) Feed override | ![Rapid override](docs/screenshots/rapid-override.png) Rapid override | ![Probe](docs/screenshots/probe.png) Probe |
 | ![Run](docs/screenshots/run.png) Run (controller SD card) | ![Macro](docs/screenshots/macro.png) Macros | ![Offsets](docs/screenshots/offsets.png) Work offsets |
 | ![Motion](docs/screenshots/motion.png) Motion settings | ![Calibrate](docs/screenshots/calibrate.png) Steps/mm calibration | ![Diag](docs/screenshots/diag.png) Diagnostics |

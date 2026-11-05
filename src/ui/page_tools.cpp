@@ -23,20 +23,16 @@
 //            no measuring. Fit the tool, zero Z, then CURRENT.
 //   UNLOAD   M6 T0: goes to the change position and clears the TLO.
 
-// The machine's tools: T0 is whatever is fitted by hand, T1..RACK_POCKETS live
-// in the OpenATC rack on the right-hand (high-X) side, stacked front to back
-// (pocket n holds Tn, pocket 1 nearest the operator), and the rest up to
-// TOOL_MAX are numbered tools changed by hand. Both counts are the hardware's,
-// not the layout's: the page below is sized from them.
+// One button per OpenATC cartridge: pocket n holds Tn, stacked on the right-hand
+// (high-X) side with pocket 1 nearest the operator. The count is the hardware's,
+// not the layout's. Anything else in the spindle -- T0, a number that is not a
+// cartridge, or nothing FluidNC knows of -- is one thing: the custom tool, fitted
+// and removed by hand.
 static const int RACK_POCKETS = 5;
-static const int TOOL_MAX     = 12;
-static const int OFF_COLS     = 4;                  // left block: T0 + readout, then off-rack
-static const int OFF_RACK     = TOOL_MAX - RACK_POCKETS;
-static const int OFF_ROWS     = 1 + (OFF_RACK + OFF_COLS - 1) / OFF_COLS;
 
 static bool in_rack(int t) { return t >= 1 && t <= RACK_POCKETS; }
 
-static lv_obj_t* s_btn[TOOL_MAX + 1];      // indexed by tool number, T0 included
+static lv_obj_t* s_btn[RACK_POCKETS + 1];  // indexed by tool number; [0] unused
 static lv_obj_t* s_now;            // "IN SPINDLE T4"
 static lv_obj_t* s_rack_lbl;
 static lv_obj_t* s_pop;
@@ -53,12 +49,12 @@ enum { A_LOAD, A_CURRENT, A_UNLOAD };
 
 static bool by_macro() { return caps_atc() == CAPS_ATC_MACRO; }
 
-// What is in the spindle. With the macro FluidNC knows, and -1 means it does
-// not. atc_manual never updates FluidNC's current tool, so there the selected
-// tool from $G is the best there is, and 0 means nothing declared yet.
+// What is in the spindle: a cartridge, or 0 for the custom tool. With the macro
+// FluidNC knows; atc_manual never updates FluidNC's current tool, so there the
+// selected tool from $G is the best there is.
 static int in_spindle() {
     const int t = by_macro() ? tc_current() : (int)mySelectedTool;
-    return (t < 0 || t > TOOL_MAX) ? -1 : t;
+    return in_rack(t) ? t : 0;
 }
 
 static void refresh_tool() {
@@ -69,7 +65,7 @@ static void refresh_tool() {
 static void act_cb(lv_event_t* e) {
     switch ((int)(intptr_t)lv_event_get_user_data(e)) {
         case A_LOAD:    send_linef("M6 T%d", s_tool);                                   break;
-        case A_CURRENT: send_line("M61 Q0"); if (s_tool) send_linef("M61 Q%d", s_tool); break;
+        case A_CURRENT: send_line("M61 Q0"); send_linef("M61 Q%d", s_tool);             break;
         case A_UNLOAD:  send_line("M6 T0");                                             break;
     }
     refresh_tool();
@@ -78,25 +74,17 @@ static void act_cb(lv_event_t* e) {
 
 // The same decisions openatc_m6.nc makes, in words, so LOAD is never a surprise.
 static void plan_macro(char* out, size_t n, int from, int to) {
-    char a[48], b[56];
-    if (in_rack(from))  snprintf(a, sizeof(a), "T%d back to pocket %d", from, from);
-    else if (in_rack(to)) {
-        if (from < 0)   snprintf(a, sizeof(a), "remove the unknown tool by hand");
-        else            snprintf(a, sizeof(a), "remove T%d by hand", from);
-    } else              a[0] = 0;              // hand to hand: one stop, below
-    if (in_rack(to))    snprintf(b, sizeof(b), "pick up T%d from pocket %d", to, to);
-    else if (in_rack(from)) snprintf(b, sizeof(b), "fit T%d by hand", to);
-    else if (from < 0)  snprintf(b, sizeof(b), "swap the unknown tool for T%d by hand", to);
-    else                snprintf(b, sizeof(b), "swap T%d for T%d by hand", from, to);
-    snprintf(out, n, "%s%s%s  >  measure it", a, a[0] ? "  >  " : "", b);
+    char a[48];
+    if (in_rack(from)) snprintf(a, sizeof(a), "T%d back to pocket %d", from, from);
+    else               snprintf(a, sizeof(a), "remove the custom tool by hand");
+    snprintf(out, n, "%s  >  pick up T%d from pocket %d  >  measure it", a, to, to);
 }
 
 // And what atc_manual will do. The T0 case is the one that catches people out.
 static void plan_manual(char* out, size_t n, int from, int to) {
-    if (to == 0)        snprintf(out, n, "Change position, length offset cleared.");
-    else if (from <= 0) snprintf(out, n, "LOAD only goes to the change position: it does not stop or measure. "
+    if (from <= 0) snprintf(out, n, "LOAD only goes to the change position: it does not stop or measure. "
                                          "Fit T%d, zero Z, then tap CURRENT. If T%d is already in, just tap CURRENT.", to, to);
-    else                snprintf(out, n, "Measure T%d if needed  >  change position  >  swap to T%d by hand  >  measure it",
+    else           snprintf(out, n, "Measure T%d if needed  >  change position  >  swap to T%d by hand  >  measure it",
                                  from, to);
 }
 
@@ -116,9 +104,9 @@ static void gate_actions() {
 
     snprintf(why_cur, sizeof(why_cur), "T%d is loaded: load or unload", in);
     snprintf(why_unl, sizeof(why_unl), "T%d is loaded, not T%d", in, s_tool);
-    w_gate(s_act[A_CURRENT], idle && (in <= 0 || in == s_tool), !idle ? busy : why_cur);
-    w_gate(s_act[A_UNLOAD],  !move && in > 0 && in == s_tool,
-           move ? move : in <= 0 ? "spindle is empty" : why_unl);
+    w_gate(s_act[A_CURRENT], idle && (in == 0 || in == s_tool), !idle ? busy : why_cur);
+    w_gate(s_act[A_UNLOAD],  !move && in != 0 && in == s_tool,
+           move ? move : in == 0 ? "custom tool: remove by hand" : why_unl);
 }
 
 static void tool_cb(lv_event_t* e) {
@@ -145,16 +133,13 @@ static void tool_cb(lv_event_t* e) {
     snprintf(b, sizeof(b), "T%d", s_tool);
     w_label(card, b, &lv_font_montserrat_40, C_TEXT);
     char where[64];
-    if (s_tool == 0)          snprintf(where, sizeof(where), "Manual tool - fitted by hand, not tracked");
-    else if (in_rack(s_tool) && by_macro())
-        snprintf(where, sizeof(where), "Rack pocket %d of %d - OpenATC, right side, from the front", s_tool, RACK_POCKETS);
-    else if (in_rack(s_tool)) snprintf(where, sizeof(where), "Pocket %d - rack not in use yet, changed by hand", s_tool);
-    else                      snprintf(where, sizeof(where), "Not in the rack - changed by hand");
+    if (by_macro()) snprintf(where, sizeof(where), "Rack pocket %d of %d - OpenATC, right side, from the front", s_tool, RACK_POCKETS);
+    else            snprintf(where, sizeof(where), "Pocket %d - rack not in use yet, changed by hand", s_tool);
     w_label(card, where, &lv_font_montserrat_14, C_DIM);
     if (in_spindle() != s_tool) {
         char p[160];
         if (by_macro()) plan_macro(p, sizeof(p), in_spindle(), s_tool);
-        else            plan_manual(p, sizeof(p), in_spindle(), s_tool);
+        else            plan_manual(p, sizeof(p), (int)mySelectedTool, s_tool);   // atc_manual's own idea of "from"
         lv_obj_t* l = w_label(card, p, &lv_font_montserrat_14, C_TEXT);
         lv_obj_set_width(l, LV_PCT(100));
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
@@ -204,45 +189,20 @@ static lv_obj_t* column(lv_obj_t* p) {
 }
 
 // Laid out the way the machine looks from the operator's side: the rack is a
-// column on the right with pocket 1 at the bottom (front), the hand tools on
-// the left.
+// column on the right with pocket 1 at the bottom (front).
 void page_tools_build(lv_obj_t* p) {
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(p, U * 2, 0);
 
-    // --- left: T0 and the readout, then the off-rack tools ---
     lv_obj_t* left = column(p);
-    lv_obj_set_flex_grow(left, 3);
-    w_label(left, "BY HAND", &lv_font_montserrat_10, C_DIM);
-    lv_obj_t* grid = lv_obj_create(left);
-    w_flatten(grid);
-    lv_obj_set_width(grid, LV_PCT(100));
-    lv_obj_set_flex_grow(grid, 1);
-    static lv_coord_t cols[OFF_COLS + 1], rows[OFF_ROWS + 1];
-    for (int i = 0; i < OFF_COLS; i++) cols[i] = LV_GRID_FR(1);
-    for (int i = 0; i < OFF_ROWS; i++) rows[i] = LV_GRID_FR(1);
-    cols[OFF_COLS] = rows[OFF_ROWS] = LV_GRID_TEMPLATE_LAST;
-    lv_obj_set_grid_dsc_array(grid, cols, rows);
-    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
-    lv_obj_set_style_pad_column(grid, U, 0);
-    lv_obj_set_style_pad_row(grid, U, 0);
+    lv_obj_set_flex_grow(left, 1);
+    w_label(left, "IN SPINDLE", &lv_font_montserrat_10, C_DIM);
+    lv_obj_t* now = w_panel(left, C_BG);
+    lv_obj_set_width(now, LV_PCT(100));
+    lv_obj_set_flex_grow(now, 1);
+    s_now = w_label(now, "--", &lv_font_montserrat_40, C_ACCENT);
+    lv_obj_center(s_now);
 
-    s_btn[0] = tool_button(grid, 0, "hand");
-    lv_obj_set_grid_cell(s_btn[0], LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
-    lv_obj_t* now = w_panel(grid, C_BG);
-    lv_obj_set_grid_cell(now, LV_GRID_ALIGN_STRETCH, 1, OFF_COLS - 1, LV_GRID_ALIGN_STRETCH, 0, 1);
-    lv_obj_t* k = w_label(now, "IN SPINDLE", &lv_font_montserrat_10, C_DIM);
-    lv_obj_align(k, LV_ALIGN_TOP_MID, 0, U);
-    s_now = w_label(now, "--", &lv_font_montserrat_28, C_ACCENT);
-    lv_obj_align(s_now, LV_ALIGN_CENTER, 0, U);
-    for (int n = 0; n < OFF_RACK; n++) {
-        const int t = RACK_POCKETS + 1 + n;
-        s_btn[t] = tool_button(grid, t, nullptr);
-        lv_obj_set_grid_cell(s_btn[t], LV_GRID_ALIGN_STRETCH, n % OFF_COLS, 1,
-                             LV_GRID_ALIGN_STRETCH, 1 + n / OFF_COLS, 1);
-    }
-
-    // --- right: the rack, back at the top, front at the bottom ---
     lv_obj_t* rack = column(p);
     lv_obj_set_flex_grow(rack, 1);
     s_rack_lbl = w_label(rack, "OPENATC RACK  -  back", &lv_font_montserrat_10, C_ACCENT);
@@ -287,10 +247,10 @@ void page_tools_tick() {
     shown = now;
     gate_actions();
     char b[8];
-    if (now < 0) snprintf(b, sizeof(b), "?");          // FluidNC does not know
-    else         snprintf(b, sizeof(b), "T%d", now);   // T0 = the hand tool
+    if (now == 0) snprintf(b, sizeof(b), "CUSTOM");
+    else          snprintf(b, sizeof(b), "T%d", now);
     lv_label_set_text(s_now, b);
-    for (int t = 0; t <= TOOL_MAX; t++) {
+    for (int t = 1; t <= RACK_POCKETS; t++) {
         const bool on = t == now;
         lv_obj_set_style_bg_color(s_btn[t], on ? C_ACCENT : C_SURFACE, 0);
         lv_obj_set_style_text_color(lv_obj_get_child(lv_obj_get_child(s_btn[t], 0), 0), on ? C_BG : C_TEXT, 0);

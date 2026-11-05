@@ -200,11 +200,8 @@ void sim_atc_change(int to) {
     s_state = "Run";
     if (sim_rack(to)) {
         if (!sim_rack(s_cur_tool)) {
-            char b[96];
-            if (s_cur_tool < 0) snprintf(b, sizeof(b), "[MSG:INFO: PRINT,Remove the tool in the spindle then resume to continue]\n");
-            else                snprintf(b, sizeof(b), "[MSG:INFO: PRINT,Remove tool T%d then resume to continue]\n", s_cur_tool);
-            s_tc_msg_later[0] = 0;
-            snprintf(s_tc_msg_later, sizeof(s_tc_msg_later), "%s", b);
+            snprintf(s_tc_msg_later, sizeof(s_tc_msg_later),
+                     "[MSG:INFO: PRINT,Remove the tool in the spindle then resume to continue]\n");
             s_tc_phase = 1;                  // travel, then the removal stop
         } else {
             s_tc_phase = 3;                  // drop + pick up + measure, no stop
