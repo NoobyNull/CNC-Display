@@ -1,0 +1,19 @@
+name: host tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests (model layer, no hardware)
+        run: test/run_host_tests.sh
+      - name: Desktop simulator builds (UI and model layers stay portable)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libsdl2-dev
+          make -C sim deps
+          make -C sim -j"$(nproc)"

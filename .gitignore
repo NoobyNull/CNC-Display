@@ -41,3 +41,7 @@ sim/cncsim
 
 # Vendor STEP (40 MB), mockup only - see cad/lean_to.py
 cad/ref/
+
+# Host test deps and binaries (test/run_host_tests.sh)
+test/.deps/
+test/.build/

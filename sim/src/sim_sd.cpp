@@ -24,6 +24,9 @@ void sd_set_root(const char* root) {
     if (root && *root) { strncpy(s_root, root, sizeof(s_root) - 1); s_root[sizeof(s_root) - 1] = 0; }
 }
 
+// Built like the firmware: without HAS_SD_CARD, hw/sdcard.h supplies inline
+// no-card stubs and these would redefine them.
+#ifdef HAS_SD_CARD
 bool sd_begin() {
     struct stat st;
     return stat(s_root, &st) == 0 && S_ISDIR(st.st_mode);
@@ -47,3 +50,4 @@ size_t sd_read(uint8_t* dst, size_t max) {
 void sd_close() {
     if (s_fp) { fclose(s_fp); s_fp = nullptr; }
 }
+#endif
