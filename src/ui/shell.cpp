@@ -324,7 +324,7 @@ static bool paused(state_t s) {
 static void hold_resume_cb(lv_event_t*) {
     fnc_realtime(paused(state) ? CycleStart : FeedHold);
 }
-static void reset_cb(lv_event_t*)  { fnc_realtime(Reset); }
+static void reset_cb(lv_event_t*)  { send_reset(); }
 static void close_cb(lv_event_t*)  { expanded_close(); }
 
 // Three looks: RESUME green while paused, HOLD amber while there is motion to
@@ -848,7 +848,45 @@ static void fmt_pos(char* out, size_t n, pos_t v) {
     snprintf(out, n, "%s", e4_to_cstr(v, 3));
 }
 
+// Panel-side refusals and stopped sequences ("AutoZero stopped (ALARM:5)...").
+// They used to reach only the console, where nobody at the machine sees them.
+// A strip above the safety bar, until tapped or for 8 s; a newer one replaces it.
+static lv_obj_t* s_notice;
+static uint32_t  s_notice_at;
+
+static void notice_close() {
+    if (!s_notice) return;
+    lv_obj_del(s_notice);
+    s_notice = nullptr;
+}
+
+static void notice_tick() {
+    if (const char* e = model_take_error()) {
+        notice_close();
+        s_notice = lv_obj_create(lv_layer_top());
+        lv_obj_remove_style_all(s_notice);
+        lv_obj_set_size(s_notice, CONTENT_W - U * 4, LV_SIZE_CONTENT);
+        lv_obj_align(s_notice, LV_ALIGN_BOTTOM_RIGHT, -U * 2, -(SAFETY_H + U));
+        lv_obj_set_style_bg_color(s_notice, C_CRIT, 0);
+        lv_obj_set_style_bg_opa(s_notice, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(s_notice, U, 0);
+        lv_obj_set_style_pad_all(s_notice, U * 2, 0);
+        lv_obj_add_flag(s_notice, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_notice, [](lv_event_t*) { notice_close(); }, LV_EVENT_CLICKED, nullptr);
+        lv_obj_t* l = lv_label_create(s_notice);
+        lv_obj_set_width(l, LV_PCT(100));
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(l, C_TEXT, 0);
+        lv_label_set_text(l, e);
+        s_notice_at = lv_tick_get();
+    } else if (s_notice && lv_tick_elaps(s_notice_at) > 8000) {
+        notice_close();
+    }
+}
+
 void shell_tick() {
+    notice_tick();
     // Recompute what the machine can do before anything paints, so a settings
     // or config dump that just landed is reflected on this frame.
     caps_poll();

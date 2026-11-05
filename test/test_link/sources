@@ -1,0 +1,19 @@
+# The real send queue, parser glue and link lifecycle, against a scripted
+# controller. Everything here runs on the panel unmodified.
+src/model/FluidNCModel.cpp
+src/model/model_events.cpp
+src/model/model_compat.cpp
+src/model/console_log.cpp
+src/model/caps.cpp
+src/model/filelist.cpp
+src/model/fnc_settings.cpp
+src/model/fnc_codes.cpp
+src/model/offsets.cpp
+src/model/homed.cpp
+src/model/motors.cpp
+src/model/toolchange.cpp
+src/model/sendq.cpp
+src/model/linkwatch.cpp
+src/model/path_loader.cpp
+src/model/gcode_stats.cpp
+src/transport/xmodem_rx.cpp

@@ -148,11 +148,6 @@ void setup() {
     lv_timer_handler();
 }
 
-// The work offsets and file list are primed once, the first time the link is
-// actually alive. Doing it at boot would either block (see above) or be sent
-// into the void and never retried.
-static bool s_primed = false;
-
 // Act on the vibration analyser according to the Setup mode. Deliberately
 // conservative:
 //   monitor - never touches the machine
@@ -187,7 +182,7 @@ static void vib_guard() {
     rearm_ms = now + 3000;
 
     if (lvl == VIB_ESTOP && mode == 2) {
-        fnc_realtime(Reset);
+        send_reset();
         clog_add("[MSG:VIBRATION: impact - soft reset sent]");
     } else {
         fnc_realtime(FeedHold);
@@ -267,36 +262,6 @@ static void link_watchdog() {
                   touch_int_level(), touch_last_status());
 }
 
-static void prime_link_if_up() {
-    // A controller reset wipes everything primed below, plus the $RI auto-report
-    // and the parser modes, and the link may never drop to Disconnected if the
-    // reboot is quick. Left alone the jog page falls back to its 500 mm/min
-    // creep rate because the axis max rates are gone.
-    bool reset = model_take_board_reset();
-    if (reset) { homed_forget(); motors_resync(); }
-    if (state == Disconnected) { s_primed = false; return; }
-    if (reset && s_primed) {
-        s_primed = false;
-        send_line("$G");
-        send_line("$RI=200");
-        Serial.println("controller reset seen: re-priming");
-    }
-    if (s_primed) return;
-    s_primed = true;
-    motors_resync();      // a drop may have been the controller rebooting
-    motors_on_link();
-    // Config dump first: it decides which controls are even offered, and every
-    // second it is late is a second the panel shows homing and probing to a
-    // machine that has neither.
-    caps_request_config();
-    send_line("$#");
-    filelist_request();
-    // The full settings dump also feeds the Diag limit lamps: which lamps
-    // exist is read from the controller's configured limit/probe pins.
-    fncset_request_all();
-    Serial.println("link up: primed config, offsets, file list and settings");
-}
-
 // [MSG:PANEL:UPDATE] from the controller runs the same network update as the
 // Setup button. Never mid-job: the update blanks the screen and reboots. The
 // update's own tap-to-cancel countdown still gives whoever is at the panel the
@@ -351,7 +316,7 @@ void loop() {
     imulog_poll();
     console_cmd();
     vib_guard();
-    prime_link_if_up();
+    link_service();   // liveness, controller restarts, priming
     caps_poll();
     link_watchdog();
     service_action();

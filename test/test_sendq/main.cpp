@@ -95,6 +95,97 @@ void test_null_push_is_rejected() {
     TEST_ASSERT_EQUAL_UINT(0, sendq_count(&q));
 }
 
+static void expect_pop_seq(const char* want, sendq_seq_t want_seq) {
+    char out[SENDQ_LINE];
+    sendq_seq_t seq = 99;
+    TEST_ASSERT_TRUE(sendq_pop_seq(&q, out, sizeof(out), &seq));
+    TEST_ASSERT_EQUAL_STRING(want, out);
+    TEST_ASSERT_EQUAL_UINT16(want_seq, seq);
+}
+
+// AutoZero is 28 lines. It used to go out one send_line() at a time into 16
+// slots, so the last 11 -- the Y walls, the G10 and the lift out of the pocket
+// -- were dropped and the bit stayed in the plate.
+void test_autozero_sized_sequence_fits_an_empty_queue() {
+    const char* lines[28];
+    for (int i = 0; i < 28; i++) lines[i] = "G38.2 Z-5 F75";
+    TEST_ASSERT_TRUE(sendq_push_all(&q, lines, 28, 1));
+    TEST_ASSERT_EQUAL_UINT(28, sendq_count(&q));
+}
+
+void test_sequence_is_all_or_nothing() {
+    push_n(SENDQ_SLOTS - 2);
+    const char* lines[] = { "G91", "G0 X1", "G90" };
+    TEST_ASSERT_FALSE(sendq_push_all(&q, lines, 3, 7));
+    TEST_ASSERT_EQUAL_UINT(SENDQ_SLOTS - 2, sendq_count(&q));   // nothing half-queued
+    TEST_ASSERT_EQUAL_UINT32(0, sendq_dropped(&q));             // refused, not dropped
+    char out[SENDQ_LINE];
+    TEST_ASSERT_TRUE(sendq_pop(&q, out, sizeof(out)));
+    TEST_ASSERT_TRUE(sendq_push_all(&q, lines, 3, 7));
+}
+
+void test_sequence_rejects_seq_zero_and_null_lines() {
+    const char* lines[] = { "G91", nullptr };
+    TEST_ASSERT_FALSE(sendq_push_all(&q, lines, 1, 0));
+    TEST_ASSERT_FALSE(sendq_push_all(&q, lines, 2, 3));
+    TEST_ASSERT_EQUAL_UINT(0, sendq_count(&q));
+}
+
+void test_pop_reports_sequence() {
+    sendq_push(&q, "$#");
+    const char* lines[] = { "G91", "G90" };
+    sendq_push_all(&q, lines, 2, 5);
+    expect_pop_seq("$#", 0);
+    expect_pop_seq("G91", 5);
+    expect_pop_seq("G90", 5);
+}
+
+// An error inside a sequence drops the rest of THAT sequence; plain lines and
+// other sequences around it keep their order.
+void test_drop_one_sequence_keeps_the_rest_in_order() {
+    const char* a[] = { "A1", "A2" };
+    const char* b[] = { "B1", "B2" };
+    sendq_push(&q, "P1");
+    sendq_push_all(&q, a, 2, 1);
+    sendq_push(&q, "P2");
+    sendq_push_all(&q, b, 2, 2);
+    TEST_ASSERT_EQUAL_INT(2, sendq_drop_seq(&q, 1));
+    expect_pop_seq("P1", 0);
+    expect_pop_seq("P2", 0);
+    expect_pop_seq("B1", 2);
+    expect_pop_seq("B2", 2);
+    TEST_ASSERT_EQUAL_UINT(0, sendq_count(&q));
+}
+
+void test_drop_all_sequences_keeps_plain_lines() {
+    const char* a[] = { "A1", "A2" };
+    sendq_push_all(&q, a, 2, 1);
+    sendq_push(&q, "$A");
+    TEST_ASSERT_EQUAL_INT(2, sendq_drop_all_seqs(&q));
+    expect_pop_seq("$A", 0);
+}
+
+// Compaction across the end of the ring.
+void test_drop_across_wraparound() {
+    char out[SENDQ_LINE];
+    push_n(SENDQ_SLOTS - 3);
+    for (int i = 0; i < SENDQ_SLOTS - 3; i++) sendq_pop(&q, out, sizeof(out));
+    const char* a[] = { "A1", "A2", "A3", "A4", "A5" };
+    sendq_push(&q, "P1");
+    sendq_push_all(&q, a, 5, 9);
+    sendq_push(&q, "P2");
+    TEST_ASSERT_EQUAL_INT(5, sendq_drop_seq(&q, 9));
+    expect_pop_seq("P1", 0);
+    expect_pop_seq("P2", 0);
+    TEST_ASSERT_EQUAL_UINT(0, sendq_count(&q));
+}
+
+void test_drop_seq_zero_is_a_no_op() {
+    sendq_push(&q, "P1");
+    TEST_ASSERT_EQUAL_INT(0, sendq_drop_seq(&q, 0));
+    TEST_ASSERT_EQUAL_UINT(1, sendq_count(&q));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_empty_pop_fails);
@@ -105,5 +196,13 @@ int main(int, char**) {
     RUN_TEST(test_recovers_after_pop);
     RUN_TEST(test_long_line_truncates_and_terminates);
     RUN_TEST(test_null_push_is_rejected);
+    RUN_TEST(test_autozero_sized_sequence_fits_an_empty_queue);
+    RUN_TEST(test_sequence_is_all_or_nothing);
+    RUN_TEST(test_sequence_rejects_seq_zero_and_null_lines);
+    RUN_TEST(test_pop_reports_sequence);
+    RUN_TEST(test_drop_one_sequence_keeps_the_rest_in_order);
+    RUN_TEST(test_drop_all_sequences_keeps_plain_lines);
+    RUN_TEST(test_drop_across_wraparound);
+    RUN_TEST(test_drop_seq_zero_is_a_no_op);
     return UNITY_END();
 }

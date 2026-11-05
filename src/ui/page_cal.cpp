@@ -81,8 +81,11 @@ static void dist_cb(lv_event_t* e) {
 // G91 for the move, then straight back to G90: leaving the parser in relative
 // mode is how the next absolute move from any other page goes somewhere absurd.
 static void move_cb(lv_event_t*) {
-    send_linef("G91 G0 %s%.3f", AXIS_LBL[s_axis], (double)commanded());
-    send_line("G90");
+    seq_begin("Calibration move");
+    seq_cleanup("G90");
+    seq_linef("G91 G0 %s%.3f", AXIS_LBL[s_axis], (double)commanded());
+    seq_line("G90");
+    seq_send();
 }
 
 static void meas_cb(lv_event_t* e) {

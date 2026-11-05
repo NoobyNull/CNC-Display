@@ -66,17 +66,18 @@ static void sniff_board(const char* line) {
 static bool s_update_req = false;
 bool model_take_update_request() { bool r = s_update_req; s_update_req = false; return r; }
 // FluidNC prints "Grbl 4.1 [FluidNC v4.1.0 ...]" once per boot, as the LAST line
-// of startup, when it can finally answer commands ("[MSG:RST]" comes ~10 s
-// earlier and would prime into the void). Seeing it mid-session means the
-// controller restarted while this panel stayed up, and everything primed at
-// first link (settings, config, offsets, auto-report) died with the old run.
+// of startup, when it can finally answer commands, and again after every soft
+// reset. GrblParserC routes it to handle_signon(), never to handle_other(), so
+// this is the only place it can be seen. link_service() takes the flag.
 static bool s_board_reset = false;
 
 bool model_take_board_reset() { bool r = s_board_reset; s_board_reset = false; return r; }
 
-static void sniff_reset(const char* line) {
-    if (!line) return;
-    if (strncmp(line, "Grbl ", 5) == 0 && strstr(line, "FluidNC")) s_board_reset = true;
+extern "C" void handle_signon(char* version, char* extra) {
+    char buf[CLOG_LINE_MAX];
+    snprintf(buf, sizeof(buf), "Grbl %s %s", version ? version : "", extra ? extra : "");
+    clog_add(buf);
+    s_board_reset = true;
 }
 
 void model_flag_message(const char* cmd, const char* args) {
@@ -107,7 +108,6 @@ bool page_diag_limits_feed(const char* line);
 // ignores what is not addressed to it.
 extern "C" void handle_other_line(char* line) {
     if (!line) return;
-    sniff_reset(line);
     sniff_board(line);   // the banner arrives as a plain line, not only as [MSG:]
     // The limit monitor gets first refusal: its stream is addressed to Diag,
     // and caps must never consume it (doing so blanked the limit lamps AND

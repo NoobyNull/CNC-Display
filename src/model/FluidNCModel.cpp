@@ -15,6 +15,12 @@
 #include "model/sendq.h"
 #include "model/homed.h"
 #include "model/motors.h"
+#include "model/linkwatch.h"
+#include "model/path_loader.h"
+#include "model/offsets.h"
+#include "model/fnc_settings.h"
+#include <stdarg.h>
+#include <stdio.h>
 
 #ifdef USE_WIFI
 #    include "WiFiConnection.h"  // wifi_use_uart_mode()
@@ -171,11 +177,21 @@ void drv_reset_axis(char ax) {
         case 'A': outs[0] = 4;              break;
         default:  return;
     }
+    // One sequence: a relay switched on must never be left on because the
+    // line that switches it off was dropped.
+    char off[32] = "";
+    seq_begin("Driver reset");
     for (int i = 0; i < 2; i++)
-        if (outs[i] >= 0) send_linef("M64 P%d", outs[i]);
-    send_line("G4 P0.75");   // relay drop + driver discharge; tune on bench
+        if (outs[i] >= 0) seq_linef("M64 P%d", outs[i]);
+    seq_line("G4 P0.75");   // relay drop + driver discharge; tune on bench
     for (int i = 0; i < 2; i++)
-        if (outs[i] >= 0) send_linef("M65 P%d", outs[i]);
+        if (outs[i] >= 0) {
+            seq_linef("M65 P%d", outs[i]);
+            const size_t n = strlen(off);
+            snprintf(off + n, sizeof(off) - n, "%sM65 P%d", n ? "\n" : "", outs[i]);
+        }
+    seq_cleanup(off);
+    seq_send();
 }
 
 #ifdef E4_POS_T
@@ -212,61 +228,200 @@ extern "C" void show_dro(const pos_t* axes, const pos_t* wco, bool isMpos, bool*
 #endif
 
 // ---- non-blocking send -----------------------------------------------------
-// fnc_send_line() opens with `while (_ackwait)`, spinning until the previous
-// line is acked or its timeout expires. Every UI caller reaches it from inside
-// an LVGL event callback, i.e. from inside lv_timer_handler(), which is also
-// what drives touch_poll() and the input read. So a controller that is slow or
-// silent does not slow the machine down, it freezes the panel.
-//
-// That was measured, not guessed: at link-up the panel stalled 2175ms and then
-// 6175ms -- the second is three consecutive 2000ms timeouts -- from the priming
-// lines alone. 8.4s of dead screen, every power-on, with no way to press HOLD.
-//
-// The fix belongs here rather than at the ~20 call sites: every page sends
-// something, and a guard per caller is both a bigger diff and one someone will
-// forget. Queue, and drain from loop().
-static const int32_t ACK_TIMEOUT_MS = 2000;
+// Every line to the controller goes through here, never straight from a UI
+// callback: GrblParserC's fnc_send_line() spins in `while (_ackwait)` until the
+// previous line is acked, and a UI callback runs inside lv_timer_handler(), so
+// a slow controller froze the panel (8.4 s at every power-on, measured). Lines
+// are queued and drained from loop() one at a time, each waiting for its ok or
+// error. This layer writes the bytes and keeps the ack gate itself, so the
+// parser's own gate is never armed and nothing here can spin.
 
-static sendq_t  s_sendq;
-static uint32_t s_ack_deadline = 0;   // 0 = nothing outstanding
+static const uint32_t ACK_TIMEOUT_MS     = 2000;
+// A sequence line's ok can be a long time coming: FluidNC answers G38.2 only
+// when the probe move ends, which at F75 over 5 mm is 4 s. Timing out early
+// would send the next line while the probe is still moving and misattribute
+// every ok after it, so an error could no longer be traced to its sequence.
+static const uint32_t SEQ_ACK_TIMEOUT_MS = 30000;
 
-// Mirrors GrblParserC's private _ackwait. Deliberately self-healing: it expires
-// slightly AFTER the parser's own limit, so a missed ok/error/timeout callback
-// costs one late send instead of wedging the queue for ever. State another
-// layer can also move must never be the only thing holding a gate open -- see
-// the backlight bug in docs/HANDOFF.md.
+static sendq_t     s_sendq;
+static uint32_t    s_ack_deadline = 0;   // 0 = nothing outstanding
+static sendq_seq_t s_inflight_seq = 0;   // sequence of the line awaiting its ack
+static sendq_seq_t s_next_seq     = 0;
+
+// Each sequence's name and what to send if it is cut short, by seq id. Only the
+// sequences that can be in the queue at once need a slot.
+#define SEQ_META 8
+static struct {
+    sendq_seq_t seq;
+    char        name[24];
+    char        cleanup[48];
+} s_meta[SEQ_META];
+
 bool send_busy() {
     if (s_ack_deadline == 0) return false;
     if ((int32_t)(milliseconds() - s_ack_deadline) >= 0) {
+        // No ok, no error. Carry on rather than wedge the queue for ever.
         s_ack_deadline = 0;
+        s_inflight_seq = 0;
+        clog_add("[MSG:WARN: no reply from the controller - sending the next line]");
         return false;
     }
     return true;
 }
 
-static void send_now(const char* line) {
-    fnc_send_line(line, ACK_TIMEOUT_MS);
-    s_ack_deadline = milliseconds() + ACK_TIMEOUT_MS + 100;
+static void send_now(const char* line, sendq_seq_t seq) {
+    for (const char* p = line; *p; ++p) fnc_putchar((uint8_t)*p);
+    fnc_putchar('\n');
+    uint32_t deadline = milliseconds() + (seq ? SEQ_ACK_TIMEOUT_MS : ACK_TIMEOUT_MS);
+    s_ack_deadline = deadline ? deadline : 1;   // 0 means idle
+    s_inflight_seq = seq;
+}
+
+static void line_acked() {
+    s_ack_deadline = 0;
+    s_inflight_seq = 0;
+}
+
+// The last line of a sequence was answered ok: it finished, and an alarm
+// after this point is not its business.
+static void seq_ok(sendq_seq_t seq) {
+    if (!seq || sendq_count_seq(&s_sendq, seq)) return;
+    auto& m = s_meta[seq % SEQ_META];
+    if (m.seq == seq) m.seq = 0;
 }
 
 void send_pump() {
     if (send_busy()) return;
-    char line[SENDQ_LINE];
-    if (!sendq_pop(&s_sendq, line, sizeof(line))) return;
-    send_now(line);
+    char        line[SENDQ_LINE];
+    sendq_seq_t seq = 0;
+    if (!sendq_pop_seq(&s_sendq, line, sizeof(line), &seq)) return;
+    send_now(line, seq);
 }
 
 void send_line(const char* s, int timeout) {
     (void)timeout;   // the queue owns the timing now
     motors_guard(s);   // re-arm hard limits ahead of anything that moves
     if (!sendq_push(&s_sendq, s)) {
-        // A machine command has been thrown away. Say so; a silently dropped
-        // G10 or $H is exactly the kind of thing that gets blamed on the
-        // controller.
-        dbg_println("[send] QUEUE FULL - line dropped");
+        // A machine command has been thrown away. Say so on the screen; a
+        // silently dropped G10 or $H gets blamed on the controller.
+        char b[CLOG_LINE_MAX];
+        snprintf(b, sizeof(b), "send queue full - dropped: %s", s);
+        model_flag_error(b);
     }
     dbg_println(s);
     send_pump();   // straight out when the link is idle, which is the normal case
+}
+
+// ---- sequences --------------------------------------------------------------
+
+static char        s_stage[SENDQ_SLOTS][SENDQ_LINE];
+static int         s_stage_n    = 0;
+static bool        s_stage_over = false;
+static char        s_stage_name[24];
+static char        s_stage_cleanup[48];
+
+void seq_begin(const char* name) {
+    s_stage_n = 0;
+    s_stage_over = false;
+    snprintf(s_stage_name, sizeof(s_stage_name), "%s", name ? name : "sequence");
+    s_stage_cleanup[0] = 0;
+}
+
+void seq_cleanup(const char* line) {
+    snprintf(s_stage_cleanup, sizeof(s_stage_cleanup), "%s", line ? line : "");
+}
+
+void seq_line(const char* s) {
+    if (!s) return;
+    if (s_stage_n >= SENDQ_SLOTS) { s_stage_over = true; return; }
+    snprintf(s_stage[s_stage_n++], SENDQ_LINE, "%s", s);
+}
+
+void seq_linef(const char* fmt, ...) {
+    char    b[SENDQ_LINE];
+    va_list va;
+    va_start(va, fmt);
+    vsnprintf(b, sizeof(b), fmt, va);
+    va_end(va);
+    seq_line(b);
+}
+
+static void refuse(const char* why) {
+    char b[CLOG_LINE_MAX];
+    snprintf(b, sizeof(b), "%s not started: %s", s_stage_name, why);
+    model_flag_error(b);
+}
+
+bool seq_send() {
+    if (s_stage_n == 0) return false;
+    if (s_stage_over) { refuse("too long for the send queue"); return false; }
+    if (state == Disconnected) { refuse("no link"); return false; }
+
+    // Re-arm released steppers first, as send_line() would for each line.
+    for (int i = 0; i < s_stage_n; i++)
+        if (motors_line_can_move(s_stage[i])) { motors_guard(s_stage[i]); break; }
+
+    if (++s_next_seq == 0) s_next_seq = 1;
+    const char* lines[SENDQ_SLOTS];
+    for (int i = 0; i < s_stage_n; i++) lines[i] = s_stage[i];
+    if (!sendq_push_all(&s_sendq, lines, s_stage_n, s_next_seq)) {
+        refuse("the controller is still busy with earlier commands");
+        return false;
+    }
+    auto& m = s_meta[s_next_seq % SEQ_META];
+    m.seq = s_next_seq;
+    snprintf(m.name, sizeof(m.name), "%s", s_stage_name);
+    snprintf(m.cleanup, sizeof(m.cleanup), "%s", s_stage_cleanup);
+    s_stage_n = 0;
+    send_pump();
+    return true;
+}
+
+// The controller refused a line, or alarmed. Whatever sequence was running
+// must not carry on: its later lines assume the earlier ones happened.
+static void abort_seq(sendq_seq_t seq, const char* why) {
+    if (!seq) return;
+    const int dropped = sendq_drop_seq(&s_sendq, seq);
+    auto&     m       = s_meta[seq % SEQ_META];
+    const bool known  = m.seq == seq;
+    if (!known && dropped == 0) return;   // already stopped (an alarm, then its error)
+    char b[CLOG_LINE_MAX];
+    snprintf(b, sizeof(b), "%s stopped (%s), %d line%s not sent", known ? m.name : "sequence", why,
+             dropped, dropped == 1 ? "" : "s");
+    model_flag_error(b);
+    if (known && m.cleanup[0]) {
+        char  c[sizeof(m.cleanup)];
+        char* save = nullptr;
+        snprintf(c, sizeof(c), "%s", m.cleanup);
+        for (char* l = strtok_r(c, "\n", &save); l; l = strtok_r(nullptr, "\n", &save))
+            sendq_push(&s_sendq, l);
+    }
+    if (known) m.seq = 0;
+}
+
+void send_flush(const char* why) {
+    const size_t n = sendq_count(&s_sendq);
+    sendq_reset(&s_sendq);
+    line_acked();   // nothing written before this point will be answered
+    for (auto& m : s_meta) m.seq = 0;
+    if (n && why) {
+        char b[CLOG_LINE_MAX];
+        snprintf(b, sizeof(b), "[MSG:WARN: %s - %u queued line%s discarded]", why, (unsigned)n,
+                 n == 1 ? "" : "s");
+        clog_add(b);
+    }
+}
+
+static uint32_t s_reset_sent_ms = 0;
+
+void send_reset() {
+    fnc_realtime(Reset);
+    s_reset_sent_ms = milliseconds() | 1;
+    send_flush("reset");
+}
+
+bool send_reset_was_recent() {
+    return s_reset_sent_ms && (int32_t)(milliseconds() - s_reset_sent_ms) < 3000;
 }
 
 // Count of jog lines streamed over Telnet but not yet acked by "ok""" to prevent outrunning FluidNC planner.
@@ -301,7 +456,7 @@ void send_jog_line(const char* s) {
     if (motors_released()) { send_line(s); return; }
     if (s_sendq.count) return;
     if (send_busy()) return;
-    send_now(s);
+    send_now(s, 0);
     dbg_println(s);
 }
 
@@ -364,34 +519,70 @@ const char* mode_string() {
 state_t previous_state;
 bool    awaiting_alarm = false;
 
-// Called once when status report received after being disconnected.
-// Use schedule_action() to defer execution to dispatch_events() in the main loop where the parser is idle and _report is clean.
-static void connect_init() {
-    bootlog_printf("connected: state=%s", my_state_string);
-    resetFlowControl();                  // clear any stale XOFF on the link
-#ifndef USE_WIFI
-    fnc_realtime((realtime_cmd_t)0x0c);  // Ctrl-L - echo off (UART only)
-#endif
-    send_line("$G");                     // Refresh GCode modes
-    send_line("$RI=200");                // Enable auto-reporting every 200 ms
+// ---- link lifecycle ---------------------------------------------------------
+// One place decides when the link is up, down, or talking to a controller that
+// has just restarted, and what the panel does about each.
 
-    // Pre-populate the SD file list on the FIRST connect only. Re-fetching it
-    // on every reconnect is both wasteful and harmful over ESP-NOW
-    static bool s_file_list_primed = false;
-    if (!s_file_list_primed) {
-        s_file_list_primed = true;
-        filelist_request();                // Request SD file list (once)
+static bool s_primed = false;
+
+// Everything the panel asks the controller once per connection. A controller
+// restart wipes all of it (auto-report, parser modes, the panel's view of the
+// config), so it runs again after one.
+static void prime() {
+    s_primed = true;
+    bootlog_printf("link up (%s): priming", my_state_string);
+    resetFlowControl();                   // clear any stale XOFF on the link
+    fnc_realtime((realtime_cmd_t)0x0c);   // Ctrl-L: echo off
+    send_line("$G");                      // G-code modes
+    send_line("$RI=200");                 // auto-report every 200 ms
+    motors_resync();                      // a drop may have been the controller rebooting
+    motors_on_link();
+    // Config dump first: it decides which controls are even offered.
+    caps_request_config();
+    send_line("$#");
+    filelist_request();
+    // The full settings dump also feeds the Diag limit lamps.
+    fncset_request_all();
+}
+
+static void link_lost() {
+    clog_add("[MSG:WARN: link lost - no reply from the controller for 4 s]");
+    send_flush("link lost");
+    set_disconnected_state();
+    s_primed = false;
+    act_on_state_change();
+}
+
+void link_service() {
+    // While XModem owns the wire a '?' would land in the middle of the
+    // transfer, so the watch stands down (and starts a fresh window after).
+    const bool watch = state != Disconnected && !pathload_busy();
+    switch (linkwatch_tick(milliseconds(), fnc_rx_count(), watch)) {
+        case LINKWATCH_PING: fnc_realtime(StatusReport); break;
+        case LINKWATCH_LOST: link_lost(); break;
+        default: break;
     }
-    detect_homing_info();                // Probe axis homing state
+
+    if (model_take_board_reset()) {
+        // The banner follows a soft reset too. One the panel sent itself keeps
+        // position (FluidNC alarms if it did not); anything else may have been
+        // a power cycle, so homing is no longer trusted.
+        const bool ours = send_reset_was_recent();
+        send_flush(ours ? nullptr : "controller restarted");
+        if (!ours) {
+            clog_add("[MSG:WARN: controller restarted - home before moving]");
+            homed_forget();
+        }
+        s_primed = false;
+    }
+    if (state == Disconnected) { s_primed = false; return; }
+    if (!s_primed) prime();
 }
 
 extern "C" void show_state(const char* state_string) {
     previous_state = state;
     state_t new_state;
     if (decode_state_string(state_string, new_state) && state != new_state) {
-        if (state == Disconnected) {
-            schedule_action(connect_init);
-        }
         // Leaving Alarm retires its number: the next alarm must be fetched
         // or reported afresh, never shown with the last one's.
         if (state == Alarm) lastAlarm = 0;
@@ -454,6 +645,13 @@ extern "C" void show_error(int error) {
 #ifdef FNC_RX_TRACE
     dbg_printf("[rx-err] error:%d\n", error);
 #endif
+    {
+        const sendq_seq_t seq = s_inflight_seq;
+        line_acked();
+        char why[16];
+        snprintf(why, sizeof(why), "error:%d", error);
+        abort_seq(seq, why);
+    }
     errorExpire = milliseconds() + 1000;
     lastError   = error;
     if (s_jog_window > 0) {
@@ -470,10 +668,9 @@ extern "C" void show_error(int error) {
     request_redisplay();
 }
 
-extern "C" void show_timeout() {
-    s_ack_deadline = 0;   // parser just cleared _ackwait; keep the queue moving
-    dbg_println("Timeout");
-}
+// Only fnc_send_line() raises this, and nothing calls it: send_now() keeps
+// the ack gate here. Kept so the parser's weak default is never what runs.
+extern "C" void show_timeout() {}
 // The parser consumes ok / error:N / ALARM:N itself, so they never reached the
 // console log as plain lines -- the console showed no replies at all, and the
 // FluidNC names console_log gives error and alarm codes never appeared.
@@ -487,7 +684,8 @@ extern "C" void handle_msg(char* command, char* arguments) {
 extern "C" void show_ok() {
     clog_add("ok");
     caps_reply_end();
-    s_ack_deadline = 0;   // parser just cleared _ackwait; keep the queue moving
+    seq_ok(s_inflight_seq);
+    line_acked();
 #ifdef FNC_RX_TRACE
     dbg_printf("[rx-ok]\n");
 #endif
@@ -512,6 +710,16 @@ extern "C" void show_alarm(int alarm) {
     }
     lastAlarm = alarm;
     homed_note_alarm(alarm);
+    // An alarm stops the machine whatever line it came from. Every queued
+    // sequence is now running on wrong assumptions; plain lines ($A, $X, $G)
+    // stay, since they are how the alarm gets read and cleared.
+    {
+        char why[16];
+        snprintf(why, sizeof(why), "ALARM:%d", alarm);
+        // Every sequence not yet finished: in flight, or with lines queued.
+        for (int i = 0; i < SEQ_META; i++)
+            if (s_meta[i].seq) abort_seq(s_meta[i].seq, why);
+    }
     request_redisplay();
 }
 

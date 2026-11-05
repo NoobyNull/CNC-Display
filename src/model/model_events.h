@@ -26,8 +26,8 @@ bool        model_take_update_request();   // [MSG:PANEL:UPDATE] arrived
 // drops the banner long before anyone opens the HW page.
 const char* model_expander_board();
 
-// True once after the controller prints its boot banner. The panel uses it to
-// re-prime a link that survived a controller reset.
+// True once after the controller prints its sign-on banner (boot or soft
+// reset). link_service() uses it to flush and re-prime a link that survived it.
 bool model_take_board_reset();
 
 // GrblParserC hands unrecognised lines to handle_other(); this fans them out to

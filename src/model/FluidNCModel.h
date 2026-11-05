@@ -71,6 +71,29 @@ void send_pump();
 bool send_busy();   // an ack is still outstanding
 void send_linef(const char* fmt, ...);
 
+// Multi-line actions that only make sense whole (AutoZero, a relative move and
+// its G90, a driver reset). Stage with seq_line(), then seq_send(): the lines
+// are queued all together or not at all, and false means refused, with the
+// reason already on screen. If the controller answers any line with an error,
+// or alarms, the rest are not sent and the cleanup lines (optional, e.g. "G90";
+// several are separated by '\n') go instead.
+void seq_begin(const char* name);
+void seq_cleanup(const char* line);
+void seq_line(const char* s);
+void seq_linef(const char* fmt, ...);
+bool seq_send();
+
+// Drop everything queued. Lines already written are not recalled.
+void send_flush(const char* why);
+// Soft-reset the controller (Ctrl-X) and drop everything queued, so nothing
+// waiting behind the reset runs after it.
+void send_reset();
+bool send_reset_was_recent();
+
+// Link lifecycle, once per loop(): liveness (NO LINK after 4 s of silence),
+// controller restarts, and priming a fresh connection.
+void link_service();
+
 JogFlowControl jog_flow_control();
 void send_jog_cancel();
 

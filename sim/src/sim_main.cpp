@@ -51,19 +51,6 @@ static const char* PAGE_NAMES[PAGE_COUNT] = {
 static void ui_tick_cb(lv_timer_t*) { shell_tick(); }
 static void touch_tick_cb(lv_timer_t*) { touch_poll(); }
 
-static bool s_primed = false;
-
-static void prime_link_if_up() {
-    if (s_primed) return;
-    if (state == Disconnected) return;
-    s_primed = true;
-    caps_request_config();
-    send_line("$#");
-    filelist_request();
-    fncset_request_all();
-    Serial.println("link up: primed config, offsets, file list and settings");
-}
-
 static void link_watchdog() {
     static uint32_t next_log = 0;
     uint32_t now = millis();
@@ -162,7 +149,7 @@ int main(int argc, char** argv) {
         }
         send_pump();
         imu_poll();
-        prime_link_if_up();
+        link_service();
         link_watchdog();
         service_action();
         lv_timer_handler();

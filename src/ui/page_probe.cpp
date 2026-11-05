@@ -96,16 +96,23 @@ static void az_probe() {
         "G38.2 Y5 F75",
         "G90 G53 G0 Y[[#<az_a>+#5062]/2]",
     };
+    // One sequence, 28 lines: queued whole or refused, and stopped at the
+    // first error or alarm (a missed wall is ALARM:5) instead of probing on
+    // from the wrong place. Stopped early it still leaves G91 behind, hence
+    // the cleanup line.
+    seq_begin("AutoZero");
+    seq_cleanup("G90");
     for (const char* l : WALLS) {
-        if (l) send_line(l);
-        else   send_linef("G10 L20 P0 Z%.3f", (double)s_params[P_AZ_FLOOR].value);
+        if (l) seq_line(l);
+        else   seq_linef("G10 L20 P0 Z%.3f", (double)s_params[P_AZ_FLOOR].value);
     }
-    send_linef("G10 L20 P0 X%.3f Y%.3f",
-               (double)(CORNER_SX[c] * s_params[P_AZ_CENTRE].value),
-               (double)(CORNER_SY[c] * s_params[P_AZ_CENTRE].value));
+    seq_linef("G10 L20 P0 X%.3f Y%.3f",
+              (double)(CORNER_SX[c] * s_params[P_AZ_CENTRE].value),
+              (double)(CORNER_SY[c] * s_params[P_AZ_CENTRE].value));
     // Out of the pocket before anything moves sideways; X/Y stay put so the
     // plate can be lifted off. gSender's final X0Y0 move is left to GOTO.
-    send_linef("G90 G0 Z%.3f", (double)(s_params[P_AZ_FLOOR].value + s_params[P_AZ_LIFT].value));
+    seq_linef("G90 G0 Z%.3f", (double)(s_params[P_AZ_FLOOR].value + s_params[P_AZ_LIFT].value));
+    seq_send();
 }
 
 static void show_value(lv_obj_t* lbl, float v) {
@@ -255,9 +262,15 @@ static void edit_cb(lv_event_t*) {
 // than re-derived: probe down, then retract by the configured distance.
 static void probe_cb(lv_event_t*) {
     if (settings_probe_type() == 1) { az_probe(); return; }
-    send_linef("G38.2G91F%dZ-%dP%.2f",
-               (int)s_params[P_FEED].value, (int)s_params[P_TRAVEL].value, (double)s_params[P_OFFSET].value);
-    send_linef("$J=G91F1000Z%.2f", (double)s_params[P_RETRACT].value);
+    // G91 on the probe line is modal: without the trailing G90 the parser was
+    // left relative, and the next absolute move from any page went wrong.
+    seq_begin("Probe");
+    seq_cleanup("G90");
+    seq_linef("G38.2G91F%dZ-%dP%.2f",
+              (int)s_params[P_FEED].value, (int)s_params[P_TRAVEL].value, (double)s_params[P_OFFSET].value);
+    seq_line("G90");
+    seq_linef("$J=G91F1000Z%.2f", (double)s_params[P_RETRACT].value);
+    seq_send();
 }
 
 static void tlo_cb(lv_event_t*) {

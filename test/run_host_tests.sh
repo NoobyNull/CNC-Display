@@ -37,8 +37,18 @@ tests=("$@")
 for t in "${tests[@]}"; do
     dir=test/test_$t
     bin=$OUT/test_$t
+    # A test with its own `sources` file links exactly those (paths from the
+    # repo root, plus the parser) and brings its own stand-ins, instead of the
+    # shared model set and host_stubs.cpp, which stub out the very code it tests.
+    if [ -f "$dir/sources" ]; then
+        srcs="$(grep -v '^#' "$dir/sources" | xargs)"
+        extra="-I $dir -I sim/shim -x c $DEPS/GrblParser/src/GrblParserC.c $DEPS/GrblParser/src/e4math.c -x none"
+    else
+        srcs="test/host_stubs.cpp $SRCS"
+        extra=""
+    fi
     # shellcheck disable=SC2086
-    if ! g++ $CXXFLAGS -o "$bin" "$dir"/*.cpp test/host_stubs.cpp $SRCS \
+    if ! g++ $CXXFLAGS -o "$bin" "$dir"/*.cpp $srcs $extra \
             -x c "$DEPS/Unity/src/unity.c" 2> "$bin.log"; then
         echo "BUILD FAIL  $t"; sed -n 1,40p "$bin.log"; fail=1; continue
     fi

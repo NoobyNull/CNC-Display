@@ -242,20 +242,6 @@ static void boot() {
 
 // Mirrors loop() in main.cpp. The XModem branches are gone with the SD card
 // they read from; everything else is the same sequence.
-// Mirrors prime_link_if_up() in main.cpp: the panel asks the controller to
-// describe itself exactly once, the first time the link is actually alive.
-// Without this the simulator never requests the config dump and every
-// capability reads UNKNOWN, which is a different UI from the panel's.
-static void prime_link_if_up() {
-    static bool primed = false;
-    if (primed || state == Disconnected) return;
-    primed = true;
-    send_line("$#");
-    filelist_request();
-    fncset_request_all();
-    caps_request_config();
-}
-
 static void step() {
     sim_transport_tick();
     // Same routing as loop() in main.cpp: while an XModem transfer owns the
@@ -274,7 +260,7 @@ static void step() {
         }
     }
     send_pump();
-    prime_link_if_up();
+    link_service();
     caps_poll();
     imu_poll();
     service_action();
