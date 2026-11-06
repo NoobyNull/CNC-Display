@@ -32,7 +32,6 @@
 // False when the peripheral never came up, so the caller does not declare a
 // link ready over a driver that failed to install.
 bool init_fnc_uart();
-void reinit_fnc_uart();
 
 // Byte counters for the link diagnostic. Cheap, and the only way to tell
 // "wired wrong" (rx stays 0) from "wrong baud" (rx climbs, nothing parses).

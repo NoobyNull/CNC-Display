@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <driver/uart.h>
 
-// Lifted from FluidDial-main/src/SystemArduino.cpp:133. UART_SCLK_XTAL is what
+// Lifted from FluidDial (SystemArduino.cpp). UART_SCLK_XTAL is what
 // keeps 1 Mbaud stable on the S3 when the APB clock scales — do not "simplify"
 // it back to the default clock source.
 
@@ -84,10 +84,6 @@ bool init_fnc_uart() {
     if (n == 4) s_init_err[0] = 0;
     else        snprintf(s_init_err, sizeof(s_init_err), "lb%d/4", n);
     return true;
-}
-
-void reinit_fnc_uart() {
-    init_fnc_uart();
 }
 
 void uart_putc(uint8_t c) {

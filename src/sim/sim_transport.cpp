@@ -414,7 +414,6 @@ const char* transport_label()  { return s_fd >= 0 ? "SIM LIVE" : "SIM FAKE"; }
 const char* transport_detail() { return s_detail; }
 
 bool init_fnc_uart() { return true; }
-void reinit_fnc_uart() {}
 
 // Both live in the real uart.cpp, which this file replaces. milliseconds() is
 // GrblParserC's clock — it must share an origin with millis(), or the model's

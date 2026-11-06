@@ -128,8 +128,8 @@ OpenATC rack — lives with the machine's config, not in this repo.
 ## Credits
 
 The FluidNC model and protocol handling started from Mitch Bradley's
-[FluidDial](https://github.com/bdring/FluidDial) (GPLv3, kept in
-`FluidDial-main/`), and the parser is his
+[FluidDial](https://github.com/bdring/FluidDial) (GPLv3; the copy
+that was vendored here is in the git history before the rework), and the parser is his
 [GrblParser](https://github.com/MitchBradley/GrblParser).
 
 ## License

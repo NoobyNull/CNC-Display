@@ -40,7 +40,6 @@ extern "C" int fnc_getchar() {
 extern "C" bool fnc_rx_waiting() { return !s_rx.empty(); }
 unsigned long fnc_rx_count() { return s_rx_count; }
 void resetFlowControl() {}
-void reinit_fnc_uart() {}
 bool page_diag_limits_feed(const char*) { return false; }
 float settings_get_float(const char*, float def) { return def; }
 void  settings_set_float(const char*, float) {}
@@ -50,7 +49,7 @@ static void reply(const char* text) {
     s_rx += text;
     while (!s_rx.empty()) fnc_poll();
 }
-static void loop_once() { send_pump(); link_service(); service_action(); }
+static void loop_once() { send_pump(); link_service(); }
 static void advance(int ms) {
     for (int t = 0; t < ms; t += 10) { s_now += 10; loop_once(); }
 }

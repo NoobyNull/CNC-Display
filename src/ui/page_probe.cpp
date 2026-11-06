@@ -258,7 +258,7 @@ static void edit_cb(lv_event_t*) {
     lv_obj_set_size(done, LV_PCT(100), TOUCH_TAP);
 }
 
-// Sequence copied from FluidDial-main/src/ProbingScene.cpp:29 and :51 rather
+// Sequence copied from FluidDial's ProbingScene.cpp rather
 // than re-derived: probe down, then retract by the configured distance.
 static void probe_cb(lv_event_t*) {
     if (settings_probe_type() == 1) { az_probe(); return; }

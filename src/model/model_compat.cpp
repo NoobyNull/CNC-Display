@@ -5,21 +5,6 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-// --- deferred action -------------------------------------------------------
-
-static ActionHandler s_action = nullptr;
-
-void schedule_action(ActionHandler action) {
-    s_action = action;
-}
-
-void service_action() {
-    if (!s_action) return;
-    ActionHandler a = s_action;
-    s_action = nullptr;      // clear first: the action may schedule another
-    a();
-}
-
 // --- redraw ----------------------------------------------------------------
 
 static bool s_redisplay = false;
@@ -49,14 +34,3 @@ void bootlog_printf(const char* fmt, ...) {
     dbg_println(buf);
     clog_add(buf);
 }
-
-// --- no-ops (see model_compat.h for why each one is empty) ------------------
-
-bool json_in_progress() { return false; }
-void json_reset_depth() {}
-
-extern "C" void file_request_failed_advance() {}
-
-void detect_homing_info() {}
-
-void parse_dollar(char* line) { (void)line; }

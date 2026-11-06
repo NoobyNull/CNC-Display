@@ -151,7 +151,6 @@ int main(int argc, char** argv) {
         imu_poll();
         link_service();
         link_watchdog();
-        service_action();
         lv_timer_handler();
 
         // Screenshot mode: give the link time to prime the page with real

@@ -81,12 +81,9 @@ static const int STATE_N = (int)(sizeof(STATE_NAME) / sizeof(STATE_NAME[0]));
 // slower bus. (On the simulator Arduino.h maps ps_malloc to plain malloc.)
 // Machine position for one axis, in e4 fixed point, always in MILLIMETRES.
 //
-// Two traps here. myAxes/myWco are the DISPLAY unit, not mm — show_dro() stores
-// e4 inches on a machine in G20 — so an inch-mode job would otherwise log
-// numbers 25.4x too small with nothing to say so. And the obvious conversion,
-// toMm(), cannot be used: FluidNCModel.h declares it unconditionally but only
-// DEFINES it in the non-E4 build, and this project is built -DE4_POS_T. It
-// compiles and fails at link.
+// myAxes/myWco are the DISPLAY unit, not mm — show_dro() stores e4 inches on a
+// machine in G20 — so an inch-mode job would otherwise log numbers 25.4x too
+// small with nothing to say so.
 static int32_t mpos_mm_e4(int axis) {
     e4_t v = myAxes[axis] + myWco[axis];
     return inInches ? e4_inch_to_mm(v) : v;

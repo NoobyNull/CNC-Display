@@ -263,7 +263,6 @@ static void step() {
     link_service();
     caps_poll();
     imu_poll();
-    service_action();
     lv_timer_handler();
 }
 

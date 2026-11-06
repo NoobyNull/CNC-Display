@@ -72,7 +72,6 @@ static bool link_open() {
 }
 
 bool init_fnc_uart() { return link_open(); }
-void reinit_fnc_uart() { link_open(); }
 
 unsigned long fnc_rx_count() { return s_rx; }
 unsigned long fnc_tx_count() { return s_tx; }

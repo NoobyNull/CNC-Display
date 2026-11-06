@@ -319,7 +319,6 @@ void loop() {
     link_service();   // liveness, controller restarts, priming
     caps_poll();
     link_watchdog();
-    service_action();
     remote_update();
     lv_timer_handler();
 }

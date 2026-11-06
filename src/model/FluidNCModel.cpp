@@ -22,10 +22,6 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-#ifdef USE_WIFI
-#    include "WiFiConnection.h"  // wifi_use_uart_mode()
-#endif
-
 
 // local copies of status items
 const char*        my_state_string    = "N/C";
@@ -48,13 +44,7 @@ uint32_t           mySelectedTool     = 0;
 std::string myModes = "no data";
 
 int      lastAlarm = 0;
-int      lastError = 0;
 bool     inInches  = false;
-uint32_t errorExpire;
-
-int num_digits() {
-    return inInches ? 3 : 2;
-}
 
 // clang-format off
 // Maps the state strings in status reports to internal state enum values
@@ -95,7 +85,6 @@ void set_disconnected_state() {
     state           = Disconnected;
     my_state_string = "N/C";
     homed_forget();
-    jog_window_reset();
 }
 
 extern "C" void begin_status_report() {
@@ -194,7 +183,6 @@ void drv_reset_axis(char ax) {
     seq_send();
 }
 
-#ifdef E4_POS_T
 extern "C" void show_dro(const pos_t* axes, const pos_t* wco, bool isMpos, bool* limits, size_t n_axis) {
     n_axes = (int)n_axis;
     for (int axis = 0; axis < n_axis; axis++) {
@@ -209,23 +197,6 @@ extern "C" void show_dro(const pos_t* axes, const pos_t* wco, bool isMpos, bool*
         myWco[axis] = inInches ? e4_mm_to_inch(wco[axis]) : wco[axis];
     }
 }
-#else
-pos_t fromMm(pos_t position) {
-    return inInches ? position / 25.4 : position;
-}
-pos_t toMm(pos_t position) {
-    return inInches ? position * 25.4 : position;
-}
-
-extern "C" void show_dro(const pos_t* axes, const pos_t* wco, bool isMpos, bool* limits, size_t n_axis) {
-    for (int axis = 0; axis < n_axis; axis++) {
-        myAxes[axis] = fromMm(axes[axis]);
-        if (isMpos) {
-            myAxes[axis] -= fromMm(wco[axis]);
-        }
-    }
-}
-#endif
 
 // ---- non-blocking send -----------------------------------------------------
 // Every line to the controller goes through here, never straight from a UI
@@ -424,33 +395,13 @@ bool send_reset_was_recent() {
     return s_reset_sent_ms && (int32_t)(milliseconds() - s_reset_sent_ms) < 3000;
 }
 
-// Count of jog lines streamed over Telnet but not yet acked by "ok""" to prevent outrunning FluidNC planner.
-static int s_jog_window = 0;
-int        jog_window_outstanding() { return s_jog_window; }
-void       jog_window_reset() { s_jog_window = 0; }
-
-// Stream network jogs without blocking
+// Jog chunks are a real-time stream: one tick's worth of travel each,
+// re-issued every 150 ms while a key is held. Deliberately NOT queued: backing
+// them up would keep the axis moving after the finger lifts, which is the
+// runaway the whole design avoids. If the controller has not acked the last
+// one it is behind, so skip this chunk -- the axis pauses for a tick and
+// catches up on the next.
 void send_jog_line(const char* s) {
-#ifdef USE_WIFI
-    if (!wifi_use_uart_mode()) {  // WiFi / Telnet / ESP-NOW: stream, no ack-gate
-        for (const char* p = s; *p; ++p) {
-            fnc_putchar((uint8_t)*p);
-        }
-        fnc_putchar('\n');
-        dbg_println(s);
-        
-        if (jog_flow_control() == JogFlowControl::Window) {
-            ++s_jog_window;
-        }
-        return;
-    }
-#endif
-    // Deliberately NOT queued. Jog chunks are a real-time stream: one tick's
-    // worth of travel each, re-issued every 150ms while a key is held. Backing
-    // them up in a queue would keep the axis moving after the finger lifts,
-    // which is the runaway the whole design avoids. If the controller has not
-    // acked the last one it is behind, so skip this chunk -- the axis pauses
-    // for a tick and catches up on the next.
     // Steppers released: queue it behind the re-arm lines, and never let a
     // later chunk overtake lines still queued.
     if (motors_released()) { send_line(s); return; }
@@ -460,27 +411,7 @@ void send_jog_line(const char* s) {
     dbg_println(s);
 }
 
-JogFlowControl jog_flow_control() {
-#ifdef USE_WIFI
-    if (wifi_use_uart_mode()) {
-        return JogFlowControl::Blocking;
-    }
-    if (wifi_use_espnow_mode()) {
-        return JogFlowControl::Timed;
-    }
-    return JogFlowControl::Window;
-#else
-    return JogFlowControl::Blocking;
-#endif
-}
-
 void send_jog_cancel() {
-#ifdef USE_WIFI
-    if (!wifi_use_uart_mode() && !wifi_use_espnow_mode()) {
-        wifi_discard_pending_text();
-        jog_window_reset();
-    }
-#endif
     fnc_realtime(JogCancel);
 }
 
@@ -500,23 +431,10 @@ char axisNumToChar(int axis) {
     return "XYZABC"[axis];
 }
 
-const char* axisNumToCStr(int axis) {
-    static char ret[2] = { '\0', '\0' };
-    ret[0]             = axisNumToChar(axis);
-    return ret;
-}
-
-const char* intToCStr(int val) {
-    static char buffer[20];
-    sprintf(buffer, "%d", val);
-    return buffer;
-}
-
 const char* mode_string() {
     return myModes.c_str();
 }
 
-state_t previous_state;
 bool    awaiting_alarm = false;
 
 // ---- link lifecycle ---------------------------------------------------------
@@ -580,7 +498,6 @@ void link_service() {
 }
 
 extern "C" void show_state(const char* state_string) {
-    previous_state = state;
     state_t new_state;
     if (decode_state_string(state_string, new_state) && state != new_state) {
         // Leaving Alarm retires its number: the next alarm must be fetched
@@ -598,31 +515,12 @@ extern "C" void show_state(const char* state_string) {
 
 extern "C" void handle_other(char* line) {
     // Fan out to the offset table, the file list and the console BEFORE the
-    // early returns below: the file-list reply is exactly the '{' case that
-    // returns into handle_json(), so consumers placed after it never see it.
+    // early return below: the file-list reply is exactly the '{' case.
     handle_other_line(line);
 
-    // $-responses are config, never JSON. If FluidNC tore down a JSON
-    // document by sending a $-response (rare, but happens on some error
-    // paths), drop the depth counter so the next document starts clean.
-    if (*line == '$') {
-        if (json_in_progress()) {
-            json_reset_depth();
-        }
-        parse_dollar(line);
-        return;
-    }
-    // Route to the streaming JSON parser if either (a) this line opens a
-    // new JSON object, or (b) a previous chunk left the outer brace open.
-    // FluidNC sends {"files":[...]} etc. without the [MSG:JSON:...] wrapper
-    // and splits the body across multiple lines for large file/macro lists.
-    if (*line == '{' || json_in_progress()) {
-        handle_json(line);
-        return;
-    }
-#ifdef FNC_RX_TRACE
-    dbg_printf("[rx-other] %.120s%s\n", line, strlen(line) > 120 ? "..." : "");
-#endif
+    // $-responses are config and {...} lines are JSON replies; both were
+    // already offered to their consumers by handle_other_line() above.
+    if (*line == '$' || *line == '{') return;
     int alarmlen = strlen("Active alarm: ");
     if (strncmp(line, "Active alarm: ", alarmlen) == 0) {
         lastAlarm = atoi(line + alarmlen);
@@ -642,9 +540,6 @@ extern "C" void show_error(int error) {
         clog_add(b);   // named by console_log
     }
     caps_reply_end();
-#ifdef FNC_RX_TRACE
-    dbg_printf("[rx-err] error:%d\n", error);
-#endif
     {
         const sendq_seq_t seq = s_inflight_seq;
         line_acked();
@@ -652,19 +547,6 @@ extern "C" void show_error(int error) {
         snprintf(why, sizeof(why), "error:%d", error);
         abort_seq(seq, why);
     }
-    errorExpire = milliseconds() + 1000;
-    lastError   = error;
-    if (s_jog_window > 0) {
-        --s_jog_window;  // a rejected jog  ends 1 outstanding line
-    }
-    if (json_in_progress()) {
-        // "error:N" without a JSON wrapper ends an in-flight document.
-        json_reset_depth();
-    }
-    // Telnet returns bare "error:N" with no JSON wrapper when $File/SendJSON
-    // is rejected (file not present, etc). Without this hook the macro chain
-    // sits on "Reading Macros" forever because endDocument never fires.
-    file_request_failed_advance();
     request_redisplay();
 }
 
@@ -686,16 +568,6 @@ extern "C" void show_ok() {
     caps_reply_end();
     seq_ok(s_inflight_seq);
     line_acked();
-#ifdef FNC_RX_TRACE
-    dbg_printf("[rx-ok]\n");
-#endif
-    if (s_jog_window > 0) {
-        --s_jog_window;
-    }
-    if (json_in_progress()) {
-        // "ok" ends a reply; if a torn JSON doc was in flight, clean up.
-        json_reset_depth();
-    }
 }
 
 extern "C" void end_status_report() {
@@ -742,162 +614,4 @@ extern "C" void show_gcode_modes(struct gcode_modes* modes) {
 
     mySelectedTool = modes->tool;
     request_redisplay();
-}
-
-int disconnect_ms = 0;
-int next_ping_ms  = 0;
-
-// If we haven't heard from FluidNC in 4 seconds for some other reason,
-// send a status report request.
-const int ping_interval_ms = 4000;
-
-// If we haven't heard from FluidNC in 6 seconds for any reason, declare
-// FluidNC unresponsive.  After a ping, FluidNC has 2 seconds to respond.
-const int disconnect_interval_ms = 6000;
-
-bool starting = true;
-
-// Counts consecutive disconnect_ms timeouts without RX, for the recovery ladder.
-static int s_consecutive_timeouts = 0;
-
-// Set by pendant_wait_for_fluidnc_ready() so fnc_is_connected() does not
-// immediately fire a redundant ping right after a successful handshake.
-static bool s_skip_first_ping = false;
-
-void request_status_report() {
-    fnc_putchar(0x11);           // XON; request software flow control
-    fnc_realtime(StatusReport);  // Request fresh status
-    next_ping_ms = milliseconds() + ping_interval_ms;
-}
-
-// Drain bytes until the RX line has been quiet for `quiet_ms`, OR until
-// `max_total_ms` of wall time has elapsed (safety cap so a chatty
-// peer can never wedge us). Bytes are discarded, NOT fed to the parser.
-int flush_fnc_rx(uint32_t quiet_ms) {
-    const uint32_t max_total_ms = 500;
-    int            drained      = 0;
-    uint32_t       start        = milliseconds();
-    uint32_t       quiet_until  = start + quiet_ms;
-    while ((int32_t)(milliseconds() - quiet_until) < 0) {
-        if ((milliseconds() - start) >= max_total_ms) {
-            break;
-        }
-        int c = fnc_getchar();
-        if (c >= 0) {
-            drained++;
-            quiet_until = milliseconds() + quiet_ms;
-        }
-    }
-    return drained;
-}
-
-// Probe FluidNC over UART until it answers, OR `budget_ms` elapses.
-//
-// IMPORTANT: bytes read here are DISCARDED, not fed to the parser.
-// This function runs from setup() before activate_scene() has set
-// current_scene, and many vendor parser callbacks (show_state, show_dro,
-// show_alarm, show_error) eventually call current_scene methods. Feeding
-// bytes to the parser before current_scene is set would crash on the
-// first valid status report.
-bool pendant_wait_for_fluidnc_ready(uint32_t budget_ms) {
-    const uint32_t probe_window_ms = 500;
-    const uint32_t probe_gap_ms    = 200;
-
-    bootlog_printf("wait_ready: start budget=%lu", (unsigned long)budget_ms);
-
-    int drained = flush_fnc_rx(50);
-    bootlog_printf("wait_ready: drained=%d", drained);
-
-    uint32_t deadline = milliseconds() + budget_ms;
-    int      probe    = 0;
-    int      total_rx = 0;
-    while ((int32_t)(milliseconds() - deadline) < 0) {
-        probe++;
-        fnc_putchar(0x11);           // XON to clear any stale XOFF on FluidNC
-        fnc_realtime(StatusReport);  // '?' probe
-
-        int      window_rx  = 0;
-        uint32_t window_end = milliseconds() + probe_window_ms;
-        while ((int32_t)(milliseconds() - window_end) < 0) {
-            int c = fnc_getchar();
-            if (c >= 0) {
-                window_rx++;  // discard byte; do not feed parser yet
-            } else {
-                delay_ms(2);
-            }
-        }
-        total_rx += window_rx;
-        if (window_rx > 0) {
-            bootlog_printf("wait_ready: alive probe=%d bytes=%d", probe, window_rx);
-            s_skip_first_ping = true;
-            return true;
-        }
-        bootlog_printf("wait_ready: probe %d silent", probe);
-        delay_ms(probe_gap_ms);
-    }
-    bootlog_printf("wait_ready: timeout probes=%d rx=%d", probe, total_rx);
-    return false;
-}
-
-// Escalating recovery when the link has gone silent. Counter ticks once
-// per disconnect_interval_ms with no RX.
-//   tick 1: drain stale RX and send XON + status request.
-//   tick 3: re-initialize the UART driver from scratch, then re-probe.
-//           UART re-init is a no-op when running in WiFi mode.
-static void recover_link(int tick) {
-    bootlog_printf("recover: tick=%d", tick);
-    flush_fnc_rx(20);
-    request_status_report();
-    if (tick == 3) {
-#ifdef USE_WIFI
-        if (wifi_use_uart_mode()) {
-            bootlog_printf("recover: re-init uart");
-            reinit_fnc_uart();
-            request_status_report();
-        }
-#else
-        bootlog_printf("recover: re-init uart");
-        reinit_fnc_uart();
-        request_status_report();
-#endif
-    }
-}
-
-bool fnc_is_connected() {
-#ifdef DEV_SIMULATED_CONNECT
-    return true;
-#endif
-    int now = milliseconds();
-    if (starting) {
-        starting      = false;
-        disconnect_ms = now + (disconnect_interval_ms - ping_interval_ms);
-        if (s_skip_first_ping) {
-            // Handshake already got a response; let the regular ping cadence resume.
-            s_skip_first_ping = false;
-            next_ping_ms      = now + ping_interval_ms;
-        } else {
-            request_status_report();  // sets next_ping_ms
-        }
-        return false;             // Do we need a value for "unknown"?
-    }
-    if ((now - disconnect_ms) >= 0) {
-        s_consecutive_timeouts++;
-        bootlog_printf("disconnected: timeout #%d", s_consecutive_timeouts);
-        recover_link(s_consecutive_timeouts);
-        next_ping_ms  = now + ping_interval_ms;
-        disconnect_ms = now + disconnect_interval_ms;
-        return false;
-    }
-
-    if ((now - next_ping_ms) >= 0) {
-        request_status_report();
-    }
-    return true;
-}
-
-void update_rx_time() {
-    int now       = milliseconds();
-    next_ping_ms  = now + ping_interval_ms;
-    disconnect_ms = now + disconnect_interval_ms;
-    s_consecutive_timeouts = 0;
 }
