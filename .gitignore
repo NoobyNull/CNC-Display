@@ -45,3 +45,6 @@ cad/ref/
 # Host test deps and binaries (test/run_host_tests.sh)
 test/.deps/
 test/.build/
+
+# Stray capture log
+log_iotc.txt
