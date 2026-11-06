@@ -39,12 +39,6 @@ static void prime() {
     filelist_request();
     // The full settings dump also feeds the Diag limit lamps.
     fncset_request_all();
-    // Steps per mm is a config item, not in the $S dump. Ask for it now so the
-    // Cal page shows the controller's real values without a READ press.
-    cal_reset();
-    send_line("$/axes/x/steps_per_mm");
-    send_line("$/axes/y/steps_per_mm");
-    send_line("$/axes/z/steps_per_mm");
 }
 
 static void link_lost() {

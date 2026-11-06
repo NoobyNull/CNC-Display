@@ -19,6 +19,12 @@ void cal_reset() {
     }
 }
 
+void cal_set_steps(int axis, float v) {
+    if (axis < 0 || axis >= CAL_AXES || v <= 0.0f) return;
+    s_steps[axis] = v;
+    s_have[axis]  = true;
+}
+
 bool  cal_have_steps(int axis) { return axis >= 0 && axis < CAL_AXES && s_have[axis]; }
 float cal_steps(int axis)      { return axis >= 0 && axis < CAL_AXES ? s_steps[axis] : 0.0f; }
 

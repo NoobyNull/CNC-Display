@@ -18,6 +18,9 @@ void cal_reset();
 // (Configuration/RuntimeSetting.cpp: setting_prefix()). Ignores everything else.
 void cal_feed_line(const char* line);
 
+// Record a value learned elsewhere (the $CD config dump).
+void cal_set_steps(int axis, float v);
+
 bool  cal_have_steps(int axis);
 float cal_steps(int axis);
 

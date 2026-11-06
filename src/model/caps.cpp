@@ -1,3 +1,4 @@
+#include "model/calibration.h"
 #include <ctype.h>
 #include "model/caps.h"
 #include "model/fnc_settings.h"
@@ -38,6 +39,11 @@ static bool     s_dumping  = false;   // $CD sent, reply not finished
 static bool     s_started  = false;   // the YAML itself has begun arriving
 static uint32_t s_deadline = 0;       // give up waiting for it to begin
 static char     s_section[24] = "";
+static int      s_axis = -1;            // axis whose block we are inside, within axes:
+static float    s_ax_rate[6], s_ax_travel[6];
+
+float caps_axis_max_rate(int a)   { return a >= 0 && a < 6 ? s_ax_rate[a] : 0.0f; }
+float caps_axis_max_travel(int a) { return a >= 0 && a < 6 ? s_ax_travel[a] : 0.0f; }
 
 // What the config uses each ESP32 GPIO for, e.g. 32 -> "x/motor0/limit_neg
 // (pu low)". Built from the same $CD dump by tracking the YAML key path, so it
@@ -106,6 +112,8 @@ const char* caps_gpio_role(int gpio) {
 static const char* AXIS_LETTERS = "XYZABC";
 
 void caps_reset() {
+    s_axis = -1;
+    for (int i = 0; i < 6; i++) s_ax_rate[i] = s_ax_travel[i] = 0.0f;
     s_homing = s_hard_limits = s_soft_limits = CAP_UNKNOWN;
     s_probe = s_toolsetter = s_flood = s_mist = CAP_UNKNOWN;
     s_door = s_estop = CAP_UNKNOWN;
@@ -360,7 +368,25 @@ bool caps_feed_line(const char* line) {
         if (n >= sizeof(s_section)) n = sizeof(s_section) - 1;
         memcpy(s_section, line, n);
         s_section[n] = 0;
+        s_axis = -1;
         return true;
+    }
+
+    // axes: / x: / steps_per_mm: ... Two-space keys that are one letter open an
+    // axis block; deeper keys (motor0: and friends) are not the axis's own.
+    if (strcmp(s_section, "axes") == 0) {
+        int ind = 0;
+        while (line[ind] == ' ') ind++;
+        const char* k = line + ind;
+        if (ind == 2 && k[1] == ':' ) {
+            const char* ax = strchr("xyzabc", k[0] | 0x20);
+            s_axis = (ax && *ax) ? (int)(ax - "xyzabc") : -1;
+        } else if (ind == 4 && s_axis >= 0) {
+            const char* av;
+            if ((av = yaml_value(line, "steps_per_mm")))       cal_set_steps(s_axis, (float)atof(av));
+            if ((av = yaml_value(line, "max_rate_mm_per_min"))) s_ax_rate[s_axis]   = (float)atof(av);
+            if ((av = yaml_value(line, "max_travel_mm")))       s_ax_travel[s_axis] = (float)atof(av);
+        }
     }
 
     const char* v;

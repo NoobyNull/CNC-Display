@@ -93,6 +93,7 @@ static float axis_max_rate(int axis) {
             if (v > 0.0f) return seen[axis] = v;
         }
     }
+    if (seen[axis] <= 0.0f) seen[axis] = caps_axis_max_rate(axis);   // $CD knows it too
     return seen[axis] > 0.0f ? seen[axis] : JOG_FALLBACK_RATE;
 }
 

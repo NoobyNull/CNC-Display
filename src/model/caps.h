@@ -35,6 +35,10 @@ enum cap_state_t : uint8_t {
 
 void caps_reset();
 
+// Per-axis numbers from the $CD dump (0 until read). Axis 0..5 = X..C.
+float caps_axis_max_rate(int axis);     // mm/min
+float caps_axis_max_travel(int axis);   // mm
+
 // Sends $CD. The reply is consumed by caps_feed_line(), not the console.
 void caps_request_config();
 

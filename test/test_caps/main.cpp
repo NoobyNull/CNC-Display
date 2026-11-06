@@ -1,6 +1,7 @@
 #include <unity.h>
 #include <string.h>
 #include "model/caps.h"
+#include "model/calibration.h"
 #include "model/fnc_settings.h"
 #include "../host_stubs.h"
 
@@ -80,6 +81,25 @@ static void feed_config(const char* const* lines, int n) {
     caps_request_config();
     for (int i = 0; i < n; i++) caps_feed_line(lines[i]);
     caps_feed_line("ok");
+}
+
+void test_config_dump_fills_axis_steps_rate_and_travel() {
+    const char* L[] = {
+        "board: Corgi", "axes:", "  shared_stepper_disable_pin: NO_PIN",
+        "  x:", "    steps_per_mm: 15.953", "    max_rate_mm_per_min: 6000",
+        "    max_travel_mm: 838", "    motor0:", "      limit_neg_pin: gpio.1",
+        "  z:", "    steps_per_mm: 400", "    max_travel_mm: 95",
+        "probe:", "  pin: NO_PIN",
+    };
+    cal_reset();
+    feed_config(L, 14);
+    TEST_ASSERT_TRUE(cal_have_steps(0));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 15.953f, cal_steps(0));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 400.0f, cal_steps(2));
+    TEST_ASSERT_FALSE(cal_have_steps(1));
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 6000.0f, caps_axis_max_rate(0));
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 838.0f, caps_axis_max_travel(0));
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 95.0f, caps_axis_max_travel(2));
 }
 
 void test_config_dump_finds_no_probe_on_the_bringup_machine() {
@@ -250,5 +270,6 @@ int main() {
     RUN_TEST(test_atc_mode_follows_the_spindle_config);
     RUN_TEST(test_config_request_gives_up);
     RUN_TEST(test_config_request_is_actually_sent);
+    RUN_TEST(test_config_dump_fills_axis_steps_rate_and_travel);
     return UNITY_END();
 }
