@@ -4,6 +4,7 @@
 #include "ui/widgets.h"
 #include "model/motors.h"
 #include "model/FluidNCModel.h"
+#include "ops/ops.h"
 #include "model/fnc_settings.h"
 #include "model/settings.h"
 #include "model/caps.h"
@@ -287,9 +288,7 @@ static void step_cycle_cb(lv_event_t*) {
 
 static void zero_cb(lv_event_t* e) {
     int axis = (int)(intptr_t)lv_event_get_user_data(e);
-    // G10 L20 P0 targets the *active* work system, which is why the DRO shows
-    // which one is live on every page.
-    send_linef("G10 L20 P0 %c0", axisNumToChar(axis));
+    op_zero_axis(axisNumToChar(axis));
 }
 
 // Drops holding torque so the gantry can be pushed by hand, and $ME puts it

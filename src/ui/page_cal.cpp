@@ -2,6 +2,7 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "ops/ops.h"
 #include "model/calibration.h"
 #include "GrblParserC.h"
 #include <stdio.h>
@@ -78,14 +79,8 @@ static void dist_cb(lv_event_t* e) {
     refresh();
 }
 
-// G91 for the move, then straight back to G90: leaving the parser in relative
-// mode is how the next absolute move from any other page goes somewhere absurd.
 static void move_cb(lv_event_t*) {
-    seq_begin("Calibration move");
-    seq_cleanup("G90");
-    seq_linef("G91 G0 %s%.3f", AXIS_LBL[s_axis], (double)commanded());
-    seq_line("G90");
-    seq_send();
+    op_move_relative(AXIS_LBL[s_axis][0], commanded());
 }
 
 static void meas_cb(lv_event_t* e) {

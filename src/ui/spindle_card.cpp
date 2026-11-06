@@ -4,6 +4,7 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "ops/ops.h"
 #include "model/caps.h"
 #include "model/homed.h"
 #include "model/settings.h"
@@ -39,9 +40,7 @@ static void close_card() {
 
 static void answer_cb(lv_event_t* e) {
     const int t = (int)(intptr_t)lv_event_get_user_data(e);
-    send_linef("M61 Q%d", t);
-    send_line(TC_ASK_CURRENT);
-    tc_assume(t);
+    op_tool_declare(t);
     close_card();
 }
 
@@ -55,7 +54,7 @@ static void tap_cb(lv_event_t*) {
     s_tapping = true;
     s_tap_left_idle = false;
     s_tap_at = lv_tick_get();
-    send_line("$LocalFS/Run=openatc_tap.nc");
+    op_toolsetter_tap();
 }
 
 static void paint() {
@@ -149,7 +148,7 @@ void spindle_card_tick() {
     static uint32_t epoch = UINT32_MAX;
     static bool     macro = false;
     const bool came_to_rest = state == Idle && was != Idle && was != Jog;
-    if (state == Idle && (came_to_rest || epoch != homed_epoch() || !macro)) send_line(TC_ASK_CURRENT);
+    if (state == Idle && (came_to_rest || epoch != homed_epoch() || !macro)) op_tool_ask_macro();
     const bool changed = state != was || epoch != homed_epoch();
     was = state;
     epoch = homed_epoch();

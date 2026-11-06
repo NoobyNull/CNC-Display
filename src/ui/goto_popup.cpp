@@ -2,6 +2,7 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "ops/ops.h"
 #include "model/fnc_settings.h"
 #include "model/caps.h"
 #include "model/settings.h"
@@ -304,7 +305,7 @@ void goto_open(int axis) {
                                  axc == 'Y' ? "cycle Y1+Y2" : "power-cycle",
                                  C_RAISE, C_WARN,
                                  [](lv_event_t*) {
-                                     drv_reset_axis(axisNumToChar(s_axis));
+                                     op_driver_reset(axisNumToChar(s_axis));
                                      goto_close();
                                  }, nullptr);
         lv_obj_set_flex_grow(rst, 1);

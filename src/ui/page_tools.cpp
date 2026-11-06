@@ -2,6 +2,7 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "ops/ops.h"
 #include "model/homed.h"
 #include "model/caps.h"
 #include "model/toolchange.h"
@@ -61,16 +62,13 @@ static int in_spindle() {
     return in_rack(t) || (by_macro() && t == TC_EMPTY) ? t : 0;
 }
 
-static void refresh_tool() {
-    send_line("$G");
-    if (by_macro()) send_line(TC_ASK_CURRENT);
-}
+static void refresh_tool() { op_tool_ask(); }
 
 static void act_cb(lv_event_t* e) {
     switch ((int)(intptr_t)lv_event_get_user_data(e)) {
-        case A_LOAD:    send_linef("M6 T%d", s_tool);                                   break;
-        case A_CURRENT: send_line("M61 Q0"); send_linef("M61 Q%d", s_tool);             break;
-        case A_UNLOAD:  send_line("M6 T0");                                             break;
+        case A_LOAD:    op_tool_load(s_tool);              break;
+        case A_CURRENT: op_tool_declare_current(s_tool);   break;
+        case A_UNLOAD:  op_tool_unload();                  break;
     }
     refresh_tool();
     pop_close();

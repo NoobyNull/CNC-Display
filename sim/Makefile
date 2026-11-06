@@ -37,6 +37,9 @@ LDFLAGS  := $(shell sdl2-config --libs) -lm -lpthread
 # replaced wholesale by sim/src.
 FW_SRC := $(wildcard $(ROOT)/src/ui/*.cpp) \
           $(wildcard $(ROOT)/src/model/*.cpp) \
+          $(wildcard $(ROOT)/src/cmd/*.cpp) \
+          $(wildcard $(ROOT)/src/link/*.cpp) \
+          $(wildcard $(ROOT)/src/ops/*.cpp) \
           $(ROOT)/src/transport/xmodem_rx.cpp
 
 SIM_SRC := $(wildcard $(CURDIR)/src/*.cpp)

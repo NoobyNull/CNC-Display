@@ -17,3 +17,5 @@ src/model/linkwatch.cpp
 src/model/path_loader.cpp
 src/model/gcode_stats.cpp
 src/transport/xmodem_rx.cpp
+src/cmd/cmd.cpp
+src/link/link.cpp

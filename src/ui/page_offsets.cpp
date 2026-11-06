@@ -3,6 +3,7 @@
 #include "ui/widgets.h"
 #include "model/offsets.h"
 #include "model/FluidNCModel.h"
+#include "ops/ops.h"
 #include "GrblParserC.h"
 #include <stdio.h>
 #include <string.h>
@@ -29,25 +30,19 @@ static void row_pick_cb(lv_event_t* e) {
 // shows the G-code it sends. If it does something unintended, you can see what
 // it did.
 static void set_here_cb(lv_event_t*) {
-    if (s_sel > 5) return;                    // only G54..G59 are settable this way
-    send_linef("G10 L20 P%d X0 Y0 Z0", s_sel + 1);
-    send_line("$#");
+    op_wcs_set_here(s_sel);
 }
 
 static void goto_origin_cb(lv_event_t*) {
-    if (s_sel > 5) return;
-    send_linef("G%d G0 X0 Y0", 54 + s_sel);
+    op_wcs_goto_origin(s_sel);
 }
 
 static void clear_g92_cb(lv_event_t*) {
-    send_line("G92.1");
-    send_line("$#");
+    op_wcs_clear_g92();
 }
 
 static void activate_cb(lv_event_t*) {
-    if (s_sel > 5) return;
-    send_linef("G%d", 54 + s_sel);
-    send_line("$#");
+    op_wcs_activate(s_sel);
 }
 
 void page_offsets_build(lv_obj_t* p) {

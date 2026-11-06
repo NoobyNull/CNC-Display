@@ -2,6 +2,7 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 #include "model/FluidNCModel.h"
+#include "ops/ops.h"
 #include "model/caps.h"
 #include "model/settings.h"
 #include "GrblParserC.h"
@@ -52,68 +53,8 @@ static lv_obj_t* s_type_btn[2];
 static lv_obj_t* s_corner_btn[4];
 
 // ---- Sienci AutoZero Touch Plate ------------------------------------------
-// Sequence from gSender's get3AxisAutoRoutine (src/app/src/lib/Probing.ts):
-// the bit sits in the plate's pocket, touches the pocket floor for Z, then
-// both walls in X and in Y. gSender does the centring maths itself between
-// sends; here FluidNC does it, reading each touch from #5061/#5062 (probe
-// position, machine coordinates) and driving to the midpoint with G53, so the
-// whole routine is one stream of lines and bit diameter never enters into it.
+// The probing routine itself is op_autozero() in ops/ops.cpp.
 static const char* const CORNER_NAME[4] = { "BOTTOM LEFT", "TOP LEFT", "TOP RIGHT", "BOTTOM RIGHT" };
-// Pocket centre relative to the corner, per corner (gSender determineAutoPlateOffsetValues).
-static const int8_t CORNER_SX[4] = { 1, 1, -1, -1 };
-static const int8_t CORNER_SY[4] = { 1, -1, -1, 1 };
-
-static void az_probe() {
-    const int c = settings_probe_corner();
-    static const char* const WALLS[] = {
-        // Z: pocket floor, fast then slow.
-        "G21 G91",
-        "G38.2 Z-25 F200",
-        "G0 Z2",
-        "G38.2 Z-5 F75",
-        nullptr,   // G10 Z, filled below
-        "G0 Z3",
-        // X: left wall, right wall, centre between them.
-        "G0 X-13",
-        "G38.2 X-30 F150",
-        "G0 X2",
-        "G38.2 X-5 F75",
-        "#<az_a>=#5061",
-        "G0 X26",
-        "G38.2 X30 F150",
-        "G0 X-2",
-        "G38.2 X5 F75",
-        "G90 G53 G0 X[[#<az_a>+#5061]/2]",
-        // Y: same again.
-        "G91 G0 Y-13",
-        "G38.2 Y-30 F150",
-        "G0 Y2",
-        "G38.2 Y-5 F75",
-        "#<az_a>=#5062",
-        "G0 Y26",
-        "G38.2 Y30 F150",
-        "G0 Y-2",
-        "G38.2 Y5 F75",
-        "G90 G53 G0 Y[[#<az_a>+#5062]/2]",
-    };
-    // One sequence, 28 lines: queued whole or refused, and stopped at the
-    // first error or alarm (a missed wall is ALARM:5) instead of probing on
-    // from the wrong place. Stopped early it still leaves G91 behind, hence
-    // the cleanup line.
-    seq_begin("AutoZero");
-    seq_cleanup("G90");
-    for (const char* l : WALLS) {
-        if (l) seq_line(l);
-        else   seq_linef("G10 L20 P0 Z%.3f", (double)s_params[P_AZ_FLOOR].value);
-    }
-    seq_linef("G10 L20 P0 X%.3f Y%.3f",
-              (double)(CORNER_SX[c] * s_params[P_AZ_CENTRE].value),
-              (double)(CORNER_SY[c] * s_params[P_AZ_CENTRE].value));
-    // Out of the pocket before anything moves sideways; X/Y stay put so the
-    // plate can be lifted off. gSender's final X0Y0 move is left to GOTO.
-    seq_linef("G90 G0 Z%.3f", (double)(s_params[P_AZ_FLOOR].value + s_params[P_AZ_LIFT].value));
-    seq_send();
-}
 
 static void show_value(lv_obj_t* lbl, float v) {
     if (!lbl) return;
@@ -258,19 +199,14 @@ static void edit_cb(lv_event_t*) {
     lv_obj_set_size(done, LV_PCT(100), TOUCH_TAP);
 }
 
-// Sequence copied from FluidDial's ProbingScene.cpp rather
-// than re-derived: probe down, then retract by the configured distance.
 static void probe_cb(lv_event_t*) {
-    if (settings_probe_type() == 1) { az_probe(); return; }
-    // G91 on the probe line is modal: without the trailing G90 the parser was
-    // left relative, and the next absolute move from any page went wrong.
-    seq_begin("Probe");
-    seq_cleanup("G90");
-    seq_linef("G38.2G91F%dZ-%dP%.2f",
-              (int)s_params[P_FEED].value, (int)s_params[P_TRAVEL].value, (double)s_params[P_OFFSET].value);
-    seq_line("G90");
-    seq_linef("$J=G91F1000Z%.2f", (double)s_params[P_RETRACT].value);
-    seq_send();
+    if (settings_probe_type() == 1) {
+        op_autozero(settings_probe_corner(), s_params[P_AZ_FLOOR].value, s_params[P_AZ_CENTRE].value,
+                    s_params[P_AZ_LIFT].value);
+        return;
+    }
+    op_probe_z((int)s_params[P_FEED].value, (int)s_params[P_TRAVEL].value, s_params[P_OFFSET].value,
+               s_params[P_RETRACT].value);
 }
 
 static void tlo_cb(lv_event_t*) {
