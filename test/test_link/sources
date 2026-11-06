@@ -19,3 +19,4 @@ src/model/gcode_stats.cpp
 src/transport/xmodem_rx.cpp
 src/cmd/cmd.cpp
 src/link/link.cpp
+src/model/calibration.cpp

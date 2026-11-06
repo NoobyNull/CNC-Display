@@ -1,4 +1,5 @@
 #include "model/model_events.h"
+#include "model/calibration.h"
 #include "model/toolchange.h"
 #include "model/console_log.h"
 #include "model/offsets.h"
@@ -117,6 +118,7 @@ extern "C" void handle_other_line(char* line) {
     // have a probe / coolant / door" and belongs to the capability model, not
     // to the console it would otherwise bury.
     if (caps_feed_line(line)) return;
+    cal_feed_line(line);   // steps/mm echoes; nothing else consumes them
     offsets_feed_line(line);
     fncset_feed_line(line);
     filelist_feed_line(line);
