@@ -20,3 +20,4 @@ src/transport/xmodem_rx.cpp
 src/cmd/cmd.cpp
 src/link/link.cpp
 src/model/calibration.cpp
+src/model/config_store.cpp

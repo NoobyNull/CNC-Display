@@ -1,4 +1,5 @@
 #include "model/calibration.h"
+#include "model/config_store.h"
 #include <ctype.h>
 #include "model/caps.h"
 #include "model/fnc_settings.h"
@@ -276,6 +277,7 @@ const char* caps_setting_for(caps_field_t f, int axis) {
 // --- $CD half --------------------------------------------------------------
 
 void caps_request_config() {
+    cfg_clear();
     s_dumping  = true;
     s_started  = false;
     s_deadline = (uint32_t)milliseconds() + 15000;
@@ -361,6 +363,7 @@ bool caps_feed_line(const char* line) {
     }
 
     note_pin_role(line);
+    cfg_feed_line(line);   // the whole tree, for any screen to look up
 
     if (top) {
         const char* colon = strchr(line, ':');
