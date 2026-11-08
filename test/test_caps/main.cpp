@@ -113,6 +113,17 @@ void test_sd_macro_named_tlo_measure_counts_as_the_tlo_macro() {
     TEST_ASSERT_EQUAL(1, caps_tlo_macro());
 }
 
+void test_macros_are_found_even_without_a_macros_header() {
+    const char* L[] = {
+        "board: Corgi", "probe:", "  pin: NO_PIN",
+        "  Macro0: $SD/Run=/sd/.macros/tlo_reference.nc",
+        "  Macro1: $SD/Run=/sd/.macros/tlo_measure.nc",
+    };
+    feed_config(L, 5);
+    TEST_ASSERT_EQUAL(2, (int)caps_macro_count());
+    TEST_ASSERT_EQUAL(1, caps_tlo_macro());
+}
+
 void test_config_dump_finds_no_probe_on_the_bringup_machine() {
     const char* L[] = {
         "board: Corgi", "probe:", "  pin: NO_PIN", "  toolsetter_pin: NO_PIN",
@@ -283,5 +294,6 @@ int main() {
     RUN_TEST(test_config_request_is_actually_sent);
     RUN_TEST(test_config_dump_fills_axis_steps_rate_and_travel);
     RUN_TEST(test_sd_macro_named_tlo_measure_counts_as_the_tlo_macro);
+    RUN_TEST(test_macros_are_found_even_without_a_macros_header);
     return UNITY_END();
 }

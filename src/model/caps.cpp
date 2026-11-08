@@ -414,10 +414,17 @@ bool caps_feed_line(const char* line) {
     } else if (strcmp(s_section, "coolant") == 0) {
         if ((v = yaml_value(line, "flood_pin"))) s_flood = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
         if ((v = yaml_value(line, "mist_pin")))  s_mist  = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
-    } else if (strcmp(s_section, "macros") == 0) {
+    } else if (strcmp(s_section, "control") == 0) {
+        if ((v = yaml_value(line, "safety_door_pin"))) s_door  = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
+        if ((v = yaml_value(line, "estop_pin")))       s_estop = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
+    }
+    // Macro0..Macro3 are read wherever they appear, not only under a 'macros:'
+    // header: the dump this controller sends has the Macro lines without it, and
+    // a section test made every macro vanish ("no TLO macro in config").
+    {
         const char* sp = line;
         while (*sp == ' ') sp++;
-        if (strncmp(sp, "Macro", 5) == 0) {
+        if (strncasecmp(sp, "Macro", 5) == 0 && sp[5] >= '0' && sp[5] <= '3' && sp[6] == ':') {
             const char* colon = strchr(sp, ':');
             if (colon && s_mcount < CAPS_MACRO_MAX) {
                 char name[CAPS_MACRO_NAME_MAX];
@@ -443,9 +450,6 @@ bool caps_feed_line(const char* line) {
                 }
             }
         }
-    } else if (strcmp(s_section, "control") == 0) {
-        if ((v = yaml_value(line, "safety_door_pin"))) s_door  = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
-        if ((v = yaml_value(line, "estop_pin")))       s_estop = pin_set(v) ? CAP_PRESENT : CAP_ABSENT;
     }
     return true;
 }
