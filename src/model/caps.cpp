@@ -142,7 +142,18 @@ int caps_macro_num(size_t i) {
     return (n[5] >= '0' && n[5] <= '3') ? n[5] - '0' : -1;   // FluidNC has four slots
 }
 
+// A macro that runs a file named tlo_measure (the SD-card convention here:
+// Macro1 = $SD/Run=/sd/.macros/tlo_measure.nc) applies the length offset
+// inside the file, where the config text cannot show it.
+static bool names_tlo_measure(const char* b) {
+    static const char KEY[] = "tlo_measure";
+    for (; *b; b++)
+        if (strncasecmp(b, KEY, sizeof(KEY) - 1) == 0) return true;
+    return false;
+}
+
 static bool applies_tlo(const char* b) {
+    if (names_tlo_measure(b)) return true;
     static const char PAT[] = "G43.1Z";
     for (; *b; b++) {
         const char* p = b;
